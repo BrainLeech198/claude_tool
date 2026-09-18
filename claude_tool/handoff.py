@@ -15,8 +15,16 @@ from claude_tool.claude import python_exe
 
 # 源码模式下 hook 要回头调的那个文件。不能写 handoff.py 自己——那样会被当成
 # 脚本直接跑，包内的相对导入就全崩了；__main__.py 认得 --handoff-hook。
+# 打包成 exe 之后这份源码不在盘上了，那时调的就是 exe 自己。
 ENTRY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "__main__.py")
+
+
+def hook_command():
+    """拼给 Claude Code 的那条命令行。"""
+    if getattr(sys, "frozen", False):
+        return '"{}" {}'.format(sys.executable, HOOK_FLAG)
+    return '"{}" "{}" {}'.format(python_exe(), ENTRY_PATH, HOOK_FLAG)
 
 
 # ── 交接文档 ──────────────────────────────────────────────────────────────
@@ -85,6 +93,30 @@ def write_hook_state(state):
         pass
 
 
+def _ensure_stdio():
+    """sys.stdin / sys.stdout 是 None 的话，从原始 fd 接回来。
+
+    实测过：--noconsole 的 exe 被管道拉起时（Claude Code 跑 hook 就是这么拉的），
+    三个流 Python 都给赋了值，走不到这里。留着是防另一种情形——句柄没传进来时
+    sys.stdout 会是 None，而 **print 到 None 是静默无操作**（CPython 认这个分支），
+    于是 block 答复凭空消失、自动交接文档永远不触发，还一声不吭。这种漏法不报错，
+    查起来得不偿失。
+    """
+    if sys.stdin is None:
+        sys.stdin = open(0, "rb", closefd=False)
+    if sys.stdout is None:
+        sys.stdout = open(1, "w", encoding="utf-8", errors="replace",
+                          closefd=False)
+
+
+def _stdin_bytes():
+    """把 stdin 读成原始字节。两种流都认：文本流取 .buffer，二进制流直接读。"""
+    stream = sys.stdin
+    if stream is None:
+        return b""
+    return getattr(stream, "buffer", stream).read()
+
+
 def run_handoff_hook():
     """Stop hook 的本体。返回进程退出码。
 
@@ -96,8 +128,9 @@ def run_handoff_hook():
     （工作区叫「冉」「小说」「2026数学建模」这种）就抛 UnicodeDecodeError，
     被下面的 except 吞掉，自动交接文档就永远不触发。
     """
+    _ensure_stdio()
     try:
-        payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+        payload = json.loads(_stdin_bytes().decode("utf-8", "replace"))
     except Exception:
         return 0
     if not isinstance(payload, dict):
@@ -124,7 +157,10 @@ def run_handoff_hook():
     # 该写了：把计数清零并记下时间，免得紧接着的那一轮又被拦一次
     state[key] = {"turns": 0, "last": time.time()}
     write_hook_state(state)
-    print(json.dumps({"decision": "block", "reason": HANDOFF_PROMPT}))
+    # ensure_ascii 别改成 False：冻结后这个进程没有控制台，stdout 是按系统 locale
+    # （这台机器 cp936）开的文本流，纯 ASCII 的 \uXXXX 转义才不挑编码。
+    print(json.dumps({"decision": "block", "reason": HANDOFF_PROMPT},
+                     ensure_ascii=True))
     return 0
 
 
@@ -135,7 +171,7 @@ def ensure_handoff_hook_settings():
     传真上去的，Claude Code 会把它跟用户那份合并，用完即弃。
     """
     os.makedirs(HOOK_DIR, exist_ok=True)
-    command = '"{}" "{}" {}'.format(python_exe(), ENTRY_PATH, HOOK_FLAG)
+    command = hook_command()
     payload = {"hooks": {"Stop": [{"hooks": [
         {"type": "command", "command": command}]}]}}
     with open(HOOK_SETTINGS, "w", encoding="utf-8") as f:
