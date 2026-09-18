@@ -21,18 +21,29 @@ Windows 上的 Claude Code 图形启动器：左边挑模型，右边挑工作�
 
 ## 跑起来
 
+从源码跑（开发用，看得见报错）：
+
 ```bat
 运行.bat
 ```
 
-需要 Python 3（只用标准库，零第三方依赖）。等打包做完了，给别人的是安装包，
-不需要装 Python。
+需要 Python 3（只用标准库，零第三方依赖）。
+
+打完包之后给别人的是安装包，那边**不需要装 Python**：
+
+```bat
+build\打包.bat
+```
+
+出 `Output\ClaudeLauncher-<版本>-Setup.exe`。装的时候默认免管理员、装在自己账户
+下；同一个目录也可以直接拷走双击运行，那份是免安装的。
 
 ## 目录
 
 ```
 claude_tool/       源码包，见 docs/设计说明.md 里的模块划分和依赖方向
 docs/              设计说明
+build/             PyInstaller spec、Inno 脚本、图标、打包用的 bat
 ```
 
 用户数据在 `~/.claude_tool/`，跟 Claude Code 的配置分开，卸载时不该删。
@@ -45,5 +56,7 @@ docs/              设计说明
 - [x] 对话框拆到 `ui/dialogs.py`（mixin，65 个方法逐字一致）
 - [x] 钩子命令行、两种入口、节流行为、GUI 构造与各个对话框，均已验证；
       主窗口和"加模型"对话框都与重构前逐像素比对过
-- [ ] PyInstaller + Inno Setup 打包
+- [x] PyInstaller + Inno Setup 打包（冻结版与源码版逐像素一致；装一遍卸一遍
+      验过，用户数据不受影响）
 - [ ] 面向使用者的安装说明
+- [ ] 代码签名（不然转发出去会被 SmartScreen 拦）

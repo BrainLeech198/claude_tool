@@ -1,9 +1,13 @@
 @echo off
-rem 从源码直接跑（开发用）。装好之后请用开始菜单里那个快捷方式，
-rem 那个走打包出来的 exe，不依赖这台机器上有没有 Python。
+rem Run straight from source (development). After installing, use the Start Menu
+rem shortcut instead - that one goes through the packaged exe and does not need
+rem Python on the machine.
 rem
-rem 用 python 而不是 pythonw：这条路上要看得见报错。打包出来的 exe 才是
-rem 无控制台的，靠 --handoff-hook 那条分支走标准输入输出。
+rem Uses "python" rather than "pythonw": errors have to be visible on this path.
+rem The packaged exe is the windowless one, and it talks to Claude Code's Stop
+rem hook over stdin/stdout via the --handoff-hook branch.
+rem
+rem ASCII-only and CRLF on purpose - see build/pack.bat for why.
 setlocal
 set PYTHONIOENCODING=utf-8
 python "%~dp0claude_tool\__main__.py" %*

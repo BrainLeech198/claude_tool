@@ -2,10 +2,10 @@ __pycache__/
 *.pyc
 *.pyo
 
-# PyInstaller 产物
-build/
+# PyInstaller 产物。注意 build/ 本身是要提交的（spec、iss、图标在那儿），
+# 只有 _work/ 是中间产物。
+build/_work/
 dist/
-*.spec
 
 # Inno Setup 产物
 Output/
