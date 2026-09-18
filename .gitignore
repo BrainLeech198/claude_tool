@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller 产物
+build/
+dist/
+*.spec
+
+# Inno Setup 产物
+Output/
+*.iss.bak
+
+# 本地调试留下的探针、截图、临时脚本
+_probe_*.py
+_probe_*.png
+_shot*.py
+_shot*.png
+_zoom*.py
+_zoom*.png
+_dlg*.py
+_dlg*.png
+_*.png
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
