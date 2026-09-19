@@ -82,6 +82,12 @@ h2 {
 }
 .btn:hover { background: var(--accent-hover); color: #fff; }
 
+.card-mirror {
+  display: inline-block;
+  margin: -4px 0 10px;
+  font-size: 13px;
+}
+
 .card-meta {
   color: var(--muted);
   font-size: 12px;
@@ -114,6 +120,15 @@ h2 {
   text-decoration: none;
 }
 .chip:hover { background: #dfe6ff; color: var(--accent-hover); }
+
+/* GitHub 那一份：同一个包的第二条路，比主源淡一档，别跟主 chip 抢眼。 */
+.chip-alt {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.chip-alt:hover { background: var(--panel); color: var(--accent-hover); }
+
 .chip-off {
   background: transparent;
   border: 1px dashed var(--border);

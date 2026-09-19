@@ -59,6 +59,7 @@
   ];
 
   var base = window.DOWNLOAD_BASE || "";
+  var mirrorBase = window.MIRROR_BASE || "";
   var releases = window.RELEASES || [];
 
   function el(tag, cls, text) {
@@ -72,6 +73,13 @@
     // 包里手填了 url 就用它（比如指到镜像源），没填就按 Gitee 发行版那个形状拼。
     // tag 就是版本号本身，不带 v 前缀——Gitee 上那个发行版打的 tag 是 0.1.0。
     return pkg.url || (base + "/" + release.version + "/" + pkg.file);
+  }
+
+  function mirrorUrl(release, pkg) {
+    // GitHub 上那份同一个文件。两边的发行版是分别手工传的，形状一样。
+    // 包里写了 mirror 就用它（写 null 表示这一版不给镜像链接），否则用全局那个。
+    var root = "mirror" in pkg ? pkg.mirror : mirrorBase;
+    return root ? root + "/" + release.version + "/" + pkg.file : "";
   }
 
   function size(bytes) {
@@ -93,6 +101,13 @@
         var a = el("a", "btn", "下载 v" + latest.version);
         a.href = downloadUrl(latest, pkg);
         card.appendChild(a);
+        var m = mirrorUrl(latest, pkg);
+        if (m) {
+          var ma = el("a", "card-mirror", "GitHub 下载");
+          ma.href = m;
+          ma.title = pkg.file;
+          card.appendChild(ma);
+        }
         card.appendChild(el("div", "card-meta",
           pkg.file + " · " + size(pkg.size) + " · " + latest.date));
       }
@@ -121,6 +136,13 @@
         a.href = downloadUrl(r, pkg);
         a.title = pkg.file;
         links.appendChild(a);
+        var m = mirrorUrl(r, pkg);
+        if (m) {
+          var ma = el("a", "chip chip-alt", p[1] + " · GitHub");
+          ma.href = m;
+          ma.title = pkg.file + "（GitHub 上下载）";
+          links.appendChild(ma);
+        }
       } else {
         links.appendChild(el("span", "chip chip-off", p[1] + " 还没做"));
       }

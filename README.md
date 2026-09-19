@@ -59,8 +59,9 @@ docs/              官网，GitHub Pages 就发这个目录，下载直链指 Gi
 不需要任何 Actions 或额外的 token 权限。
 
 发一版要手动做的只有两件：把 `build\claude_tool.iss` 里的 `AppVersion` 改掉；在
-Gitee 上建一个 tag 为 `<版本号>`（`0.1.0` 这样，不带 v）的发行版，把 `Output\` 里那个
-Setup.exe 传成附件。
+Gitee 和 GitHub 上**各**建一个 tag 为 `<版本号>`（`0.1.0` 这样，不带 v）的发行版，
+把 `Output\` 里那个 Setup.exe 传成附件。GitHub 那份就是官网卡片上「GitHub 下载」
+那个入口指的地方——仓库代码是镜像过去的，**发行版附件不跟着镜像走**，得自己传。
 其余都包在 `build\打包.bat` 里了，包括把这一版记进官网的版本清单。
 
 用户数据在 `~/.claude_tool/`，跟 Claude Code 的配置分开，卸载时不该删。

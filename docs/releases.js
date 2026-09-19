@@ -11,6 +11,11 @@
 // 那个 setup.exe 的名字。以后要是加镜像源，改这一行就行。
 window.DOWNLOAD_BASE = "https://gitee.com/Mr_brainleech/claude_tool/releases/download";
 
+// 同一个安装包在 GitHub 上也传了一份（GitHub 是 Gitee 的仓库镜像，但发行版附件不跟着
+// 镜像走，是手动传的）。填了它就多给一个「GitHub 下载」的入口，不填就只有上面那个主源。
+// 单独某一版不想给镜像链接，就在那条记录里写 "mirror": null。
+window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/download";
+
 // 一条记录 = 一个版本。windows / linux / macos 三个字段，有包就填成 {file, size}，
 // 还没有就写 null——页面上那一格会自动画成灰的「还没做」。以后 Linux 的包出来了，
 // 把 null 换成 {"file": "...", "size": 12345} 就行，页面一个字都不用动。
