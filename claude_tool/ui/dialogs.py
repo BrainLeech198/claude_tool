@@ -251,16 +251,20 @@ class LauncherDialogs:
         # 权限等级：预选这个工作区上次用的那档，选了就记回工作区条目里。
         # 按下的永远是下拉里那一行的下标，真正的值（claude 要的那串英文）从
         # PERMISSION_VALUES 现取——界面上摆的字和传给 claude 的字是两回事。
+        #
+        # 选中项只认 combobox 自己的 current()，不给它挂 StringVar。从前挂过，
+        # 那变量是这函数里的局部变量，函数一返回就被 GC 掉，而 tkinter 的
+        # Variable 销毁时会顺手 unset 掉底层那个 Tcl 变量：下拉于是变空白、
+        # current() 变 -1，每次都得自己重选。控件自己的状态没这个寿命问题。
         perm_row = tk.Frame(body, bg=PAGE_BG)
         perm_row.grid(row=row_after, column=0, columnspan=2, sticky="ew",
                       pady=(12, 0))
         tk.Label(perm_row, text="权限", bg=PAGE_BG, fg=MUTED,
                  font=font(10)).pack(side="left")
-        perm_var = tk.StringVar(value=permission_option(workspace_permission(item)))
         perm_combo = ttk.Combobox(
-            perm_row, textvariable=perm_var, state="readonly", width=30,
-            font=font(10), values=[permission_option(mode)
-                                  for mode in PERMISSION_VALUES])
+            perm_row, state="readonly", width=30, font=font(10),
+            values=[permission_option(mode) for mode in PERMISSION_VALUES])
+        perm_combo.current(PERMISSION_VALUES.index(workspace_permission(item)))
         perm_combo.pack(side="left", padx=(10, 0))
         # 命令行参数和解释分两行：熟练用户认的是 --permission-mode 后面那串英文，
         # 中文那句他只当注释看，两行各给各的。合在一行会超宽折行，换档时对话框
@@ -275,12 +279,20 @@ class LauncherDialogs:
         perm_hint.grid(row=row_after + 2, column=0, columnspan=2, sticky="w",
                        pady=(2, 0))
 
+        def picked_permission():
+            """下拉这一格现在选的是哪个值。
+
+            current() 认不出来就是 -1，而 PERMISSION_VALUES[-1] 取的是数组尾巴
+            ——正好是"什么都不问"。宁可退回最保守那档，也不能一失手把权限全开。
+            """
+            return PERMISSION_VALUES[max(perm_combo.current(), 0)]
+
         def show_permission(value):
             perm_flag.configure(text="命令行参数 --permission-mode " + value)
             perm_hint.configure(text=permission_hint(value))
 
         def pick_permission(_event=None):
-            show_permission(PERMISSION_VALUES[perm_combo.current()])
+            show_permission(picked_permission())
 
         show_permission(workspace_permission(item))
         perm_combo.bind("<<ComboboxSelected>>", pick_permission)
@@ -296,7 +308,7 @@ class LauncherDialogs:
         def go(cont):
             prompt = READ_HANDOFF_PROMPT if read_var.get() else None
             # 记下这次挑的权限等级，下次点这个工作区预选它。变了才落盘。
-            chosen = PERMISSION_VALUES[perm_combo.current()]
+            chosen = picked_permission()
             if chosen != item.get("permission"):
                 item["permission"] = chosen
                 if item in self.config_data["workspaces"]:

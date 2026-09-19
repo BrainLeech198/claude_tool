@@ -21,7 +21,10 @@ a = Analysis(
     [os.path.join(ROOT, "claude_tool", "__main__.py")],
     pathex=[ROOT],
     binaries=[],
-    datas=[],
+    # 窗口图标要跟着一起打包：exe 的那个 icon= 只管资源管理器里显示的样子，
+    # tkinter 的标题栏/任务栏图标得自己在运行时拿这张 png 设（见 ui/launcher.py）。
+    # 摊在包的根目录下，paths.ICON_FILE 按 sys._MEIPASS 找它。
+    datas=[(os.path.join(SPECPATH, "icon.png"), ".")],
     # ui 那两个模块是在 main() 里面才 import 的（为了让 --handoff-hook 那条路
     # 完全不碰 tkinter）。PyInstaller 扫得到，但这里再写死一份——漏了就是打包出来
     # 才炸，而且炸在"点开没反应"上，不值当省这一行。

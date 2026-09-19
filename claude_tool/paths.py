@@ -4,6 +4,7 @@
 ~/.claude_tool/ 下面，不跟 Claude Code 的配置混在一起。
 """
 import os
+import sys
 
 
 CLAUDE_DIR = os.path.join(os.path.expanduser("~"), ".claude")
@@ -23,6 +24,16 @@ WORKPLACE_DIR = os.path.join(TOOL_DIR, "workplace")
 LEGACY_CONFIG = os.path.join(CLAUDE_DIR, "launcher.json")
 LEGACY_PREFIX = "settings_"
 LEGACY_PRESET_DIR = os.path.join(TOOL_DIR, "models")
+
+# 窗口图标。源码跑的时候在仓库的 build/ 底下，打包之后 PyInstaller 会把它摊在
+# sys._MEIPASS（onedir 就是 exe 旁边那个 _internal/）里，两条路都得认，
+# spec 里 datas 那一行就是管后面这条的。
+ICON_FILE = (
+    os.path.join(sys._MEIPASS, "icon.png")
+    if getattr(sys, "frozen", False)
+    else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "build", "icon.png")
+)
 
 PRESET_SUFFIX = ".json"
 ILLEGAL_CHARS = r'[<>:"/\\|?*\s]'
