@@ -33,10 +33,9 @@ def default_config():
         "workspaces": [{"name": "默认", "path": WORKPLACE_DIR,
                         "handoff_ignore_git": False}],
         "window": None,
-        # 底下这一排勾都记着上次的状态，但首次装上一定是关的：自动刷交接文档会
-        # 多花 token，内嵌终端会改变新开的会话开在哪儿，自动继续会替用户拍板，
-        # 自动查更新会联网，都不该悄悄替用户打开。
-        "auto_handoff": False,
+        # 底下这一排勾都记着上次的状态，但首次装上一定是关的：内嵌终端会改变新开
+        # 的会话开在哪儿，自动继续会替用户拍板，自动查更新会联网，都不该悄悄替
+        # 用户打开。
         "auto_continue": False,
         "embed": False,
         "auto_version_check": False,
@@ -93,7 +92,6 @@ def load_config():
                     "handoff_ignore_git": bool(item.get("handoff_ignore_git")),
                 })
         config["workspaces"] = workspaces
-    config["auto_handoff"] = bool(data.get("auto_handoff"))
     config["auto_continue"] = bool(data.get("auto_continue"))
     config["embed"] = bool(data.get("embed"))
     config["auto_version_check"] = bool(data.get("auto_version_check"))
