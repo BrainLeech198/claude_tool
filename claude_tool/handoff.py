@@ -15,6 +15,7 @@ import time
 
 from claude_tool.paths import TOOL_DIR
 from claude_tool.claude import python_exe
+from claude_tool.config import load_config, path_key
 
 # 源码模式下 hook 要回头调的那个文件。不能写 handoff.py 自己——那样会被当成
 # 脚本直接跑，包内的相对导入就全崩了；__main__.py 认得这个入口标记。
@@ -50,7 +51,8 @@ def hook_command(handoff=False, auto_continue=False):
 
 
 HANDOFF_FILE = "handoff.md"
-HANDOFF_TOOLS = "Read,Write,Glob,Grep"
+# Edit 在这儿是为了 .gitignore：追加一行比让 Write 整份重写它安全得多。
+HANDOFF_TOOLS = "Read,Write,Edit,Glob,Grep"
 HANDOFF_PROMPT = (
     "把这次会话的工作状态整理成一份交接文档，写到当前目录下的 "
     + HANDOFF_FILE + "（整份覆盖，不要追加）。"
@@ -63,6 +65,46 @@ HANDOFF_PROMPT = (
     "6) 踩过的坑、试过但不通的路子、以及任何没写进代码的约定。"
     "只写你确实知道的事，不确定的明确标注「不确定」。不要客套话。"
 )
+
+# 工作区是 git 仓库、且用户选了"不进版本管理"时，接在上面那段后面。
+GITIGNORE_PROMPT = (
+    "另外：这个目录是个 git 仓库。把 " + HANDOFF_FILE
+    + " 加进 .gitignore（没有就新建一个），确认它不会被提交——它是工具生成的"
+    "工作状态，不该进版本历史。除了 .gitignore 这一处，别动仓库里别的东西，"
+    "也不要提交任何东西。"
+)
+
+
+def handoff_prompt(ignore_git=False):
+    """写文档那句话，按"要不要进版本管理"拼上对应的尾巴。"""
+    return HANDOFF_PROMPT + (GITIGNORE_PROMPT if ignore_git else "")
+
+
+def is_git_repo(path):
+    """这个目录是不是 git 仓库。
+
+    拿 exists 而不是 isdir：worktree 和 submodule 的 .git 是个文件，不是目录，
+    按 isdir 判会把这两样漏掉。
+    """
+    return os.path.exists(os.path.join(path, ".git"))
+
+
+def workspace_ignores_git(cwd):
+    """这个目录在启动器里是不是设了「交接文档不进 git」。
+
+    hook 是另一个进程，拿到的只有 cwd，所以得回配置里把那个工作区条目按路径
+    翻出来。翻不到（目录已经从列表里移掉了）就当没设过——宁可多留一份可能被
+    提交的文档，也不要凭空去改一个我们并不了解的工作区。
+    """
+    config = load_config()
+    if not config:
+        return False
+    wanted = path_key(cwd)
+    for item in config.get("workspaces") or []:
+        if isinstance(item, dict) and path_key(item.get("path") or "") == wanted:
+            return bool(item.get("handoff_ignore_git"))
+    return False
+
 
 # 点工作区弹框里那个"先读交接文档"勾上时用的开场白
 READ_HANDOFF_PROMPT = (
@@ -239,7 +281,7 @@ def run_hook(handoff=False, auto_continue=False):
             entry.update({"turns": 0, "last": now})
             state[key] = entry
             write_hook_state(state)
-            _block(HANDOFF_PROMPT)
+            _block(handoff_prompt(workspace_ignores_git(cwd)))
             return 0
 
     if auto_continue:
