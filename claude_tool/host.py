@@ -6,9 +6,9 @@
 Windows 那边是 winhost（真去操作 HWND）；Linux / macOS 那边是 nixhost（没有
 HWND 这套东西，改按进程管）。
 
-EMBED_SUPPORTED 是这条分界线上唯一的例外：内嵌要往自己的窗口里塞一个别人的
-窗口，Windows 上 SetParent 一行就完事，Linux 上得跟窗口管理器打交道、macOS 上
-得碰 Cocoa，都不值当。非 Windows 上整块界面直接不出现。
+EMBED_SUPPORTED 是这条分界线上唯一的例外：内嵌要拉一个别人的窗口贴到自己窗口
+上，Windows 上认个 owner 就行，Linux 上得跟窗口管理器打交道、macOS 上得碰
+Cocoa，都不值当。非 Windows 上整块界面直接不出现。
 
 WINDOW_CONTROL 管的是另一件事：按句柄去指挥别人的窗口（挪到旁边、压顶层）。
 "关掉"不算在里面——那是按进程树发信号，nixhost 做得到。

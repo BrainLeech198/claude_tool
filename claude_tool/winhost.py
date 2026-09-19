@@ -1,8 +1,8 @@
-"""Windows 窗口层面的操作：找控制台窗口、把它塞进我们的窗口里、摆位置。
+"""Windows 窗口层面的操作：找控制台窗口、把它贴到我们的窗口上、摆位置。
 
-Windows Terminal 是 WinUI3 应用，窗口没法当子窗口塞进别的窗口，所以内嵌这
-条路只能拉老 conhost.exe。代价：conhost 没有字体回退（它默认用新宋体），
-claude 界面里少数符号会显示成方框，而 WT 里不会。
+内嵌用的是老 conhost.exe，不用默认的 Windows Terminal：WT 一扇窗口上挂着好几个
+标签页，我们没法只挪其中一个过来，挪整扇等于把别的会话一起带过来。代价：conhost
+没有字体回退（它默认用新宋体），claude 界面里少数符号会显示成方框，而 WT 里不会。
 """
 import ctypes
 import os
@@ -12,17 +12,22 @@ from claude_tool.claude import CREATE_NEW_CONSOLE, claude_command
 
 
 # ── 内嵌终端 ──────────────────────────────────────────────────────────────
-# Windows Terminal 是 WinUI3 应用，窗口没法当子窗口塞进别的窗口，所以内嵌这
-# 条路只能拉老 conhost.exe。代价：conhost 没有字体回退（它默认用新宋体），
-# claude 界面里少数符号会显示成方框，而 WT 里不会。
+# 内嵌是"贴上去"：拉一扇 conhost 窗口，认启动器当 owner 贴在终端栏那块矩形上。
+# 为什么不用默认的 Windows Terminal：WT 一扇窗口上挂着好几个标签页，我们没法
+# 只把其中一个挪过来，挪整扇等于把别的会话一起带过来。代价：conhost 没有字体
+# 回退（它默认用新宋体），claude 界面里少数符号会显示成方框，而 WT 里不会。
 
 GWL_STYLE = -16
 GWL_EXSTYLE = -20
+GWLP_HWNDPARENT = -8
 WS_EX_TOPMOST = 0x00000008
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_APPWINDOW = 0x00040000
 WM_CLOSE = 0x0010
+SW_HIDE = 0
 HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
-WS_CHILD, WS_VISIBLE, WS_POPUP = 0x40000000, 0x10000000, 0x80000000
-WS_CAPTION, WS_THICKFRAME = 0x00C00000, 0x00040000
+WS_VISIBLE, WS_POPUP = 0x10000000, 0x80000000
+WS_BORDER, WS_CAPTION, WS_THICKFRAME = 0x00800000, 0x00C00000, 0x00040000
 WS_SYSMENU, WS_MINIMIZEBOX, WS_MAXIMIZEBOX = 0x00080000, 0x00020000, 0x00010000
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0004, 0x0010
 SWP_FRAMECHANGED, SWP_SHOWWINDOW = 0x0020, 0x0040
@@ -34,12 +39,20 @@ TITLE_TAG = "claude-embed"
 
 _WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
-# 句柄是 64 位的指针，不声明 argtypes 的话 ctypes 会按 32 位 int 截断。
+# 句柄是 64 位的指针，不声明 argtypes 的话 ctypes 会按 32 位 int 截断——进出
+# 两头都得声明，只声明一头等于另一头照截。
 _user32 = ctypes.windll.user32
-_user32.SetParent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+_user32.GetParent.argtypes = [ctypes.c_void_p]
+_user32.GetParent.restype = ctypes.c_void_p
 _user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
 _user32.GetWindowLongW.restype = ctypes.c_long
 _user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+# 认 owner 走的是 GWLP_HWNDPARENT，值是个句柄——得用 Ptr 那版，Long 那版只吃
+# 32 位，高半截会被砍掉。
+_user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                      ctypes.c_void_p]
+_user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+_user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
 _user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
                                  ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                  ctypes.c_uint]
@@ -200,7 +213,11 @@ def fresh_console(known):
 
 
 class EmbeddedConsole:
-    """一个被塞进启动器窗口里的 conhost。"""
+    """一个贴在启动器窗口上的 conhost。
+
+    是"贴上去"不是"塞进去"：它仍然是一扇独立窗口，只是认启动器当 owner、去掉
+    了标题栏、按终端栏那块矩形摆着，看着像长在窗口里。为什么不真塞，见 _attach。
+    """
 
     def __init__(self, process, hwnd, holder):
         self.process = process
@@ -209,25 +226,50 @@ class EmbeddedConsole:
         self._attach()
 
     def _attach(self):
-        u = ctypes.windll.user32
-        root = self.holder.winfo_toplevel()
-        u.SetParent(self.hwnd, root.winfo_id())
-        style = u.GetWindowLongW(self.hwnd, GWL_STYLE)
-        style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
-                   WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
-        u.SetWindowLongW(self.hwnd, GWL_STYLE, style | WS_CHILD | WS_VISIBLE)
-        self.place()
+        """去标题栏、认启动器当 owner，然后贴到终端栏那块矩形上。
 
-    def place(self):
-        """子窗口的坐标是相对父窗口客户区的，所以拿 Tk 的屏幕坐标做差。"""
+        **不能 SetParent 把它变成我们的子窗口**——那样键盘焦点永远拿不到。焦点
+        是按线程的输入队列分的，不按窗口层级走：子窗口归 conhost 那条队列，我们
+        的线程进不去，给它 SetFocus 一律 ERROR_ACCESS_DENIED(5)，于是打字进不去、
+        点了也像没反应（鼠标倒是通的，点到哪儿系统认的就是它）。正规解法是
+        AttachThreadInput 把两条队列挂一起，而它对 conhost 挂不上：本机别的 GUI
+        进程一挂就成、conhost 的线程 id 也有效（OpenThread 拿得到句柄）、正着挂
+        反着挂都回 ERROR_INVALID_PARAMETER(87)，是系统不让挂。
+
+        做成 owner 窗口就没这回事：它自己那条队列自己吃焦点，键鼠全是原生的。
+        owner 还是白拿的——跟着本窗口一起最小化、本窗口一销毁它跟着销毁；再加
+        一个 WS_EX_TOOLWINDOW，任务栏和 Alt+Tab 里都不露面。
+        """
+        u = _user32
+        style = u.GetWindowLongW(self.hwnd, GWL_STYLE)
+        style &= ~(WS_BORDER | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
+                   WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
+        u.SetWindowLongW(self.hwnd, GWL_STYLE, style | WS_POPUP | WS_VISIBLE)
+        # APPWINDOW 那一位得顺手清掉：留着它，就算认了 owner 也照样占一个任务栏
+        # 按钮（那一位的优先级比 TOOLWINDOW 高）。
+        u.SetWindowLongW(self.hwnd, GWL_EXSTYLE,
+                         (u.GetWindowLongW(self.hwnd, GWL_EXSTYLE) |
+                          WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+        # owner 得是顶层窗口，不能拿控件句柄去顶——用 _frame_handle 问出来的是
+        # 带边框的那扇真窗口。
+        u.SetWindowLongPtrW(self.hwnd, GWLP_HWNDPARENT,
+                            _frame_handle(self.holder.winfo_toplevel()))
+        # 窗口早就显出来了、样式又是后改的：藏一下再显，任务栏那个按钮才会真掉。
+        u.ShowWindow(self.hwnd, SW_HIDE)
+        self.place(SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED |
+                   SWP_SHOWWINDOW)
+
+    def place(self, flags=SWP_NOZORDER | SWP_NOACTIVATE):
+        """把窗口贴到终端栏那块矩形上，坐标直接取屏幕坐标。
+
+        早先当子窗口时坐标得相对父窗口客户区算（跟顶层窗口的屏幕坐标做差），
+        独立窗口不用绕这一道。
+        """
         self.holder.update_idletasks()
-        root = self.holder.winfo_toplevel()
-        ctypes.windll.user32.SetWindowPos(
+        _user32.SetWindowPos(
             self.hwnd, 0,
-            self.holder.winfo_rootx() - root.winfo_rootx(),
-            self.holder.winfo_rooty() - root.winfo_rooty(),
-            self.holder.winfo_width(), self.holder.winfo_height(),
-            SWP_NOZORDER | SWP_NOACTIVATE)
+            self.holder.winfo_rootx(), self.holder.winfo_rooty(),
+            self.holder.winfo_width(), self.holder.winfo_height(), flags)
 
     def close(self):
         """等同点它标题栏的 X：发 WM_CLOSE 让 claude 有机会收尾再退。
@@ -238,14 +280,18 @@ class EmbeddedConsole:
 
     def detach(self):
         """放出去，变回一个普通的独立窗口；进程一律不动，不关 claude。"""
-        u = ctypes.windll.user32
+        u = _user32
         style = u.GetWindowLongW(self.hwnd, GWL_STYLE)
         u.SetWindowLongW(self.hwnd, GWL_STYLE,
-                         (style & ~WS_CHILD) | WS_CAPTION | WS_THICKFRAME |
+                         (style & ~WS_POPUP) | WS_CAPTION | WS_THICKFRAME |
                          WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
-        u.SetParent(self.hwnd, 0)
-        root = self.holder.winfo_toplevel()
-        x, y = window_position(root)
+        u.SetWindowLongW(self.hwnd, GWL_EXSTYLE,
+                         u.GetWindowLongW(self.hwnd, GWL_EXSTYLE) &
+                         ~WS_EX_TOOLWINDOW)
+        # owner 得摘干净：挂着的时候它跟着启动器一起最小化、任务栏里也不露面，
+        # 放出去了就该是一扇平常的窗口。
+        u.SetWindowLongPtrW(self.hwnd, GWLP_HWNDPARENT, None)
+        x, y = window_position(self.holder.winfo_toplevel())
         u.SetWindowPos(self.hwnd, 0, x + 48, y + 48, 900, 600,
                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED |
                        SWP_SHOWWINDOW)
