@@ -7,6 +7,10 @@ __pycache__/
 build/_work/
 dist/
 
+# Linux 那边打包用的虚拟环境（build/打包.sh 建的），装的是 PyInstaller，
+# 跟打出来的程序无关——程序自己只用标准库。
+build/_venv/
+
 # Inno Setup 产物
 Output/
 *.iss.bak
@@ -16,6 +20,8 @@ _probe_*.py
 _probe_*.png
 # 官网那一页的渲染探针是 node 写的，同一条规矩
 _probe_*.js
+# Linux 那边的系统层探针是 shell 写的
+_probe_*.sh
 _shot*.py
 _shot*.png
 _zoom*.py

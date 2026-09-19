@@ -4,7 +4,6 @@
 对话框（加模型、加工作区、点工作区那次询问）在 ui/dialogs.py，以 mixin
 的形式挂在这个类上——它们跟主窗口共享 config_data / feedback_var 那些状态。
 """
-import ctypes
 import json
 import os
 import queue
@@ -14,7 +13,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from claude_tool.paths import (
     CONFIG_FILE,
@@ -23,6 +22,7 @@ from claude_tool.paths import (
     SETTINGS_FILE,
     TOOL_DIR,
 )
+from claude_tool import mover
 from claude_tool import versions
 from claude_tool.theme import (
     ACCENT,
@@ -67,7 +67,6 @@ from claude_tool.claude import (
     CREATE_NO_WINDOW,
     claude_exe,
     find_claude,
-    launch,
 )
 from claude_tool.handoff import (
     AUTO_CONTINUE_MAX,
@@ -85,15 +84,22 @@ from claude_tool.handoff import (
     read_hook_state,
 )
 from claude_tool.host import (
+    EMBED_SUPPORTED,
+    WINDOW_CONTROL,
     EmbeddedConsole,
     bring_next_to,
     close_window,
     fresh_console,
     fresh_terminal,
+    open_path,
+    open_url,
     place_window,
+    screen_bounds,
     spawn_console,
+    spawn_terminal,
     terminal_windows,
     toggle_topmost,
+    window_alive,
     window_position,
 )
 from claude_tool.widgets import (
@@ -107,7 +113,7 @@ from claude_tool.widgets import (
 from claude_tool.ui.dialogs import LauncherDialogs
 
 
-MODEL_MAX, WORKSPACE_MAX = 200, 320
+MODEL_MAX, WORKSPACE_MAX = 300, 480
 # 内嵌终端那一栏的宽度。它从右边长出来，窗口跟着变宽，左列不动。
 TERMINAL_MIN_WIDTH = 900
 # 左列和终端栏之间、以及正文左右各留的空档。
@@ -119,7 +125,7 @@ PAGE_PAD = 16
 # 48 而不是 32：底下那行初始提示比那排开关还宽一点，它按设计不进下限计算
 # （会随反馈消息变长变短），这点余量留给它。
 MIN_MARGIN = 48
-MIN_HEIGHT_FLOOR = 520
+MIN_HEIGHT_FLOOR = 660
 # 关窗时留给内嵌会话收尾的时间（毫秒）。过了这个点还赖着，销毁父窗口自然会
 # 把它连窗口带进程一起带走。
 CLOSE_GRACE_MS = 800
@@ -129,6 +135,11 @@ CLOSE_GRACE_MS = 800
 # 上又未必够。改成看条件——一成立立刻走，到上限就不再等，记一句照常往下走。
 MIGRATE_POLL_MS = 200
 MIGRATE_WAIT_TRIES = 75          # 200 毫秒 × 75 ≈ 15 秒
+
+# 搬工作区时主线程去后台线程那儿收进度的节奏。比上面那个松一点：复制是 IO
+# 活，一次复制几百个小文件也就几毫秒，追得太紧是白烧 CPU；而几百毫秒的延迟
+# 摆在"已经复制了 N 个"那行字上，人眼看不出来。
+MOVE_POLL_MS = 250
 
 # hook 那一轮写交接文档，盯到这么久还没见 handoff.md 动过就不盯了。
 # 这个是兜底——正常一次写就几十秒到几分钟。放得偏长是因为提前解锁更糟：文档可能
@@ -141,11 +152,26 @@ HOOK_REFRESH_GIVE_UP = 10 * 60
 HANDOFF_LOCKED_WHY = "正被那个会话自己的 hook 刷着"
 
 
+def default_window_size(screen_w, screen_h):
+    """没存过尺寸时窗口开多大：写死 900x950。
+
+    中间试过一版按屏幕比例算（宽 0.36、高 0.72，两头卡区间），理由是免得在
+    768 高的笔记本上顶到屏幕外。但那版让"多大合适"变成了跟屏幕有关的事——
+    同一份界面在不同机器上开出来不一样大，而这里其实就那么两块列表，该由里
+    面的内容定。所以退回写死。
+
+    screen_w/screen_h 还是要的：屏幕本身就比 900x950 小的，按屏幕收一下，不
+    然会有一截落在屏幕外够不着。位置那边另有 place_window 管。
+    """
+    return min(900, screen_w - 20), min(950, screen_h - 100)
+
+
 class Launcher(LauncherDialogs, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Claude 启动器")
-        self.geometry("640x760")
+        self.geometry("{}x{}".format(*default_window_size(
+            self.winfo_screenwidth(), self.winfo_screenheight())))
         self.configure(bg=PAGE_BG)
         # 图得挂在 self 上留个引用：PhotoImage 只被局部变量拿着的话，__init__ 一
         # 返回就被回收，标题栏和任务栏那个图标会默默变回 Tk 自带的。
@@ -218,6 +244,12 @@ class Launcher(LauncherDialogs, tk.Tk):
         self._task_text = None
         self._task_started = 0.0
         self._task_timer = None
+        # 搬工作区：整个目录复制 → 对账 → 旧的丢回收站。跟换模型那条流水线共用
+        # 同一块进度区，所以两者互斥（见 _busy）。复制跑在后台线程里，进度走
+        # 队列回主线程——几个 G 的目录在主线程上复制，窗口会僵在那儿不动。
+        self._move_running = False
+        self._move_job = None
+        self._move_queue = queue.Queue()
         # hook 自己在刷交接文档这件事。那一轮跑在会话自己的终端窗口里，启动器只
         # 看得见（读节流状态和 handoff.md 的时间戳），控制不了——所以只能上把锁、
         # 摆个提示，让用户知道它在花 token。
@@ -287,7 +319,7 @@ class Launcher(LauncherDialogs, tk.Tk):
 
         高度**不**跟着算：中间那两块列表是可滚动的，它们的自然高度不该拿来当下限
         ——而且这个数还跟问的时机有关，在 _build_ui() 刚建完时问是 823，等列表
-        fit() 完再问是 410，差一倍。高度就守 520 这个可用底线。
+        fit() 完再问是 410，差一倍。高度就守 MIN_HEIGHT_FLOOR 这个可用底线。
 
         得等界面整个建完、列表也填过之后再调，量的才是最终布局。
         """
@@ -303,6 +335,13 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.minsize(width, MIN_HEIGHT_FLOOR)
 
     def _restore_geometry(self):
+        """把上次关窗时的位置和尺寸摆回去，存多少就用多少。
+
+        早先高度是"只往上记、不往下记"（比默认矮就按默认开），当时的理由是
+        用户嫌过窗口矮。实践下来这条是错的：他手调的那个高度才是他的偏好，
+        启动器拿默认值去盖，出来的效果就是"有点太高了，稍微矮一点"。真存了
+        个矮到没法用的，minsize 那道下限也兜得住（见 _apply_min_size）。
+        """
         saved = self.config_data["window"]
         if not saved:
             return
@@ -310,12 +349,21 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.update_idletasks()
         place_window(self, saved["x"], saved["y"])
 
+    def _busy(self):
+        """启动器手上有活占着进度区没有。
+
+        换模型那条流水线和搬工作区共用同一块进度区和同一条"正在干什么"，同一
+        时刻只能有一个在跑——两个都上，进度条和那几行字会被两边抢着改。
+        """
+        return self._task_running or self._move_running
+
     def _on_close(self):
-        if self._task_running and not messagebox.askyesno(
-                "还在换模型",
-                "正在给会话换模型，还没弄完。\n\n"
-                "现在关掉的话，某个会话可能正好卡在「旧的已经关了、新的还没开」"
-                "那一步，那一轮上下文就断了。\n\n真要现在关吗？"):
+        if self._busy() and not messagebox.askyesno(
+                "还有活没干完",
+                "启动器手上的活还没弄完（换模型那条流水线，或者正在搬工作区）。\n\n"
+                "现在关掉的话，可能正好卡在中间那一步：某个会话停在「旧的已经关"
+                "了、新的还没开」，那一轮上下文就断了；搬工作区停在复制了一半，"
+                "新位置留下半份、旧的还在。\n\n真要现在关吗？"):
             return
         if self.embedded is not None:
             # 内嵌的那个是挂在这扇窗口底下的子窗口，窗口一销毁它就跟着没了。
@@ -394,8 +442,11 @@ class Launcher(LauncherDialogs, tk.Tk):
         # 存下来是给 _apply_min_size 量的：这排开关是窗口该有多宽的那个基准。
         self.switches = switches = tk.Frame(footer, bg=PAGE_BG)
         switches.pack(fill="x", padx=PAGE_PAD, pady=(8, 0))
+        # 内嵌终端只在 Windows 上有（见 host.EMBED_SUPPORTED）。别处这个勾一律
+        # 当没勾——配置文件是跟着用户走的，从 Windows 拷过来的 launcher.json
+        # 里很可能留着 embed=true。
         self.embed_var = tk.BooleanVar(
-            value=bool(self.config_data.get("embed")))
+            value=EMBED_SUPPORTED and bool(self.config_data.get("embed")))
         # 会花用户 token、会替用户拍板的功能，默认关；这几个勾只影响新开的会话，
         # 不动已经跑着的
         self.auto_handoff_var = tk.BooleanVar(
@@ -412,15 +463,25 @@ class Launcher(LauncherDialogs, tk.Tk):
         # _apply_min_size），三个挤一行会把下限从 742 顶到 1029。行按功能分——
         # 上排是终端怎么开，中排是两个挂 Stop hook 的行为，最后一行是联网那件
         # 事（新加的勾也挑最窄的一行摆，免得把下限顶宽）。
-        for var, text, command, row, col in (
-                (self.embed_var, "内嵌终端 conhost（不勾就在新窗口里开）",
-                 self._on_embed_toggle, 0, 0),
-                (self.auto_handoff_var, "自动刷交接文档 Stop hook（会多用 token）",
-                 self._on_auto_handoff_toggle, 1, 0),
-                (self.auto_continue_var, "自动继续 Stop hook（替用户拍板）",
-                 self._on_auto_continue_toggle, 1, 1),
-                (self.auto_version_var, "自动查 claude 新版（联网）",
-                 self._on_version_check_toggle, 2, 0)):
+        #
+        # 内嵌那个勾只在 Windows 上摆，摆上了它独占第 0 行。别的平台上这行是空
+        # 的，于是 hook 那两行就落到第 0、1 行——下面的行号得跟着挪，不然中间
+        # 空出一行。
+        base = 1 if EMBED_SUPPORTED else 0
+        rows = []
+        if EMBED_SUPPORTED:
+            rows.append((self.embed_var,
+                         "内嵌终端 conhost（不勾就在新窗口里开）",
+                         self._on_embed_toggle, 0, 0))
+        rows += [
+            (self.auto_handoff_var, "自动刷交接文档 Stop hook（会多用 token）",
+             self._on_auto_handoff_toggle, base, 0),
+            (self.auto_continue_var, "自动继续 Stop hook（替用户拍板）",
+             self._on_auto_continue_toggle, base, 1),
+            (self.auto_version_var, "自动查 claude 新版（联网）",
+             self._on_version_check_toggle, base + 1, 0),
+        ]
+        for var, text, command, row, col in rows:
             tk.Checkbutton(switches, text=text, variable=var, command=command,
                            bg=PAGE_BG, fg=TEXT, font=font(9), activebackground=PAGE_BG,
                            selectcolor=PANEL_BG, highlightthickness=0, bd=0,
@@ -430,10 +491,13 @@ class Launcher(LauncherDialogs, tk.Tk):
         # 还是黑话。一行注解把词解释掉，术语照留——熟手认词，新手读注解。
         # 单独一行摆（不塞进勾的标题里）：窗口下限量的是 switches 那块的自然宽度
         # （见 _apply_min_size），注解放进去会把下限再顶宽一截。
-        tk.Label(footer, text="conhost 是 Claude Code 自带的终端窗口；"
-                              "Stop hook 是它干完活停下来时触发的动作。",
-                 bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
-                 ).pack(fill="x", padx=20, pady=(4, 0))
+        #
+        # conhost 那句只在 Windows 上留着：别处没有那个勾，解释了也无处可指。
+        note = "Stop hook 是 claude 干完活停下来时触发的动作。"
+        if EMBED_SUPPORTED:
+            note = "conhost 是 Claude Code 自带的终端窗口；" + note
+        tk.Label(footer, text=note, bg=PAGE_BG, fg=MUTED, font=font(9),
+                 anchor="w").pack(fill="x", padx=20, pady=(4, 0))
         self.feedback_var = tk.StringVar(
             value="点工作区选「新会话」或「接着上次聊」；行首那个数字按住 Ctrl 就能直接开，"
                   "Ctrl+F 跳到筛选框。")
@@ -449,6 +513,8 @@ class Launcher(LauncherDialogs, tk.Tk):
         # 两者都 side="left"，终端一出现就从右侧长出来，窗口跟着变宽。
         self.side = tk.Frame(body, bg=PAGE_BG)
         self.side.pack(side="left", fill="both", expand=True)
+        # 非 Windows 上干脆不建：那一栏从头到尾没有会摆出来的时候。
+        self.panel = None
 
         # 先建好但不 pack——没会话在跑的时候，界面上不该看出有这么一块。
         # 一有活的会话，_render_running() 就把它插到模型区上面。
@@ -469,10 +535,11 @@ class Launcher(LauncherDialogs, tk.Tk):
             self.side, "工作区", max_height=WORKSPACE_MAX, expand=True,
             actions=[("＋ 添加工作区", self._open_add_workspace_picker),
                      ("重新扫描", self.rescan)],
-            search=self.ws_filter, top=self._build_autonomy_row)
+            search=self.ws_filter, top=self._build_workspace_rows)
 
-        self.panel = tk.Frame(body, bg=PAGE_BG)
-        self._build_terminal(self.panel)
+        if EMBED_SUPPORTED:
+            self.panel = tk.Frame(body, bg=PAGE_BG)
+            self._build_terminal(self.panel)
 
     def _build_claude_banner(self):
         """找不到 claude 时在顶上挂一条，给三条明路。找到就什么都不摆。"""
@@ -490,8 +557,11 @@ class Launcher(LauncherDialogs, tk.Tk):
                    ).pack(side="right", padx=(6, 0))
         PillButton(inner, "打开官网说明", self._open_install_page, bg=ALERT_BG,
                    ).pack(side="right", padx=(6, 0))
-        PillButton(inner, "一键安装", self._install_claude, primary=True,
-                   bg=ALERT_BG).pack(side="right")
+        # 一键安装走的是 winget，只有 Windows 有。别的平台上不摆这个按钮——
+        # 摆一个按下去只会弹「没有 winget」的，不如不摆。
+        if shutil.which("winget"):
+            PillButton(inner, "一键安装", self._install_claude, primary=True,
+                       bg=ALERT_BG).pack(side="right")
         tk.Frame(banner, bg=BORDER, height=1).pack(fill="x", side="bottom")
 
     def _recheck_claude(self):
@@ -507,7 +577,7 @@ class Launcher(LauncherDialogs, tk.Tk):
 
     def _open_install_page(self):
         try:
-            os.startfile(CLAUDE_INSTALL_URL)
+            open_url(CLAUDE_INSTALL_URL)
         except OSError as e:
             messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(e))
             return
@@ -589,11 +659,16 @@ class Launcher(LauncherDialogs, tk.Tk):
             area.pack(fill="x")
         return area
 
-    def _build_autonomy_row(self, parent):
-        """「工作区」标题底下那一行：把一整件事布置给它自己跑。
+    def _build_workspace_rows(self, parent):
+        """「工作区」标题底下那两行：托管入口，和默认工作区在哪儿。
 
-        摆在这儿而不是顶栏，是因为托管要挑的就是一个工作区——「托管哪个目录、
+        托管摆在这儿而不是顶栏，是因为托管要挑的就是一个工作区——「托管哪个目录、
         用哪一档」跟在哪儿挑工作区是同一件事，凑在一起看才顺。
+
+        默认工作区那行同理：它管的就是底下这张列表里的东西从哪儿冒出来的（新建
+        文件夹建在哪儿、扫描扫哪儿）。这行早先撤过一版，结果这个设置只剩「新建
+        文件夹」对话框里一条路能改，而且改完不点「创建」还会白改——所以请回来了，
+        让它跟它管的那张列表挨着。
         """
         line = tk.Frame(parent, bg=PAGE_BG)
         line.pack(fill="x", pady=(0, 8))
@@ -601,6 +676,22 @@ class Launcher(LauncherDialogs, tk.Tk):
                    bg=PAGE_BG).pack(side="left")
         tk.Label(line, text="布置一个任务，交给它自己跑", bg=PAGE_BG, fg=MUTED,
                  font=font(9)).pack(side="left", padx=(10, 0))
+
+        base = tk.Frame(parent, bg=PAGE_BG)
+        base.pack(fill="x", pady=(0, 8))
+        tk.Label(base, text="默认工作区", bg=PAGE_BG, fg=MUTED,
+                 font=font(9)).pack(side="left")
+        # 两个按钮先占右边，路径再铺在剩下的地方。反过来 pack 的话，路径一长
+        # Tk 不会自己裁，按钮会被顶出框外。
+        PillButton(base, "打开",
+                   lambda: self.open_folder(self.config_data["workplace"]),
+                   bg=PAGE_BG).pack(side="right")
+        PillButton(base, "更改目录", lambda: self.pick_workplace(self), bg=PAGE_BG,
+                   ).pack(side="right", padx=(6, 0))
+        self.workplace_var = tk.StringVar(value=self.config_data["workplace"])
+        tk.Label(base, textvariable=self.workplace_var, bg=PAGE_BG, fg=TEXT,
+                 font=font(9), anchor="w").pack(side="left", padx=(8, 8),
+                                                fill="x", expand=True)
 
     def _on_wheel(self, event):
         widget = self.winfo_containing(event.x_root, event.y_root)
@@ -655,11 +746,16 @@ class Launcher(LauncherDialogs, tk.Tk):
             # side="right" 是先摆的在最右边，所以得倒着 pack。
             ops = []
             if item.get("hwnd"):
-                # 这三样只有独立窗口有——内嵌那个本来就长在本窗口里，挪位置和
+                # 这几样只有独立窗口有——内嵌那个本来就长在本窗口里，挪位置和
                 # 压顶层对它没意义（那一栏自己还有「放到独立窗口」「关掉」）。
-                ops += [("移过来", lambda it=item: self.bring_running(it)),
-                        ("置顶", lambda it=item: self.top_running(it)),
-                        ("关掉", lambda it=item: self.close_running(it))]
+                #
+                # 挪位置、压顶层要能指挥别人的窗口，非 Windows 上没这回事（见
+                # host.WINDOW_CONTROL），那两个按钮就不摆；「关掉」那边做得到
+                # ——按进程树发 SIGTERM，所以照摆。
+                if WINDOW_CONTROL:
+                    ops += [("移过来", lambda it=item: self.bring_running(it)),
+                            ("置顶", lambda it=item: self.top_running(it))]
+                ops.append(("关掉", lambda it=item: self.close_running(it)))
             # 现在就让它写，读的是硬盘上已经存下来的那份会话记录——所以哪怕
             # 里面那份 claude 还开着也照写不误，只是会 fork 出一份副本。
             ops.append(("整理交接文档", lambda it=item: self.write_handoff(it)))
@@ -1038,7 +1134,7 @@ class Launcher(LauncherDialogs, tk.Tk):
     def _live_handle(self, item):
         """那一行记的句柄还作不作数。不作数就顺手抹掉，别留着摆个假按钮。"""
         hwnd = item.get("hwnd")
-        if hwnd and ctypes.windll.user32.IsWindow(hwnd):
+        if hwnd and window_alive(hwnd):
             return hwnd
         if hwnd:
             # 用户自己把那扇窗口关了，或者它已经退干净了
@@ -1334,8 +1430,8 @@ class Launcher(LauncherDialogs, tk.Tk):
         问的是"要不要续"这件事本身，所以措辞里得把后面那串动作说全：写完文档
         就关掉旧的那个。不然用户以为旧窗口会留着，结果被关掉了。
         """
-        if self._task_running:
-            self.feedback_var.set("上一轮换模型的活还没干完，等它跑完。")
+        if self._busy():
+            self.feedback_var.set("上一轮活还没干完，等它跑完。")
             return
         sessions = list(self.running)
         if not sessions:
@@ -1451,12 +1547,11 @@ class Launcher(LauncherDialogs, tk.Tk):
             return
         hwnd = item.get("hwnd")
         item["hwnd"] = None
-        if hwnd and ctypes.windll.user32.IsWindow(hwnd):
+        if hwnd and window_alive(hwnd):
             close_window(hwnd)
             # 窗口是异步退的。等它真没了再开新的，免得两扇撞在同一块地方。
-            u = ctypes.windll.user32
             self._task_step("等旧窗口关掉，关了就用新模型重开。")
-            self._wait_until(lambda: not u.IsWindow(hwnd),
+            self._wait_until(lambda: not window_alive(hwnd),
                              lambda: self._launch_migrated(job),
                              "旧窗口没关利索，先往下走。")
             return
@@ -1556,8 +1651,8 @@ class Launcher(LauncherDialogs, tk.Tk):
                 note = " · ".join(parts)
                 note_color = ACCENT if parts[:1] == ["有交接文档"] else MUTED
             # actions 是从右往左摆的（下标 0 在最右边），所以这里的顺序要倒着念：
-            # 屏幕上从左到右是 打开 ↑ ↓ 改名 移除。上移/下移用箭头不用词，是因为
-            # 一行里塞五个两字词会糊成一片，而箭头没有认不出来的风险。
+            # 屏幕上从左到右是 搬迁 开目录 ↑ ↓ 改名 移除。上移/下移用箭头不用词，
+            # 是因为一行里塞六个两字词会糊成一片，而箭头没有认不出来的风险。
             Row(inner, title=item["name"], subtitle=path, height=52,
                 warn=note, warn_color=note_color,
                 # 行号就是 Ctrl+行号。9 以后没有号（按不到），但位置留着，
@@ -1568,7 +1663,8 @@ class Launcher(LauncherDialogs, tk.Tk):
                          ("改名", lambda it=item: self.rename_workspace(it)),
                          ("↓", lambda it=item: self.move_workspace(it, 1)),
                          ("↑", lambda it=item: self.move_workspace(it, -1)),
-                         ("开目录", lambda p=path: self.open_folder(p))],
+                         ("开目录", lambda p=path: self.open_folder(p)),
+                         ("搬迁", lambda it=item: self.open_move_dialog(it))],
                 ).pack(fill="x", pady=3)
         self.ws_list.fit()
 
@@ -1594,6 +1690,163 @@ class Launcher(LauncherDialogs, tk.Tk):
         save_config(self.config_data)
         self.refresh_workspaces()
 
+    # ── 搬工作区 ──
+
+    def move_workspace_to(self, item, target):
+        """把整个工作区目录搬到新位置，会话记录那份跟着搬。
+
+        顺序是死的，mover 那边定下了：检查 → 复制 → 对账 → 改配置 → 丢回收站。
+        这里只负责在开工前问清两件只有界面知道的事、摆进度、把结果说给用户听；
+        中间一步都不自己动手，全都交给 mover，免得两头各有一套判断标准。
+
+        先问的两件事比 mover 里任何一条都要紧：文件夹正被会话写的时候复制，复制
+        出来的是半截的东西，对账也可能通不过——而那两个 mover 从文件系统上看不
+        出来。
+        """
+        if self._busy():
+            self.feedback_var.set("启动器手上有活，等它跑完再搬。")
+            return
+        if self._handoff_proc is not None and self._handoff_proc.poll() is None:
+            # 手动整理交接文档不算 _busy（那条路不占 _task_running），但它也摆着
+            # 同一块进度区，写完还会把它收回去——这会儿插一个搬迁进去，进度区
+            # 会被它收走。
+            self.feedback_var.set("正在整理别的交接文档，等它写完再搬。")
+            return
+        path = item["path"]
+        if not os.path.isdir(path):
+            messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
+            return
+        key = path_key(path)
+        if any(path_key(s["path"]) == key for s in self.running):
+            messagebox.showerror(
+                "那个会话还开着",
+                "「{}」这个工作区的会话正开着。\n\n"
+                "先把它关掉再搬——文件夹正被写的时候复制，复制出来的是半截的"
+                "东西，对账也会对不上。".format(item["name"]))
+            return
+        if self._hook_locked(path):
+            messagebox.showinfo(
+                "正在交接",
+                "「{}」的会话自己正在刷交接文档（Stop hook 刚被触发），这会儿它的"
+                "文件夹正被写。\n\n等它刷完再搬。".format(item["name"]))
+            return
+
+        project_from, project_to = mover.project_paths(path, target)
+        try:
+            target = mover.check(path, target, project_from, project_to)
+        except mover.MoveError as e:
+            messagebox.showerror("搬不了", str(e))
+            return
+
+        self._move_running = True
+        self._move_job = {"item": item, "source": path, "target": target,
+                          "project_from": project_from, "project_to": project_to}
+        self.task_head_var.set("正在搬工作区")
+        self.task_count_var.set("")
+        self.task_name_var.set(item["name"])
+        self._show_task_area()
+        self._task_started = time.time()
+        self._task_step("正在复制整个目录……")
+        threading.Thread(target=self._move_worker, args=(self._move_job,),
+                         daemon=True).start()
+        self.after(100, self._poll_move)
+
+    def _move_worker(self, job):
+        """复制 + 对账跑在后台线程里，进度和结果都走队列回主线程。
+
+        两棵树共用同一个回调，靠 phase 那个格子区分现在在复制哪一份——会话记录
+        通常小得多，不分开说清楚的话，用户会以为进度条退回去了。
+        """
+        queue_ = self._move_queue
+        phase = ["正在复制整个目录"]
+
+        def note(count):
+            queue_.put(("count", count, phase[0]))
+
+        try:
+            mover.copy_tree(job["source"], job["target"], progress=note)
+            phase[0] = "正在复制会话记录"
+            mover.copy_project(job["project_from"], job["project_to"], progress=note)
+        except mover.MoveError as e:
+            queue_.put(("fail", str(e)))
+            return
+        except Exception as e:                       # noqa: BLE001
+            queue_.put(("fail", "复制的时候出了岔子：{}".format(e)))
+            return
+        queue_.put(("copied", None))
+
+    def _poll_move(self):
+        """主线程收后台线程的进度：Tk 控件只能主线程碰。"""
+        event = None
+        try:
+            while True:
+                event = self._move_queue.get_nowait()
+        except queue.Empty:
+            pass
+        if event is None:
+            self.after(MOVE_POLL_MS, self._poll_move)
+            return
+        if event[0] == "count":
+            self._task_step("{}……已经复制了 {} 个文件".format(event[2], event[1]))
+            self.after(MOVE_POLL_MS, self._poll_move)
+            return
+        if event[0] == "fail":
+            # 复制这一层没成。旧的没动、新的可能留了半截在目标位置上——mover
+            # 那头的话里已经把这两句说了，原样摆出来。
+            self._finish_move(None, event[1])
+            return
+        self._commit_move(self._move_job)
+
+    def _commit_move(self, job):
+        """复制对过账了，改配置——这一步得在主线程做，界面手里那份就是配置。
+
+        配置写不成就不丢旧的：新的那份留在那儿（大不了用户自己删），旧的原封不
+        动、配置也还指着旧的，至少系统是自洽的。反过来先丢旧的再存配置，中间一
+        失败就是两边都没了。
+        """
+        item = job["item"]
+        old_name, old_path = item["name"], item["path"]
+        new_path = job["target"]
+        # 名字跟着搬：没被用户改过（正等于旧文件夹名）的就换成新文件夹名，这样
+        # 顺手改名那一下才有用；用户自己起的名字是人给的名字，照留。
+        if old_name == os.path.basename(old_path.rstrip("/\\")):
+            item["name"] = os.path.basename(new_path.rstrip("/\\"))
+        item["path"] = new_path
+        try:
+            save_config(self.config_data)
+        except OSError as e:
+            item["name"], item["path"] = old_name, old_path
+            self._finish_move(None, "配置写不成（{}），旧的一个没动，"
+                                    "新位置那份你自己删一下。".format(e))
+            return
+        self._task_step("配置改好了，正在把旧的那份丢进回收站。")
+        self.after(MOVE_POLL_MS, lambda: self._discard_move(job))
+
+    def _discard_move(self, job):
+        """新的对过账、配置也指着新的了，这才轮到旧的。
+
+        丢不成【不回滚】——这时候新的那份已经在用了，把旧的搬回来才是真乱。
+        丢不成的如实报出来让用户自己处理。
+        """
+        stuck = mover.discard(job["source"], job["project_from"])
+        self._finish_move(job, None, stuck)
+
+    def _finish_move(self, job, error, stuck=()):
+        self._move_running = False
+        self._move_job = None
+        self._hide_task_area()
+        if error is not None:
+            self.feedback_var.set("没搬成：{}".format(error))
+            return
+        name = job["item"]["name"]
+        if stuck:
+            self.feedback_var.set(
+                "「{}」搬到 {} 了，但旧的那份没能丢进回收站（{}），得你自己删。"
+                .format(name, job["target"], "、".join(stuck)))
+        else:
+            self.feedback_var.set("「{}」搬到 {} 了，旧的进了回收站。"
+                                  .format(name, job["target"]))
+        self.refresh_workspaces()
 
     def launch_workspace(self, item, cont=False, prompt=None, autopilot=False):
         """真正把 claude 拉起来，新窗口还是塞进本窗口看那个勾。
@@ -1623,8 +1876,16 @@ class Launcher(LauncherDialogs, tk.Tk):
         # 拍快照得赶在启动之前：窗口是 claude 那边异步建出来的，等它冒出来再
         # 去数，就分不清哪扇是这次新开的、哪扇是上一轮留下的了。
         known = terminal_windows()
+        # 摆到旁边这件事两个平台的时机不一样：Windows 是起完窗再按句柄挪
+        # （bring_next_to，用户自己点），非 Windows 没这一手，只能趁起窗那一刻
+        # 把坐标告诉终端（-geometry）。坐标这会儿就得算好，晚了窗口已经开在别处。
+        beside = None
+        if not WINDOW_CONTROL:
+            x, y = window_position(self)
+            beside = (x + self.winfo_width() + SIDE_GAP, y)
         try:
-            process = launch(path, cont, prompt, settings, permission)
+            process = spawn_terminal(path, cont, prompt, settings, permission,
+                                     beside=beside)
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return
@@ -1799,9 +2060,7 @@ class Launcher(LauncherDialogs, tk.Tk):
         """改宽度，并保证整扇窗口还留在虚拟桌面内——贴到右边缘就往左挪。"""
         if not width:
             return
-        u = ctypes.windll.user32
-        left = u.GetSystemMetrics(76)
-        right = left + u.GetSystemMetrics(78)
+        left, _top, right, _bottom = screen_bounds(self)
         width = min(width, right - left)
         x, y = window_position(self)
         if x + width > right:
@@ -1860,17 +2119,17 @@ class Launcher(LauncherDialogs, tk.Tk):
         if not os.path.isdir(path):
             messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
             return
-        os.startfile(path)
+        open_path(path)
 
     def _open_tool_dir(self):
-        """顶栏那个按钮：把 ~/.claude_tool 用资源管理器打开。
+        """顶栏那个按钮：把 ~/.claude_tool 用文件管理器打开。
 
         配置、模型预设、交接文档的记账本都在这儿，手改的时候比在界面里点来点去快。
         目录不存在就先建出来——首次启动本来就该有，但用户手删了也别报个错就完事。
         """
         try:
             os.makedirs(TOOL_DIR, exist_ok=True)
-            os.startfile(TOOL_DIR)
+            open_path(TOOL_DIR)
         except OSError as exc:
             messagebox.showerror("打不开", "打开 {} 失败：\n{}".format(TOOL_DIR, exc))
 
@@ -1900,10 +2159,10 @@ class Launcher(LauncherDialogs, tk.Tk):
             else:
                 done(False, HANDOFF_LOCKED_WHY)
             return
-        if self._task_running and done is None:
+        if self._busy() and done is None:
             # 手动点的（流水线自己会带 done）。流水线两步之间有空档，这会儿再插
             # 一份进去，两边会抢进度区和那一个 claude 进程。
-            self.feedback_var.set("正在换模型的流水线上，等它跑完再单独整理。")
+            self.feedback_var.set("启动器手上有活，等它跑完再单独整理。")
             return
         if not os.path.isdir(path):
             messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
@@ -2050,6 +2309,31 @@ class Launcher(LauncherDialogs, tk.Tk):
         if all(path_key(r) != path_key(base) for r in roots):
             roots.insert(0, base)
         self.config_data["roots"] = roots
+
+    def pick_workplace(self, parent):
+        """弹目录选择框换默认工作区，选中就当场落盘。返回换没换。
+
+        「换默认目录」本身不是创建动作，不该挂在哪次"建文件夹"上——早先只有
+        「新建文件夹」对话框里能改，而且得点「创建」才生效，选完点「取消」就
+        白选一场。所以提出来单独一件事，主界面那行和对话框那行都走这儿。
+
+        parent 传对话框的话，选择框会挂在那个对话框上，不会被它的 grab 挡住。
+        """
+        chosen = filedialog.askdirectory(
+            parent=parent, title="选择默认工作区目录",
+            initialdir=self.config_data["workplace"] or TOOL_DIR)
+        if not chosen:
+            return False
+        self._set_workplace(os.path.normpath(chosen))
+        save_config(self.config_data)
+        self.refresh_workplace_label()
+        self.feedback_var.set(
+            "默认工作区已改成 {}。这个目录下的子文件夹，点「重新扫描」能拉进列表。"
+            .format(self.config_data["workplace"]))
+        return True
+
+    def refresh_workplace_label(self):
+        self.workplace_var.set(self.config_data["workplace"])
 
 
     def rescan(self):

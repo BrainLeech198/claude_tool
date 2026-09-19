@@ -12,10 +12,16 @@ onedir 不 onefile：启动快（不用每次解包到临时目录），杀软�
         --workpath build/_work --distpath dist
 
 产物：dist/claude_tool/claude_tool.exe（外加 _internal/ 一堆运行时）
+
+同一个 spec 两边都用：Linux 上是 build/打包.sh 调它，产物是不带 .exe 后缀的
+dist/claude_tool/claude_tool。差在图标——非 Windows 上 PyInstaller 根本不认
+icon=，递过去只会换来一句警告，所以这里按平台分叉，不递。
 """
 import os
+import sys
 
 ROOT = os.path.dirname(SPECPATH)
+WINDOWS = sys.platform == "win32"
 
 a = Analysis(
     [os.path.join(ROOT, "claude_tool", "__main__.py")],
@@ -61,7 +67,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=os.path.join(SPECPATH, "icon.ico"),
+    # 非 Windows 上当 None 递进去，别递 .ico——PyInstaller 不认，只会回一句警告。
+    icon=os.path.join(SPECPATH, "icon.ico") if WINDOWS else None,
 )
 
 coll = COLLECT(

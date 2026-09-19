@@ -38,7 +38,8 @@
       照样能跑。</li>
   </ol>
   <p class="note">安装包没做代码签名，Windows 的 SmartScreen 会拦一下，点「更多信息 → 仍要运行」即可。
-    另外它需要机器上已经装了 <a href="https://docs.claude.com/en/docs/claude-code/setup">Claude Code</a> 本身。</p>
+    另外它需要机器上已经装了 <a href="https://docs.claude.com/en/docs/claude-code/setup">Claude Code</a> 本身<span
+      id="need-claude"></span>。</p>
 
   <footer class="foot">
     <a href="https://gitee.com/Mr_brainleech/claude_tool">Gitee 仓库</a>
@@ -55,7 +56,7 @@
   // 平台的固定顺序，卡片和历史版本表都用这一份。以后加平台只在数组末尾追加一行。
   var PLATFORMS = [
     ["windows", "Windows", "Windows 10 / 11（64 位）"],
-    ["linux", "Linux", "还没做"],
+    ["linux", "Linux", "64 位，解开放着就能跑"],
     ["macos", "macOS", "还没做"]
   ];
 
@@ -173,6 +174,11 @@
       var verified = document.getElementById("verified");
       verified.textContent = "上面这一版配着 claude " + latest.claude + " 测过。";
       verified.hidden = false;
+      // 「怎么装」那段也要把支持的版本写出来。那句里带"是哪一版启动器配着测的"，
+      // 写死在 HTML 里等下一版发出去就成了假话，所以照最新那条记录现拼。
+      document.getElementById("need-claude").textContent =
+        "（" + latest.version + " 是配着 claude " + latest.claude +
+        " 测过的，这个版本及以上都能用）";
     }
     PLATFORMS.forEach(function (p) {
       var pkg = latest[p[0]];
@@ -201,7 +207,8 @@
     head.appendChild(el("span", "rel-date", r.date || ""));
     row.appendChild(head);
     if (r.notes) row.appendChild(el("p", "rel-notes", r.notes));
-    if (r.claude) row.appendChild(el("p", "rel-claude", "配 claude " + r.claude + " 测过"));
+    if (r.claude) row.appendChild(el("p", "rel-claude",
+      "配 claude " + r.claude + " 测过（这个版本及以上）"));
 
     var links = el("div", "rel-links");
     PLATFORMS.forEach(function (p) {
