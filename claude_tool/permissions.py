@@ -52,7 +52,7 @@ def workspace_permission(item):
     """这个工作区上次挑的权限等级。
 
     没挑过、或者存的值是旧的/手改坏了的，一律回落到默认那档——工作区条目在
-    好几个地方现造（新建文件夹、选已有目录、重新扫描），不是每条都带这个字段。
+    好几个地方现造（新建一个文件夹、选已有目录、重新扫描），不是每条都带这个字段。
     """
     mode = item.get("permission")
     return mode if mode in PERMISSION_VALUES else DEFAULT_PERMISSION

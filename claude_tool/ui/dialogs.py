@@ -1,4 +1,4 @@
-"""那几个对话框：加模型、加工作区、点工作区那次询问。
+"""那几个对话框：加模型、加工作区、点工作区那次询问、布置托管任务。
 
 以 mixin 的形式挂在 Launcher 上。它们跟主窗口共享一大堆状态（config_data、
 feedback_var、refresh_*），所以没有把状态收进单独的对象——那要挨个改方法体，
@@ -13,10 +13,13 @@ from tkinter import filedialog, messagebox, ttk
 
 from claude_tool.paths import ILLEGAL_CHARS, PRESET_DIR, TOOL_DIR, WORKPLACE_DIR
 from claude_tool.theme import (
+    ACCENT,
+    BORDER,
     MUTED,
     PAGE_BG,
     PANEL_BG,
     TEXT,
+    WARN,
     font,
 )
 from claude_tool.permissions import (
@@ -323,25 +326,170 @@ class LauncherDialogs:
         self._center(dialog)
 
 
-    def _open_workplace_dialog(self):
-        """改默认工作区目录。选完就落盘，以后「＋ 新建文件夹」都建在这儿。"""
-        current = self.config_data["workplace"]
-        chosen = filedialog.askdirectory(
-            parent=self, title="选择默认工作区目录",
-            initialdir=current if os.path.isdir(current) else TOOL_DIR)
-        if not chosen:
+    def _open_add_workspace_picker(self):
+        """「＋ 添加工作区」：先问一句是新建一个文件夹，还是把已有的目录加进来。
+
+        从前这是并排的两个按钮（「＋ 新建文件夹」「＋ 选已有目录」）。两个词都得
+        读完才分得清差别，而且「新建文件夹」那个说法听着像文件管理，不像"弄一个
+        能干活的工作区"。拆成一步问，每个选项自己带一句解释。
+        """
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "添加工作区")
+
+        def pick(opener):
+            dialog.destroy()
+            opener()
+
+        choices = [
+            ("新建一个文件夹",
+             "在默认工作区目录下面建一个新的，建好就能用。",
+             self._open_quick_workspace_dialog),
+            ("选已有目录",
+             "把机器上已经有的一个目录加进列表。",
+             self._open_add_workspace_dialog),
+        ]
+        for index, (caption, hint, opener) in enumerate(choices):
+            line = tk.Frame(body, bg=PAGE_BG)
+            line.grid(row=index, column=0, sticky="ew", pady=(0, 10))
+            PillButton(line, caption, lambda o=opener: pick(o),
+                       primary=index == 0, bg=PAGE_BG).pack(side="left")
+            tk.Label(line, text=hint, bg=PAGE_BG, fg=MUTED, font=font(9),
+                     anchor="w").pack(side="left", padx=(10, 0))
+
+        finish_form(dialog, [("取消", dialog.destroy, False)])
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        self._center(dialog)
+
+
+    def _open_autonomy_dialog(self):
+        """「AI 托管」：挑工作区、写清要它干什么、定托管到哪一档。
+
+        三档里只有第 1 档做出来了，另外两档灰着摆在那儿——这条路往上还有什么，
+        用户得看得见，不能点。灰着比藏起来好：藏起来他会以为这工具就这么点本事。
+        """
+        workspaces = self.config_data["workspaces"]
+        if not workspaces:
+            messagebox.showinfo("还没有工作区", "先加一个工作区，托管得有个目录在里头干活。")
             return
-        base = os.path.normpath(chosen)
-        if path_key(base) == path_key(current):
-            return
-        self._set_workplace(base)
-        save_config(self.config_data)
-        self.feedback_var.set(
-            "默认工作区目录改成 {}，以后「＋ 新建文件夹」就建在这儿。".format(base))
+
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "AI 托管")
+
+        # 上次托管在哪个工作区就停在哪一格，不用每次重挑；那个工作区被移掉了
+        # 就退回第一个。
+        remembered = self.config_data.get("autonomy_workspace") or ""
+        start = next((i for i, w in enumerate(workspaces)
+                      if path_key(w["path"]) == path_key(remembered)), 0)
+
+        tk.Label(body, text="工作区", bg=PAGE_BG, fg=MUTED, font=font(10),
+                 anchor="w").grid(row=0, column=0, sticky="w", pady=4)
+        # 不给它挂 StringVar，理由跟 open_workspace 那个下拉一样：局部变量一被
+        # GC，tkinter 顺手就把底下的 Tcl 变量 unset 掉，下拉会自己变空白。
+        combo = ttk.Combobox(body, state="readonly", width=38, font=font(10),
+                             values=[item["name"] for item in workspaces])
+        combo.current(start)
+        combo.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=4)
+
+        # 名字可能重（用户自己起的），底下这行把路径摆出来，选的是哪个一目了然。
+        # 换个工作区就跟着换，所以要绑在下拉上重算。
+        where = tk.Label(body, bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
+                         justify="left", wraplength=460)
+        where.grid(row=1, column=0, columnspan=2, sticky="w")
+
+        # 权限那句是必须写的：托管是要人走开的，而"它问你话"和"它等你点允许"
+        # 是两种停顿——Stop hook 只接得住前一种。等级不够高的话，用户走开一趟
+        # 回来会发现它卡在权限确认上，那不是这功能失灵，是权限的事，得说在前面。
+        perm_note = tk.Label(body, bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
+                             justify="left", wraplength=460)
+        perm_note.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        def show_where(_event=None):
+            item = workspaces[max(combo.current(), 0)]
+            exists = os.path.isdir(item["path"])
+            where.configure(
+                text=item["path"] + ("" if exists else "（这个目录不在了）"),
+                fg=MUTED if exists else WARN)
+            perm_note.configure(
+                text="权限：{}。它等你点「允许」时 hook 接不了，想让它一路跑到底，"
+                     "先把这个工作区的等级调高。".format(
+                         permission_option(workspace_permission(item))))
+
+        combo.bind("<<ComboboxSelected>>", show_where)
+        show_where()
+
+        tk.Label(body, text="任务目标", bg=PAGE_BG, fg=MUTED, font=font(10),
+                 anchor="w").grid(row=3, column=0, sticky="nw", pady=(12, 4))
+        goal = tk.Text(body, height=5, width=38, wrap="word", font=font(10),
+                       bg=PANEL_BG, fg=TEXT, relief="flat", insertbackground=TEXT,
+                       highlightthickness=1, highlightbackground=BORDER,
+                       highlightcolor=ACCENT)
+        goal.grid(row=3, column=1, sticky="ew", padx=(12, 0), pady=(12, 4))
+        body.columnconfigure(1, weight=1)
+
+        tk.Label(body, text="它拿到的就是这段话，写得像个交接：要做什么、"
+                            "做完算什么样。",
+                 bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
+                 ).grid(row=4, column=0, columnspan=2, sticky="w")
+
+        tk.Label(body, text="托管程度", bg=PAGE_BG, fg=MUTED, font=font(10),
+                 anchor="w").grid(row=5, column=0, columnspan=2, sticky="w",
+                                  pady=(12, 4))
+        tier_var = tk.IntVar(value=self.config_data.get("autonomy", 1))
+        # 一档两行：单选按钮那行只说这档叫什么，底下缩进去一行说它到底干什么。
+        # 全塞进按钮文字里的话，长句子会绕在单选圈旁边折成好几行，读起来是一团。
+        tiers = [
+            (1, False, "第 1 档 · 让它自己定",
+             "它停下来问你的时候，替它回一句「接着干，自己定」，不回来烦你。"
+             "会多用 token。（它摆选项框问你的那种还接不了。）"),
+            (2, True, "第 2 档 · 接指挥模型（还没做）",
+             "让另一个模型读一遍上下文，替你回答它问的那个问题。"),
+            (3, True, "第 3 档 · 半指挥（还没做）",
+             "平时让它自己跑，碰上改 git 历史、大范围重做这种，停下来等你。"),
+        ]
+        for index, (number, not_yet, caption, hint) in enumerate(tiers):
+            base = 6 + index * 2
+            tk.Radiobutton(body, text=caption, variable=tier_var, value=number,
+                           state="disabled" if not_yet else "normal",
+                           bg=PAGE_BG, fg=TEXT, activebackground=PAGE_BG,
+                           selectcolor=PANEL_BG, font=font(10), anchor="w",
+                           highlightthickness=0, bd=0, disabledforeground=MUTED,
+                           ).grid(row=base, column=0, columnspan=2, sticky="w",
+                                  pady=(0 if index == 0 else 8, 0))
+            tk.Label(body, text=hint, bg=PAGE_BG, fg=MUTED, font=font(9),
+                     anchor="w", justify="left", wraplength=420,
+                     ).grid(row=base + 1, column=0, columnspan=2, sticky="w",
+                            padx=(22, 0))
+
+        def start():
+            item = workspaces[max(combo.current(), 0)]
+            task = goal.get("1.0", "end").strip()
+            if not task:
+                messagebox.showerror("还没写任务",
+                                     "说一下要它干什么，空着开出去它也不知道该干嘛。",
+                                     parent=dialog)
+                return
+            if not os.path.isdir(item["path"]):
+                messagebox.showerror("目录不存在", "找不到目录：\n{}".format(item["path"]),
+                                     parent=dialog)
+                return
+            dialog.destroy()
+            self.start_autonomy(item, task, tier_var.get())
+
+        finish_form(dialog, [("开始托管", start, True), ("取消", dialog.destroy, False)])
+        # 不绑 <Return>：任务目标是个多行框，回车该在那儿换行。
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        goal.focus_set()
+        self._center(dialog)
 
 
     def _open_quick_workspace_dialog(self):
-        """「＋ 新建文件夹」：在默认工作区目录下面建一个新文件夹，当工作区用。"""
+        """「新建一个文件夹」：在默认工作区目录下面建一个新文件夹，当工作区用。
+
+        底下那行「建在 <路径> [更改目录]」是改默认目录的地方——以前主窗口上还
+        并排摆着一行一样的，那行撤了，改到这儿改。
+        """
         dialog = tk.Toplevel(self)
         dialog.grab_set()
         body = make_form(dialog, "新建工作区文件夹")
@@ -423,7 +571,7 @@ class LauncherDialogs:
 
 
     def _open_add_workspace_dialog(self):
-        """「＋ 选已有目录」：挑一个已经存在的目录，加进列表里当工作区。"""
+        """「选已有目录」：挑一个已经存在的目录，加进列表里当工作区。"""
         dialog = tk.Toplevel(self)
         dialog.grab_set()
         body = make_form(dialog, "选已有目录当工作区")
