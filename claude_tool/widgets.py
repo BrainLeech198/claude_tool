@@ -271,6 +271,56 @@ class ScrollArea(tk.Frame):
         self.canvas.yview_scroll(steps, "units")
 
 
+class Tip:
+    """挂在控件上的悬停提示。
+
+    顶栏那排东西是有宽度上限的（左边还得摆模型名和版本号），想给按钮补一句
+    解释就只能等鼠标停下来再冒出来。挂哪都行，用 add="+" 绑事件，不会顶掉
+    控件自己原有的 <Enter>/<Leave>。
+    """
+
+    def __init__(self, widget, text, delay=450):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._timer = None
+        self._window = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<Button-1>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._timer = self.widget.after(self.delay, self._show)
+
+    def _cancel(self):
+        if self._timer is not None:
+            self.widget.after_cancel(self._timer)
+            self._timer = None
+
+    def _show(self):
+        self._timer = None
+        if self._window is not None or not self.widget.winfo_ismapped():
+            return
+        window = tk.Toplevel(self.widget)
+        window.wm_overrideredirect(True)
+        window.configure(bg=BORDER)
+        tk.Label(window, text=self.text, bg=PANEL_BG, fg=TEXT, font=font(9),
+                 padx=8, pady=4).pack(padx=1, pady=1)
+        # 靠按钮右边缘对齐：顶栏那个按钮就贴着窗口右边，按左边缘摆会把提示推出屏幕
+        window.update_idletasks()
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() - window.winfo_reqwidth()
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        window.wm_geometry("+%d+%d" % (max(x, 0), y))
+        self._window = window
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self._window is not None:
+            self._window.destroy()
+            self._window = None
+
+
 # ── 通用表单控件 ──────────────────────────────────────────────────────────
 
 
