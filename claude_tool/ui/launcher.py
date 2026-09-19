@@ -74,9 +74,11 @@ from claude_tool.handoff import (
     HANDOFF_FILE,
     HANDOFF_TOOLS,
     READ_HANDOFF_PROMPT,
+    autonomy_caption,
     ensure_hook_settings,
     handoff_prompt,
     is_git_repo,
+    tier_flags,
 )
 from claude_tool.host import (
     EMBED_SUPPORTED,
@@ -1611,11 +1613,17 @@ class Launcher(LauncherDialogs, tk.Tk):
                                   .format(name, job["target"]))
         self.refresh_workspaces()
 
-    def launch_workspace(self, item, cont=False, prompt=None, autopilot=False):
+    def launch_workspace(self, item, cont=False, prompt=None, autopilot=False,
+                         hook_flags=None):
         """真正把 claude 拉起来，新窗口还是塞进本窗口看那个勾。
 
-        autopilot=True 是「AI 托管」那条路：这次会话无条件挂上自动继续那个 hook，
-        不看底下那个勾——用户是在托管对话框里当场选的档，那个选择就该管这一次。
+        autopilot=True 是「AI 托管」那条路：这次会话无条件挂上 hook，不看底下那个
+        勾——用户是在托管对话框里当场选的档，那个选择就该管这一次。
+
+        hook_flags 是托管那次要挂的具体开关（哪个档、指挥模型是谁），由
+        start_autonomy 按档位算好传进来。**不能在这儿另算一份**：底下那个勾只代表
+        "挂上自动继续"，托管选了第 2、3 档时它算不出该多挂什么，再写一次配置就把
+        刚写好的那份覆盖回第 1 档了。
         """
         path = item["path"]
         permission = workspace_permission(item)
@@ -1623,7 +1631,8 @@ class Launcher(LauncherDialogs, tk.Tk):
         auto_continue = self.auto_continue_var.get() or autopilot
         if auto_continue:
             try:
-                settings = ensure_hook_settings(auto_continue=True)
+                settings = ensure_hook_settings(**(hook_flags
+                                                   or {"auto_continue": True}))
             except OSError as e:
                 messagebox.showerror("挂 hook 失败",
                                      "写不了 hook 配置，这次就不挂了：\n{}".format(e))
@@ -1651,35 +1660,34 @@ class Launcher(LauncherDialogs, tk.Tk):
         self._watch_terminal(entry, known)
         if autopilot:
             self.feedback_var.set(
-                "已托管「{}」：它停下问你话时会自己接着说，权限 {}。关掉那扇窗口"
-                "就结束。".format(item["name"], permission_option(permission)))
+                "已托管「{}」（{}）：它停下问你话时会自己接上，权限 {}。关掉那扇"
+                "窗口就结束。".format(item["name"],
+                                  autonomy_caption(hook_flags),
+                                  permission_option(permission)))
         else:
             self.feedback_var.set("已在新窗口启动{}（权限：{}）：{}".format(
                 "（接着上次聊）" if cont else "", permission_option(permission), path))
         return entry
 
-    def start_autonomy(self, item, task, tier=1):
+    def start_autonomy(self, item, task, tier=1, commander=""):
         """「AI 托管」按下去之后：在那个工作区起个新会话，把任务当开场白。
 
         新会话（不 --continue）是故意的：托管是丢一件新活进去，不是接着上一段
         聊天。不带 --continue 时 claude 把命令行上那个位置参数当第一条用户消息
         送进去，这条路线上文书探针验过。
+
+        commander 只有第 2 档用得上，是那个替用户拍板的模型的预设名。
         """
         path = item["path"]
         if not os.path.isdir(path):
             messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
             return
-        if tier != 1:
-            # 第 2、3 档在界面上是灰的，按不到；走到这儿说明配置被人手改成
-            # 2 或 3 了。与其按一个没实现的东西开出去，不如什么都不开。
-            messagebox.showinfo(
-                "这一档还没做",
-                "第 {} 档还没实现。现在能用的是第 1 档「让它自己定」。".format(tier))
-            return
+        flags = tier_flags(tier, commander)
         # 先把 hook 配置文件写出来试一次：写不了就别开——开出去一个没挂上 hook
         # 的会话，用户以为托管着呢，其实它停下来就在那儿干等。
+        # 也算好这次的开关一起交给 launch_workspace，别让它自己再算一遍。
         try:
-            ensure_hook_settings(auto_continue=True)
+            ensure_hook_settings(**flags)
         except OSError as e:
             messagebox.showerror("挂 hook 失败",
                                  "写不了 hook 配置，这次没法托管：\n{}".format(e))
@@ -1687,8 +1695,10 @@ class Launcher(LauncherDialogs, tk.Tk):
 
         self.config_data["autonomy"] = tier
         self.config_data["autonomy_workspace"] = path
+        self.config_data["autonomy_commander"] = flags["commander"]
         save_config(self.config_data)
-        self.launch_workspace(item, cont=False, prompt=task, autopilot=True)
+        self.launch_workspace(item, cont=False, prompt=task, autopilot=True,
+                              hook_flags=flags)
 
     def launch_nth(self, number):
         """Ctrl+1~9：和鼠标点一样，也弹那个选择框。"""

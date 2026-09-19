@@ -39,10 +39,11 @@ def default_config():
         "auto_continue": False,
         "embed": False,
         "auto_version_check": False,
-        # 「AI 托管」上次选的档和上次丢给它的那个工作区。记着是为了下次打开
-        # 对话框直接停在原处，不用重挑。档位只认 1/2/3，现在只有第 1 档能选。
+        # 「AI 托管」上次选的档、上次丢给它的那个工作区、以及第 2 档用哪个模型
+        # 当指挥。记着是为了下次打开对话框直接停在原处，不用重挑。档位只认 1/2/3。
         "autonomy": 1,
         "autonomy_workspace": "",
+        "autonomy_commander": "",
     }
 
 
@@ -100,6 +101,10 @@ def load_config():
     config["autonomy"] = tier if tier in (1, 2, 3) else 1
     remembered = data.get("autonomy_workspace")
     config["autonomy_workspace"] = remembered.strip() if isinstance(remembered, str) else ""
+    # 指挥模型记的是预设名。那个预设后来被删了也不清空——对话框打开时会发现名字
+    # 对不上而退回第一个可选项，比在这儿偷偷抹掉、下次打开发现选择没了更清楚。
+    deputy = data.get("autonomy_commander")
+    config["autonomy_commander"] = deputy.strip() if isinstance(deputy, str) else ""
     return config
 
 
