@@ -405,6 +405,14 @@ class Launcher(LauncherDialogs, tk.Tk):
                            selectcolor=PANEL_BG, highlightthickness=0, bd=0,
                            ).grid(row=row, column=col, sticky="w",
                                   padx=(0, 18), pady=(0, 2))
+        # 上面那两行括号里说的是"勾上会怎么样"，可 conhost、Stop hook 这两个词本身
+        # 还是黑话。一行注解把词解释掉，术语照留——熟手认词，新手读注解。
+        # 单独一行摆（不塞进勾的标题里）：窗口下限量的是 switches 那块的自然宽度
+        # （见 _apply_min_size），注解放进去会把下限再顶宽一截。
+        tk.Label(footer, text="conhost 是 Claude Code 自带的终端窗口；"
+                              "Stop hook 是它干完活停下来时触发的动作。",
+                 bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
+                 ).pack(fill="x", padx=20, pady=(4, 0))
         self.feedback_var = tk.StringVar(
             value="点工作区选「新会话」或「接着上次聊」；行首那个数字按住 Ctrl 就能直接开，"
                   "Ctrl+F 跳到筛选框。")
