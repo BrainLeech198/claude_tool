@@ -33,12 +33,13 @@ def default_config():
         "workspaces": [{"name": "默认", "path": WORKPLACE_DIR,
                         "handoff_ignore_git": False}],
         "window": None,
-        # 底下这三个勾都记着上次的状态，但首次装上一定是关的：自动刷交接文档会
+        # 底下这一排勾都记着上次的状态，但首次装上一定是关的：自动刷交接文档会
         # 多花 token，内嵌终端会改变新开的会话开在哪儿，自动继续会替用户拍板，
-        # 都不该悄悄替用户打开。
+        # 自动查更新会联网，都不该悄悄替用户打开。
         "auto_handoff": False,
         "auto_continue": False,
         "embed": False,
+        "auto_version_check": False,
         # 「AI 托管」上次选的档和上次丢给它的那个工作区。记着是为了下次打开
         # 对话框直接停在原处，不用重挑。档位只认 1/2/3，现在只有第 1 档能选。
         "autonomy": 1,
@@ -95,6 +96,7 @@ def load_config():
     config["auto_handoff"] = bool(data.get("auto_handoff"))
     config["auto_continue"] = bool(data.get("auto_continue"))
     config["embed"] = bool(data.get("embed"))
+    config["auto_version_check"] = bool(data.get("auto_version_check"))
     # 档位是手改得坏的：写个 4、写个字符串，都当没写，回落到第 1 档。
     tier = data.get("autonomy")
     config["autonomy"] = tier if tier in (1, 2, 3) else 1

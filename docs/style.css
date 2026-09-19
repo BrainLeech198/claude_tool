@@ -141,6 +141,7 @@ h2 {
 .rel-ver { font-size: 16px; font-weight: 700; }
 .rel-date { color: var(--muted); font-size: 13px; }
 .rel-notes { margin: 6px 0 0; color: var(--text); }
+.rel-claude { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 
 .rel-links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 

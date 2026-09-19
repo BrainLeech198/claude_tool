@@ -14,6 +14,8 @@ Output/
 # 本地调试留下的探针、截图、临时脚本
 _probe_*.py
 _probe_*.png
+# 官网那一页的渲染探针是 node 写的，同一条规矩
+_probe_*.js
 _shot*.py
 _shot*.png
 _zoom*.py

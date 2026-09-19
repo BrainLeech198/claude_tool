@@ -23,6 +23,7 @@ from claude_tool.paths import (
     SETTINGS_FILE,
     TOOL_DIR,
 )
+from claude_tool import versions
 from claude_tool.theme import (
     ACCENT,
     ACCENT_SOFT,
@@ -228,6 +229,11 @@ class Launcher(LauncherDialogs, tk.Tk):
         self._handoff_visible = False     # 「正在交接」那块现在摆没摆出来
         self._jobs_shown = False          # 上面那个容器现在摆没摆出来
         self.version_queue = queue.Queue()   # 后台问出来的 claude 版本号，主线程来取
+        # 本机版本号拿到手之后，"要不要更新"那一问的结果走这条队列回主线程。
+        # 队列里每项是 (是不是手动点的, versions.check() 的返回值或 None)。
+        self.version_check_queue = queue.Queue()
+        self._local_version = ""     # 顶栏那个版本号的原文，比大小时拿它跟网上比
+        self._update_pill = None     # 「有新版」那个胶囊，第一次查出落后才建
         # 目录骨架和一次性迁移都在启动时做完，之后各处只管用，不必再判存在。
         for directory in (TOOL_DIR, PRESET_DIR):
             try:
@@ -270,9 +276,10 @@ class Launcher(LauncherDialogs, tk.Tk):
     def _apply_min_size(self):
         """窗口下限按内容量出来，别写死。
 
-        底下那排开关（内嵌终端 + 两个挂 Stop hook 的行为，分两行摆）是最宽的一块，
-        两段文字加上间距比左列那几块都宽；原先写死的下限 560（默认宽 640）都装不下，
-        右边那个勾的标题会被切掉一截，字号再大点的机器切得更多。
+        底下那排开关（内嵌终端 + 两个挂 Stop hook 的行为 + 自动查新版，分三行摆）
+        是最宽的一块，几段文字加上间距比左列那几块都宽；原先写死的下限 560
+        （默认宽 640）都装不下，右边那个勾的标题会被切掉一截，字号再大点的机器
+        切得更多。
 
         量的只有那排开关和左列这两块**定死**的东西，不去拿整窗的 reqwidth：顶栏
         的模型名、底下那行反馈都是会变长的字符串，它们一长整窗的自然宽度就跟着
@@ -367,6 +374,14 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.version_var = tk.StringVar(value="正在查 claude 版本…")
         tk.Label(line, textvariable=self.version_var, bg=PANEL_BG, fg=MUTED,
                  font=font(9)).pack(side="left", padx=(16, 0))
+        # 手动问一次。底下那个勾管的是"开启动器时自动问一次"，这个按钮管的是
+        # "我现在就想知道"，不受那个勾影响。
+        check = PillButton(line, "查更新", self.check_claude_update, bg=PANEL_BG)
+        check.pack(side="left", padx=(10, 0))
+        Tip(check, "问一次网上 claude 出到哪一版了，跟本机这个比一比")
+        # 查出本机落后了才摆出来的胶囊，平时不占地方：顶栏就一条，多挂一个常驻
+        # 控件就会把版本号挤掉（早先往里塞字就是这么把版本号截了半截的）。
+        self.top_line = line
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # 没装 claude 才挂出来的告警条，装好了整条不占地方
@@ -387,20 +402,25 @@ class Launcher(LauncherDialogs, tk.Tk):
             value=bool(self.config_data.get("auto_handoff")))
         self.auto_continue_var = tk.BooleanVar(
             value=bool(self.config_data.get("auto_continue")))
+        self.auto_version_var = tk.BooleanVar(
+            value=bool(self.config_data.get("auto_version_check")))
         # 括号里写的是各自的真名：内嵌那条走的是 conhost（不是默认的 Windows
         # Terminal，字形回退差些），另两条挂的都是 Claude Code 的 Stop hook。
         # 熟练用户要的是这几个词，好去翻文档、翻配置文件；只写大白话他就得猜。
         #
-        # 拆两行摆，不是一行塞三个：窗口下限是按这排开关的自然宽度量的
-        # （见 _apply_min_size），三个挤一行会把下限从 742 顶到 1029。行按功能分——
-        # 上排是终端怎么开，下排是两个挂 Stop hook 的行为。
+        # 拆几行摆，不挤一行：窗口下限是按这排开关的自然宽度量的（见
+        # _apply_min_size），三个挤一行会把下限从 742 顶到 1029。行按功能分——
+        # 上排是终端怎么开，中排是两个挂 Stop hook 的行为，最后一行是联网那件
+        # 事（新加的勾也挑最窄的一行摆，免得把下限顶宽）。
         for var, text, command, row, col in (
                 (self.embed_var, "内嵌终端 conhost（不勾就在新窗口里开）",
                  self._on_embed_toggle, 0, 0),
                 (self.auto_handoff_var, "自动刷交接文档 Stop hook（会多用 token）",
                  self._on_auto_handoff_toggle, 1, 0),
                 (self.auto_continue_var, "自动继续 Stop hook（替用户拍板）",
-                 self._on_auto_continue_toggle, 1, 1)):
+                 self._on_auto_continue_toggle, 1, 1),
+                (self.auto_version_var, "自动查 claude 新版（联网）",
+                 self._on_version_check_toggle, 2, 0)):
             tk.Checkbutton(switches, text=text, variable=var, command=command,
                            bg=PAGE_BG, fg=TEXT, font=font(9), activebackground=PAGE_BG,
                            selectcolor=PANEL_BG, highlightthickness=0, bd=0,
@@ -480,6 +500,9 @@ class Launcher(LauncherDialogs, tk.Tk):
             self.feedback_var.set("还是没找到。装完可能要重开一次启动器，PATH 才会刷新。")
             return
         self.banner.pack_forget()
+        # 顺手把版本号重问一遍：刚装上的那个 claude 是什么版本，顶栏该跟着变。
+        # 勾着"自动查新版"的话，这一问带出来的那次联网查也就跟着跑了。
+        self._probe_claude_version()
         self.feedback_var.set("找到 claude 了：{}".format(self.claude_path))
 
     def _open_install_page(self):
@@ -932,9 +955,16 @@ class Launcher(LauncherDialogs, tk.Tk):
         """
         try:
             while True:
-                self.version_var.set(self.version_queue.get_nowait())
+                text = self.version_queue.get_nowait()
+                self.version_var.set(text)
+                self._local_version = text
+                # 勾着"自动查新版"才联网问一次；不勾就只把版本号贴上顶栏。没读到
+                # 版本号（没装 claude）就别去联那次网了，比不出什么来。
+                if self.auto_version_var.get() and versions.parse(text):
+                    self._start_version_check()
         except queue.Empty:
             pass
+        self._poll_version_check()
 
         live = [item for item in self.running if item["proc"].poll() is None]
         if len(live) != len(self.running):
@@ -1084,6 +1114,105 @@ class Launcher(LauncherDialogs, tk.Tk):
                 self.version_queue.put("读不到版本号")
 
         threading.Thread(target=work, daemon=True).start()
+
+    def check_claude_update(self):
+        """手动查一次（顶栏那个「查更新」）。不管底下那个勾开没开都查。"""
+        if not self._local_version:
+            self.feedback_var.set("还没读到本机 claude 的版本号，过一两秒再点一次。")
+            return
+        self.feedback_var.set("正在问网上 claude 出到哪版了…")
+        self._start_version_check(manual=True)
+
+    def _start_version_check(self, manual=False):
+        """后台跑一次"要不要更新"，结果走 version_check_queue 回主线程。
+
+        联网得在后台：网络不通时单是超时就是好几秒，摆到主线程上界面会僵住。
+        """
+        local = self._local_version
+
+        def work():
+            try:
+                result = versions.check(local)
+            except Exception:
+                result = None
+            self.version_check_queue.put((manual, result))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _poll_version_check(self):
+        try:
+            while True:
+                manual, result = self.version_check_queue.get_nowait()
+                self._apply_version_check(manual, result)
+        except queue.Empty:
+            pass
+
+    def _apply_version_check(self, manual, result):
+        if result is None:
+            # 查不到就闭嘴——离线、被墙、npm 抽风都是常事，自动那次不该弹东西出来
+            # 烦人；手动那次得说一声，不然用户点完等半天不知道发生了什么。
+            if manual:
+                self.feedback_var.set("没查到网上 claude 出到哪版了（可能联不上网），比不了。")
+            return
+        latest, source, stale = result
+        local_parts = versions.parse(self._local_version)
+        if local_parts is None:
+            # 本机版本号压根没读出来（没装 claude，或者 --version 那下挂了），
+            # 那就只剩下"网上是 X"这一条，比不出新旧。
+            if manual:
+                self.feedback_var.set(
+                    "网上最新是 {}（{}），可本机版本没读出来，比不了。".format(
+                        latest, source))
+            return
+        # 反馈栏就一行、长了会被窗口边裁掉，所以只报版本号本身，不把那串
+        # "claude 2.1.150 (Claude Code)" 整个抄一遍。
+        local = versions.number(local_parts)
+        if not stale:
+            self._hide_update()
+            if manual:
+                self.feedback_var.set("本机 claude {}，{} 上也是这一版，不用更新。".format(
+                    local, source))
+            return
+        self._show_update(latest, source, local)
+
+    def _show_update(self, latest, source, local):
+        """本机落后了：在版本号旁边摆一个「有新版」。
+
+        胶囊是查出来落后才建的（不预先建好再 pack_forget）：它的宽度是按文字量
+        出来的，版本号得先知道才能建。
+        """
+        if self._update_pill is not None:
+            self._update_pill.destroy()
+        pill = PillButton(self.top_line, "有新版 " + latest,
+                          self._open_install_page, primary=True, bg=PANEL_BG)
+        # "只提醒不替你升级"这句放悬停提示里：反馈栏就一行，塞进去会被裁掉尾巴。
+        Tip(pill, "本机这版 claude 旧了，点开就是官方的安装/升级说明"
+                  "——启动器只提醒，不替你升级")
+        pill.pack(side="left", padx=(10, 0))
+        self._update_pill = pill
+        self.feedback_var.set(
+            "本机 claude {}，{} 上已经是 {} 了。点「有新版」看官方升级办法。".format(
+                local, source, latest))
+
+    def _hide_update(self):
+        if self._update_pill is None:
+            return
+        self._update_pill.destroy()
+        self._update_pill = None
+
+    def _on_version_check_toggle(self):
+        self.config_data["auto_version_check"] = self.auto_version_var.get()
+        save_config(self.config_data)
+        if not self.auto_version_var.get():
+            self.feedback_var.set(
+                "关掉了：启动时不再联网查版本。顶栏「查更新」随时能手动查一次。")
+            return
+        self.feedback_var.set(
+            "开着了：开启动器时问一次网上 claude 出到哪版了，本机旧了就在版本号"
+            "旁边提一句。只提示，不替你升级。")
+        # 当场就问一次，不用等下次启动：不然勾上去像是没反应。
+        if self._local_version:
+            self._start_version_check()
 
     def _update_model_chip(self, text, known):
         """模型名胶囊。text 是要显示的字，known 是说这个名字是不是一个真预设。
