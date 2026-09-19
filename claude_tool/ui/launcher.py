@@ -1379,9 +1379,18 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.ws_view = view
 
         if not workspaces:
-            tk.Label(inner, text="还没有工作区。右上角「＋ 添加工作区」既能新建一个"
-                                 "文件夹，也能把已经有的目录加进来。",
-                     bg=PAGE_BG, fg=MUTED, font=font(10)).pack(anchor="w", pady=10, padx=6)
+            # 跟模型那边一个路数：先把"工作区"这个词解释掉，再说去哪儿加。原来只有
+            # 一句"点右上角"，可"工作区"本身对没上手的人就不是个自明的词。
+            tk.Label(inner, text="还没有工作区。", bg=PAGE_BG, fg=TEXT,
+                     font=font(10, True)).pack(anchor="w", padx=6, pady=(12, 3))
+            tk.Label(inner, text="工作区 = 一个项目文件夹，claude 就在那儿读写文件。\n"
+                                 "右上角「＋ 添加工作区」既能新建一个文件夹，"
+                                 "也能把已经有的目录加进来。",
+                     bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
+                     ).pack(anchor="w", padx=6, pady=(0, 9))
+            # 上面那个分支（筛不出来）有 fit()，这条原来漏了——空列表时滚动区的高度
+            # 还停在上一次 fit 的值上，跟"没有工作区"该占的高度对不上。
+            self.ws_list.fit()
             return
         if not view:
             tk.Label(inner, text="没有匹配「{}」的工作区。".format(self.ws_filter.get().strip()),
