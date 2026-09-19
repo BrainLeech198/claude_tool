@@ -14,6 +14,9 @@ window.DOWNLOAD_BASE = "https://gitee.com/Mr_brainleech/claude_tool/releases/dow
 // 一条记录 = 一个版本。windows / linux / macos 三个字段，有包就填成 {file, size}，
 // 还没有就写 null——页面上那一格会自动画成灰的「还没做」。以后 Linux 的包出来了，
 // 把 null 换成 {"file": "...", "size": 12345} 就行，页面一个字都不用动。
+//
+// 包里还能再填一个可选的 url：填了就直接拿它当下载地址，不填才按上面的
+// DOWNLOAD_BASE 拼。指到别处（镜像源、别的盘）就填这个。重新打包不会把它抹掉。
 window.RELEASES = [
   {
     "version": "0.1.0",

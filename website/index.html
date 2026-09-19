@@ -69,7 +69,8 @@
   }
 
   function downloadUrl(release, pkg) {
-    return base + "/v" + release.version + "/" + pkg.file;
+    // 包里手填了 url 就用它（比如指到镜像源），没填就按 Gitee 发行版那个形状拼。
+    return pkg.url || (base + "/v" + release.version + "/" + pkg.file);
   }
 
   function size(bytes) {
