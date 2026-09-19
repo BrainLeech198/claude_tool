@@ -76,6 +76,9 @@ from claude_tool.handoff import (
     HANDOFF_TOOLS,
     READ_HANDOFF_PROMPT,
     ensure_handoff_hook_settings,
+    hook_fired_at,
+    note_handoff_written,
+    read_hook_state,
 )
 from claude_tool.winhost import (
     EmbeddedConsole,
@@ -113,6 +116,16 @@ MIN_HEIGHT_FLOOR = 520
 # 关窗时留给内嵌会话收尾的时间（毫秒）。过了这个点还赖着，销毁父窗口自然会
 # 把它连窗口带进程一起带走。
 CLOSE_GRACE_MS = 800
+
+# hook 那一轮写交接文档，盯到这么久还没见 handoff.md 动过就不盯了。
+# 这个是兜底——正常一次写就几十秒到几分钟。放得偏长是因为提前解锁更糟：文档可能
+# 还在写，这时候放「整理交接文档」进去就是两个进程往同一份文件上写。
+HOOK_REFRESH_GIVE_UP = 10 * 60
+
+# write_handoff 撞上 hook 锁时交给流水线的原因串。流水线认这个串：把那个会话放回
+# 队尾等一会儿再补一份，而不是当"写失败了"跳过——hook 那份可能漏掉它停下之前的
+# 最后一点新对话，用户要的就是补上这一点。
+HANDOFF_LOCKED_WHY = "正被那个会话自己的 hook 刷着"
 
 
 class Launcher(LauncherDialogs, tk.Tk):
@@ -181,15 +194,27 @@ class Launcher(LauncherDialogs, tk.Tk):
         # 这个启动器开出去、还开着的 claude：[{name, path, proc, hwnd}]
         self.running = []
         self._running_shown = False       # 「正在跑」那块现在摆没摆出来
-        # 换模型时那条流水线：写交接文档 → 关旧的 → 用新模型重开，一个接一个
+        # 换模型时那条流水线：写交接文档 → 关旧的 → 用新模型重开，一个接一个。
+        # 队列就是"还没轮到的"，从头取；挑中的那个要是正被它自己的 hook 锁着，
+        # 就先换到后面去（见 _run_next_task），所以 _task_total 是当初选了几个、
+        # _task_queue 是还剩几个，第几个 = 总数 - 剩的 + 1。
         self._task_queue = []
         self._task_total = 0
-        self._task_index = 0
         self._task_running = False
         self._task_visible = False
         self._task_text = None
         self._task_started = 0.0
         self._task_timer = None
+        # hook 自己在刷交接文档这件事。那一轮跑在会话自己的终端窗口里，启动器只
+        # 看得见（读节流状态和 handoff.md 的时间戳），控制不了——所以只能上把锁、
+        # 摆个提示，让用户知道它在花 token。
+        #   _hook_refreshes  键=工作目录，值见 _start_hook_refresh
+        #   _hook_seen       键=工作目录，值=上次见到的时间戳，用来认"刚触发"
+        self._hook_refreshes = {}
+        self._hook_seen = {}
+        self._hook_rows = {}              # 键=工作目录，值=(行容器, 秒数 StringVar)
+        self._handoff_visible = False     # 「正在交接」那块现在摆没摆出来
+        self._jobs_shown = False          # 上面那个容器现在摆没摆出来
         self.version_queue = queue.Queue()   # 后台问出来的 claude 版本号，主线程来取
         # 目录骨架和一次性迁移都在启动时做完，之后各处只管用，不必再判存在。
         for directory in (TOOL_DIR, PRESET_DIR):
@@ -376,6 +401,8 @@ class Launcher(LauncherDialogs, tk.Tk):
         self._build_running(self.side)
         # 交接进度那块也先建好不摆出来，有活的时候插到「正在跑」上面
         self._build_tasks(self.side)
+        # hook 自己刷交接文档那块的壳子，同样先建好不摆，见 _show_handoff_area
+        self._build_handoffs()
 
         self.model_list = self._build_section(
             self.side, "模型", max_height=MODEL_MAX,
@@ -578,13 +605,16 @@ class Launcher(LauncherDialogs, tk.Tk):
     # ── 交接进度 ──
 
     def _build_tasks(self, parent):
-        """换模型那条流水线的进度区。建好不摆出来，有活才插到最上面。
+        """「有活在跑」这块区域，建好不摆出来，有活才插到最上面。
 
-        这件事跟别的不一样：它要连着跑好几步、中间还要等 claude 写完一份文档，
-        全程几十秒往上。不摆个一直在动的东西，用户会以为窗口卡死了，然后把
-        正写到一半的 claude 关掉。
+        里面装两块：启动器自己起的活（换模型那条流水线、手动整理交接文档），
+        和 hook 自己在刷交接文档——两者都是"在写一份文档，好几秒往上"。不摆个
+        一直在动的东西，用户会以为窗口卡死了、把正写到一半的 claude 关掉；
+        hook 那块还得让人看见它在花 token。
         """
-        self.task_frame = tk.Frame(parent, bg=PANEL_BG, highlightbackground=BORDER,
+        self.jobs_frame = tk.Frame(parent, bg=PAGE_BG)
+        self.task_frame = tk.Frame(self.jobs_frame, bg=PANEL_BG,
+                                   highlightbackground=BORDER,
                                    highlightthickness=1)
         inner = tk.Frame(self.task_frame, bg=PANEL_BG)
         inner.pack(fill="x", padx=12, pady=10)
@@ -610,6 +640,172 @@ class Launcher(LauncherDialogs, tk.Tk):
                  font=font(9), anchor="w", justify="left",
                  ).pack(fill="x")
 
+    # ── hook 自己在刷交接文档 ──
+
+    def _build_handoffs(self):
+        """「正在交接」那块，跟上面换模型那块上下排。
+
+        这条路上的写文档不是启动器起的进程——是会话里的 Stop hook 回了
+        {"decision":"block"} 之后，被逼出来的那一轮在终端窗口里写的。启动器只能
+        看着（读节流状态和 handoff.md 的时间戳），控制不了。但用户必须看得见：
+        看不见的话这个功能等于没开，而它是真花 token 的。
+        """
+        self.handoff_frame = tk.Frame(self.jobs_frame, bg=PANEL_BG,
+                                      highlightbackground=BORDER,
+                                      highlightthickness=1)
+        inner = tk.Frame(self.handoff_frame, bg=PANEL_BG)
+        inner.pack(fill="x", padx=12, pady=10)
+        self.handoff_head_var = tk.StringVar(value="正在交接")
+        tk.Label(inner, textvariable=self.handoff_head_var, bg=PANEL_BG,
+                 fg=TEXT, font=font(10, True)).pack(anchor="w")
+        self.handoff_rows = tk.Frame(inner, bg=PANEL_BG)
+        self.handoff_rows.pack(fill="x")
+        # 这句得从头摆到尾：刷的过程中在这个会话里说的话，不在这次要写的材料里。
+        self.handoff_warn = tk.Label(
+            inner,
+            text="刷的这会儿在这个会话里接着说的话，不会进这份文档，"
+                 "要的话等它刷完再重新交接一次。",
+            bg=PANEL_BG, fg=WARN, font=font(9), anchor="w", justify="left")
+        self.handoff_warn.pack(fill="x", pady=(6, 0))
+        inner.bind("<Configure>", lambda e: self.handoff_warn.configure(
+            wraplength=max(240, e.width - 24)))
+
+    def _start_hook_refresh(self, key, item):
+        target = os.path.join(item["path"], HANDOFF_FILE)
+        try:
+            before = os.path.getmtime(target)
+        except OSError:
+            before = 0.0
+        self._hook_refreshes[key] = {"name": item["name"], "path": item["path"],
+                                     "started": time.time(), "before": before,
+                                     "outcome": None, "finished": 0.0}
+
+    def _finish_hook_refresh(self, key, outcome):
+        job = self._hook_refreshes.get(key)
+        if job is None or job["outcome"] is not None:
+            return
+        job["outcome"] = outcome
+        job["finished"] = time.time()
+        if outcome == "ok":
+            self.feedback_var.set(
+                "「{}」的交接文档被那个会话自己刷新了。".format(job["name"]))
+
+    def _hook_locked(self, path):
+        """这个目录的交接文档，正被它自己会话的 hook 写着没有。
+
+        启动器要动手之前都得先问这一句：两个进程往同一份 handoff.md 上写，
+        出来的东西是两份搅在一起。
+        """
+        job = self._hook_refreshes.get(path_key(path))
+        return job is not None and job["outcome"] is None
+
+    def _note_handoff_written(self, path):
+        """启动器自己写完了这份文档：顶掉 hook 的节流表，基线也跟着挪过去。
+
+        不挪基线的话，这次写把节流表里的 last 顶成了"现在"，下一次心跳会把这个
+        新 last 当成"hook 刚触发"，凭空摆出一块「正在交接」，一直挂到超时。
+        """
+        note_handoff_written(path)
+        key = path_key(path)
+        if key in self._hook_seen:
+            self._hook_seen[key] = hook_fired_at(read_hook_state(), path)
+
+    def _poll_hook_handoffs(self):
+        """每秒一趟：哪个会话的 hook 刚被逼着去写文档了、写完了没。
+
+        认"刚触发"只能靠节流状态里那个 last——只有真决定要刷的那一次才写它，
+        普通轮次只动 turns。认"写完"靠 handoff.md 的时间戳往前走了。两头都不是
+        启动器能控制的，所以这里只做观察，外加一把锁，别跟自己起的那份撞上。
+        """
+        watched = {}
+        for item in self.running:
+            if item.get("hook"):
+                watched[path_key(item["path"])] = item
+        for key in list(self._hook_seen):
+            if key not in watched:
+                del self._hook_seen[key]
+
+        if watched:
+            state = read_hook_state()
+            for key, item in watched.items():
+                fired = hook_fired_at(state, item["path"])
+                if key not in self._hook_seen:
+                    self._hook_seen[key] = fired
+                elif fired > self._hook_seen[key]:
+                    self._hook_seen[key] = fired
+                    self._start_hook_refresh(key, item)
+
+        now = time.time()
+        for key in list(self._hook_refreshes):
+            job = self._hook_refreshes[key]
+            if job["outcome"] is not None:
+                # 收工那句留两秒再撤，不然一闪而过等于没说。
+                if now - job["finished"] >= 2:
+                    del self._hook_refreshes[key]
+                continue
+            if key not in watched:
+                # 会话都没了，被逼出来的那一轮自然也死了。
+                self._finish_hook_refresh(key, "gone")
+                continue
+            try:
+                mtime = os.path.getmtime(os.path.join(job["path"], HANDOFF_FILE))
+            except OSError:
+                mtime = 0.0
+            if mtime > job["before"]:
+                self._finish_hook_refresh(key, "ok")
+            elif now - job["started"] >= HOOK_REFRESH_GIVE_UP:
+                self._finish_hook_refresh(key, "timeout")
+
+        if self._hook_refreshes:
+            self._render_handoffs()
+            self._show_handoff_area()
+        else:
+            self._hide_handoff_area()
+
+    def _render_handoffs(self):
+        """照 _hook_refreshes 更新那几行。行是一秒一跳地改字，不重建控件。"""
+        for key in list(self._hook_rows):
+            if key not in self._hook_refreshes:
+                frame, _var = self._hook_rows.pop(key)
+                frame.destroy()
+        now = time.time()
+        for key, job in self._hook_refreshes.items():
+            row = self._hook_rows.get(key)
+            if row is None:
+                frame = tk.Frame(self.handoff_rows, bg=PANEL_BG)
+                frame.pack(fill="x", pady=(4, 0))
+                tk.Label(frame, text="「{}」".format(job["name"]), bg=PANEL_BG,
+                         fg=ACCENT, font=font(10)).pack(side="left")
+                var = tk.StringVar()
+                tk.Label(frame, textvariable=var, bg=PANEL_BG, fg=MUTED,
+                         font=font(9)).pack(side="right")
+                row = (frame, var)
+                self._hook_rows[key] = row
+            if job["outcome"] == "ok":
+                row[1].set("写好了 {}".format(HANDOFF_FILE))
+            elif job["outcome"] == "timeout":
+                row[1].set("没看到文档更新，不盯了")
+            elif job["outcome"] == "gone":
+                row[1].set("会话关了，不盯了")
+            else:
+                row[1].set("正在写 {} · 已用 {} 秒".format(
+                    HANDOFF_FILE, int(now - job["started"])))
+
+    def _show_handoff_area(self):
+        if self._handoff_visible:
+            return
+        self._handoff_visible = True
+        self._layout_jobs()
+
+    def _hide_handoff_area(self):
+        if not self._handoff_visible:
+            return
+        self._handoff_visible = False
+        for frame, _var in self._hook_rows.values():
+            frame.destroy()
+        self._hook_rows = {}
+        self._layout_jobs()
+
     def _show_task_area(self):
         """把进度区插到「正在跑」上面（没有「正在跑」就插到模型区上面）。
 
@@ -619,13 +815,10 @@ class Launcher(LauncherDialogs, tk.Tk):
         if self._task_visible:
             return
         self._task_visible = True
-        anchor = self.running_frame if self._running_shown else self.model_list.head
-        self.task_frame.pack(fill="x", pady=(16, 0), before=anchor)
+        self._layout_jobs()
         self.task_bar.start(12)
         self._task_started = time.time()
         self._task_tick()
-        self.model_list.fit()
-        self.ws_list.fit()
 
     def _hide_task_area(self):
         self._task_visible = False
@@ -633,8 +826,36 @@ class Launcher(LauncherDialogs, tk.Tk):
             self.after_cancel(self._task_timer)
             self._task_timer = None
         self.task_bar.stop()
-        self.task_frame.pack_forget()
         self._task_text = None
+        self._layout_jobs()
+
+    def _layout_jobs(self):
+        """重排那两块，顺带定容器该不该出现。
+
+        两块每次都重新 pack 一遍，而不是各自 pack_forget/pack：谁在上取决于谁先
+        摆，顶上那块不留间距、下面那块留，这两件事得一起算。
+        """
+        self.task_frame.pack_forget()
+        self.handoff_frame.pack_forget()
+        first = True
+        for frame, on in ((self.task_frame, self._task_visible),
+                          (self.handoff_frame, self._handoff_visible)):
+            if on:
+                frame.pack(fill="x", pady=(0, 0) if first else (10, 0))
+                first = False
+
+        showing = self._task_visible or self._handoff_visible
+        if showing == self._jobs_shown:
+            return
+        self._jobs_shown = showing
+        if showing:
+            # 锚在「正在跑」上面；「正在跑」自己永远锚在模型区上面，所以后摆的
+            # 那个反而排在下面——这里得赶在它之前摆，出来的顺序才是活在上。
+            anchor = (self.running_frame if self._running_shown
+                      else self.model_list.head)
+            self.jobs_frame.pack(fill="x", pady=(16, 0), before=anchor)
+        else:
+            self.jobs_frame.pack_forget()
         self.model_list.fit()
         self.ws_list.fit()
 
@@ -657,10 +878,9 @@ class Launcher(LauncherDialogs, tk.Tk):
         self._task_timer = self.after(1000, self._task_tick)
 
     def _poll_running(self):
-        """每秒一趟：看一眼那几扇窗口还开着没，顺手把后台问到的版本号贴上。
+        """每秒一趟：窗口还开着没、版本号回来了没、hook 在不在刷交接文档。
 
-        两件事都走这条心跳是因为它是现成的、启动时就起来的定时器；再造一个
-        只为取个字符串不值当。
+        都走这条心跳是因为它是现成的、启动时就起来的定时器；再造几个不值当。
         """
         try:
             while True:
@@ -680,19 +900,33 @@ class Launcher(LauncherDialogs, tk.Tk):
             # 右边就只剩一块黑着的死终端占地方，收回去。
             self.embedded = None
             self._hide_terminal()
+        self._poll_hook_handoffs()
         self.after(1000, self._poll_running)
 
-    def track_running(self, name, path, process, hwnd=None):
-        """把一个刚开出去的会话记进名单，界面立刻多出一行。返回那一行。"""
-        for item in self.running:
-            if item["path"] == path:
+    def track_running(self, name, path, process, hwnd=None, hook=False):
+        """把一个刚开出去的会话记进名单，界面立刻多出一行。返回那一行。
+
+        hook=True 表示这个会话是带着自动刷交接文档那个 hook 起来的（只有启动时
+        勾着「自动刷交接文档」才有）。只有这种会话的 Stop hook 会去写文档，也只有
+        它们才值得盯。
+        """
+        item = None
+        for known in self.running:
+            if known["path"] == path:
                 # 同一个目录又开了一个，只留最新那个，免得同一行重复
-                item.update({"name": name, "proc": process, "hwnd": hwnd})
-                self._render_running()
-                return item
-        item = {"name": name, "path": path, "proc": process, "hwnd": hwnd}
-        self.running.append(item)
+                known.update({"name": name, "proc": process, "hwnd": hwnd,
+                              "hook": hook})
+                item = known
+                break
+        if item is None:
+            item = {"name": name, "path": path, "proc": process, "hwnd": hwnd,
+                    "hook": hook}
+            self.running.append(item)
         self._render_running()
+        key = path_key(path)
+        if hook and key not in self._hook_seen:
+            # 记下现状当基线，否则状态文件里那条老记录会冒充"刚触发"。
+            self._hook_seen[key] = hook_fired_at(read_hook_state(), path)
         return item
 
     def _watch_terminal(self, item, known, tries=0):
@@ -928,27 +1162,45 @@ class Launcher(LauncherDialogs, tk.Tk):
 
         self._task_queue = picked
         self._task_total = len(picked)
-        self._task_index = 0
         self._task_running = True
         self.task_head_var.set("正在换模型")
         self.feedback_var.set("要接着聊的有 {} 个，一个一个来。".format(self._task_total))
         self._run_next_task()
 
     def _run_next_task(self):
-        """流水线跑下一个会话：写文档 → 关旧的 → 用新模型重开。"""
+        """流水线跑下一个会话：写文档 → 关旧的 → 用新模型重开。
+
+        队头那个可能正被它自己的 hook 锁着（那个会话的 Stop hook 刚被逼着去写同一
+        份 handoff.md）。挨个往下找一个没锁的换到队头先干；全锁着就原地等一秒再看。
+        被锁的留在队里轮回来——不是跳过，等它刷完还是要补一份的。
+        """
         if self._pending:
             # 上一个内嵌会话还在等控制台窗口冒出来。这会儿再开一个，
             # embed_workspace 会直接打回去、那个工作区就白排队了。
             self.after(500, self._run_next_task)
             return
-        if self._task_index >= self._task_total:
+        if not self._task_queue:
             self._finish_tasks()
             return
 
-        job = self._task_queue[self._task_index]
+        free = None
+        for pos in range(len(self._task_queue)):
+            if not self._hook_locked(self._task_queue[pos]["item"]["path"]):
+                free = pos
+                break
+        if free is None:
+            # 别在这儿空转：hook 那边要么写完（锁自己就撤了）、要么十分钟超时。
+            self._task_step("等「{}」的会话刷完交接文档，再接着来。".format(
+                self._task_queue[0]["item"]["name"]))
+            self.after(1000, self._run_next_task)
+            return
+        self._task_queue[0], self._task_queue[free] = (
+            self._task_queue[free], self._task_queue[0])
+
+        job = self._task_queue.pop(0)
         item = job["item"]
-        self._task_index += 1
-        self.task_count_var.set("第 {}/{} 个".format(self._task_index, self._task_total))
+        self.task_count_var.set("第 {}/{} 个".format(
+            self._task_total - len(self._task_queue), self._task_total))
         self.task_name_var.set(item["name"])
         self.write_handoff(item, done=lambda ok, why, j=job:
                            self._after_handoff(j, ok, why))
@@ -956,6 +1208,14 @@ class Launcher(LauncherDialogs, tk.Tk):
     def _after_handoff(self, job, ok, why):
         item = job["item"]
         if not ok:
+            if why == HANDOFF_LOCKED_WHY:
+                # 挑的时候还没锁，写的时候锁上了——hook 就卡在这零点几秒里触发的。
+                # 放回队尾，等它刷完再来补这一份。
+                self._task_queue.append(job)
+                self._task_step("「{}」的会话正自己刷着交接文档，等它写完补一份。"
+                                .format(item["name"]))
+                self.after(1000, self._run_next_task)
+                return
             # 文档没写成就别动这个会话了——空着手重开等于把上下文丢了。
             self._task_step("这一份没写成（{}），跳过。".format(why))
             self.after(2500, self._run_next_task)
@@ -1113,7 +1373,10 @@ class Launcher(LauncherDialogs, tk.Tk):
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return
-        entry = self.track_running(item["name"], path, process)
+        # hook= 只在这条会话真挂上了 Stop hook 时才是真：没挂的话它自己那份
+        # handoff_state.json 里永远不会有新记录，盯它就是白盯。
+        entry = self.track_running(item["name"], path, process,
+                                   hook=settings is not None)
         self._watch_terminal(entry, known)
         self.feedback_var.set("已在新窗口启动{}（权限：{}）：{}".format(
             "（接着上次聊）" if cont else "", permission_option(permission), path))
@@ -1168,20 +1431,20 @@ class Launcher(LauncherDialogs, tk.Tk):
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return
-        self._pending = (process, known, item, 0)
+        self._pending = (process, known, item, settings, 0)
         self.feedback_var.set("正在把 claude 装进窗口…")
         self.after(80, self._poll_console)
 
     def _poll_console(self):
         """控制台窗口是异步建的，拿到之前一直轮询，别把界面卡住。"""
-        process, known, item, tries = self._pending
+        process, known, item, settings, tries = self._pending
         hwnd = fresh_console(known)
         if hwnd is None:
             if tries >= 75:
                 self._pending = None
                 self.feedback_var.set("等不到控制台窗口，claude 可能已经退出了。")
                 return
-            self._pending = (process, known, item, tries + 1)
+            self._pending = (process, known, item, settings, tries + 1)
             self.after(80, self._poll_console)
             return
 
@@ -1192,7 +1455,8 @@ class Launcher(LauncherDialogs, tk.Tk):
         self._room_for_terminal(True)
         self.update_idletasks()
         self.embedded = EmbeddedConsole(process, hwnd, self.term_holder)
-        self.track_running(item["name"], item["path"], process)
+        self.track_running(item["name"], item["path"], process,
+                           hook=settings is not None)
         self.feedback_var.set(
             "claude 已内嵌在 {}。conhost 没有字体回退，个别符号会是方框。"
             .format(item["path"]))
@@ -1310,6 +1574,20 @@ class Launcher(LauncherDialogs, tk.Tk):
         靠这个回调接着往下走——它是"写完 → 关旧的 → 重开"里的第一步。
         """
         path = item["path"]
+        if self._hook_locked(path):
+            # 这个目录的 handoff.md 正被它自己会话的 Stop hook 写着。两个进程往
+            # 同一份文件上写，出来的是两份搅在一起的东西，只能等。手动那条路要
+            # 把话说全：这会儿接着说下去的话，不在这份文档的材料里。
+            if done is None:
+                messagebox.showinfo(
+                    "正在交接",
+                    "「{}」的会话自己正在刷交接文档（Stop hook 刚被触发），"
+                    "这一份先不写了。\n\n"
+                    "等它刷完再点一次；刷的这会儿在那个会话里接着说的话，"
+                    "不会进这份文档，要的话得重新交接一次。".format(item["name"]))
+            else:
+                done(False, HANDOFF_LOCKED_WHY)
+            return
         if self._task_running and done is None:
             # 手动点的（流水线自己会带 done）。流水线两步之间有空档，这会儿再插
             # 一份进去，两边会抢进度区和那一个 claude 进程。
@@ -1379,6 +1657,9 @@ class Launcher(LauncherDialogs, tk.Tk):
 
         if os.path.exists(target) and os.path.getmtime(target) > before:
             ok, why = True, "写好了：{}".format(target)
+            # 这份刚写完，20 分钟内别让那个会话的 hook 再刷一遍——不然它下一停
+            # 就够条件，往同一份文件上又写一遍，两份搅在一起。
+            self._note_handoff_written(item["path"])
         elif proc.returncode != 0:
             ok, why = False, detail or "退出码 {}".format(proc.returncode)
         else:
