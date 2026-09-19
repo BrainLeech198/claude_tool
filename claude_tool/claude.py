@@ -24,6 +24,9 @@ def claude_command(cont=False, prompt=None, settings=None, permission=None):
 
     这里的 prompt 是拼进 cmd 命令行的，所以里面不能出现双引号——下面几个
     常量都是自己写的，加新的记得别带引号。
+
+    返回的是一条给 cmd 直接咬的完整命令行：交给 Popen 时必须整条当字符串传，
+    不能摆进列表（理由见 launch()）。
     """
     mode = permission if permission in PERMISSION_VALUES else DEFAULT_PERMISSION
     command = "claude --permission-mode " + mode
@@ -73,8 +76,11 @@ def launch(workdir, cont=False, prompt=None, settings=None, permission=None):
 
     返回那个进程对象——调用方留着它轮询 poll()，就知道这个会话还开没开着。
     """
+    # 这条命令行得整条当字符串交给 Popen。塞进列表的话 Python 会再包一层引号、
+    # 把里面的引号转义成 \"，而 cmd 和 C 运行时不认 \ 转义：开场白一到空格就被
+    # 劈成好几个参数，只有头一段到得了 claude 那儿。
     return subprocess.Popen(
-        ["cmd", "/k", claude_command(cont, prompt, settings, permission)],
+        "cmd /k " + claude_command(cont, prompt, settings, permission),
         cwd=workdir,
         creationflags=CREATE_NEW_CONSOLE,
     )

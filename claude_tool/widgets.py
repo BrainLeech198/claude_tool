@@ -80,7 +80,7 @@ class Row(tk.Canvas):
 
     def __init__(self, parent, title, subtitle="", on_click=None, actions=(),
                  active=False, marker=False, warn="", warn_color=WARN,
-                 bg=PAGE_BG, height=52):
+                 bg=PAGE_BG, height=52, badge=None):
         super().__init__(parent, height=height, bg=bg,
                          highlightthickness=0, borderwidth=0)
         self.title = title
@@ -90,6 +90,7 @@ class Row(tk.Canvas):
         self.active = active
         self.marker = marker
         self.warn = warn
+        self.badge = badge
         self.warn_color = warn_color
         self._hover = None
 
@@ -161,6 +162,16 @@ class Row(tk.Canvas):
                      fill=fill, outline=ACCENT_SOFT if self.active else BORDER)
 
         x = 16
+        if self.badge is not None:
+            # Ctrl+1~9 按的是"屏幕上第几个"，行上就得有号，不然用户得自己数。
+            # 空串是"这行超过 9 了、没有号"——照样占着这块地，几行标题才对得齐。
+            cy = height / 2
+            if self.badge:
+                rounded_rect(self, x, cy - 9, x + 20, cy + 9, 5,
+                             fill=HOVER_BG, outline=BORDER)
+                self.create_text(x + 10, cy + 1, text=self.badge, fill=MUTED,
+                                 font=font(9, True))
+            x += 28
         if self.marker:
             cy = height / 2
             if self.active:

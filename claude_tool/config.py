@@ -32,8 +32,10 @@ def default_config():
         "roots": [WORKPLACE_DIR],
         "workspaces": [{"name": "默认", "path": WORKPLACE_DIR}],
         "window": None,
-        # 自动刷交接文档会多花 token，所以首次装上一定是关的
+        # 底下这两个勾都记着上次的状态，但首次装上一定是关的：自动刷交接文档会
+        # 多花 token，内嵌终端会改变新开的会话开在哪儿，都不该悄悄替用户打开。
         "auto_handoff": False,
+        "embed": False,
     }
 
 
@@ -81,6 +83,7 @@ def load_config():
                 })
         config["workspaces"] = workspaces
     config["auto_handoff"] = bool(data.get("auto_handoff"))
+    config["embed"] = bool(data.get("embed"))
     return config
 
 
