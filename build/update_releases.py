@@ -61,9 +61,15 @@ def main():
              "windows": {"file": exe, "size": size}, "linux": None, "macos": None}
     for old in releases:
         if old.get("version") == version:
-            # 重打同一个版本：只刷新日期和包，说明留着，别的平台也别抹掉。
+            # 重打同一个版本：只刷新日期和 file/size，其余一律留着。说明（notes）
+            # 是手写的；windows 里还可能有个手填的 url（指到镜像源），整块换掉
+            # 就把它们一起抹了。
             old["date"] = date
-            old["windows"] = fresh["windows"]
+            pkg = old.get("windows")
+            if isinstance(pkg, dict):
+                pkg.update(fresh["windows"])
+            else:
+                old["windows"] = fresh["windows"]
             for key in ("notes", "linux", "macos"):
                 old.setdefault(key, fresh[key])
             break
