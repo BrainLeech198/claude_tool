@@ -13,7 +13,8 @@ notes 是空的，页面上就不显示那一行；想写就在 docs/releases.js
 文件名是 ASCII 的：打包.bat 只能用 ASCII，它要按名字调这个脚本。（这个文件本身
 没有那个限制，中文随便写——cmd 只限制自己解析的那份 bat。）
 
-Gitee 那边的「发行版」得手动建一遍：tag 打 v<版本号>，把 Output 里那个 setup.exe
+Gitee 那边的「发行版」得手动建一遍：tag 就打版本号本身（`0.1.0`，别加 v 前缀），
+把 Output 里那个 setup.exe
 传成附件。官网的下载直链就按这个形状拼出来的，少了哪一步点下载就是 404。
 """
 import json
