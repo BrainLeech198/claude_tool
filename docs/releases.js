@@ -22,11 +22,16 @@ window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/down
 //
 // 包里还能再填一个可选的 url：填了就直接拿它当下载地址，不填才按上面的
 // DOWNLOAD_BASE 拼。指到别处（镜像源、别的盘）就填这个。重新打包不会把它抹掉。
+//
+// claude 那一格是"这一版配着哪个版本的 claude 测过的"，打包时自动读打包机上的
+// claude --version 写进来（读不到就留空，页面上不显示那一格）。启动器查更新时
+// 也拿官网上这个数当兜底（npm 问不到的时候用）——改它没用，那是打包时写死的。
 window.RELEASES = [
   {
     "version": "0.1.0",
     "date": "2026-09-19",
     "notes": "第一个能转发出去给人装的版本。",
+    "claude": "2.1.150",
     "windows": {
       "file": "ClaudeLauncher-0.1.0-Setup.exe",
       "size": 10145146

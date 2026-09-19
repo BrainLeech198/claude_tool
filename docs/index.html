@@ -22,6 +22,7 @@
 
   <h2>下载</h2>
   <div class="cards" id="cards"></div>
+  <p class="note" id="verified" hidden></p>
 
   <h2>历史版本</h2>
   <div id="versions"></div>
@@ -166,6 +167,13 @@
     cards.appendChild(el("p", "empty", "还没有发出去的版本。"));
   } else {
     var latest = releases[0];
+    // 这一版是配着哪个版本的 claude 测过的。打包时读打包机上的 claude --version
+    // 写进 releases.js（见 build/update_releases.py），读不到那格就是空的，不说。
+    if (latest.claude) {
+      var verified = document.getElementById("verified");
+      verified.textContent = "上面这一版配着 claude " + latest.claude + " 测过。";
+      verified.hidden = false;
+    }
     PLATFORMS.forEach(function (p) {
       var pkg = latest[p[0]];
       var card = el("div", pkg ? "card" : "card card-off");
@@ -193,6 +201,7 @@
     head.appendChild(el("span", "rel-date", r.date || ""));
     row.appendChild(head);
     if (r.notes) row.appendChild(el("p", "rel-notes", r.notes));
+    if (r.claude) row.appendChild(el("p", "rel-claude", "配 claude " + r.claude + " 测过"));
 
     var links = el("div", "rel-links");
     PLATFORMS.forEach(function (p) {
