@@ -43,6 +43,7 @@ from claude_tool.presets import (
     preset_path,
     probe_current_settings,
     read_env,
+    read_model,
     suggest_preset_name,
 )
 from claude_tool.config import path_key, save_config
@@ -611,27 +612,72 @@ class LauncherDialogs:
         # 一档两行：单选按钮那行只说这档叫什么，底下缩进去一行说它到底干什么。
         # 全塞进按钮文字里的话，长句子会绕在单选圈旁边折成好几行，读起来是一团。
         tiers = [
-            (1, False, "第 1 档 · 让它自己定",
-             "它停下来问你的时候，替它回一句「接着干，自己定」，不回来烦你。"
-             "会多用 token。（它摆选项框问你的那种还接不了。）"),
-            (2, True, "第 2 档 · 接指挥模型（还没做）",
-             "让另一个模型读一遍上下文，替你回答它问的那个问题。"),
-            (3, True, "第 3 档 · 半指挥（还没做）",
-             "平时让它自己跑，碰上改 git 历史、大范围重做这种，停下来等你。"),
+            (1, "第 1 档 · 让它自己定",
+             "它停下来问你、或者摆选项框问你的时候，都替它回一句「接着干，自己定」，"
+             "不回来烦你。会多用 token。"),
+            (2, "第 2 档 · 接指挥模型",
+             "摆选项框问你时，让下面挑的那个模型读一遍这次会话，替你把它答了。"
+             "它答不出来就退回第 1 档那句「你自己定」，不会把活卡住。"),
+            (3, "第 3 档 · 半指挥",
+             "平时跟第 1 档一样自己跑，但碰上改 git 历史（rebase / reset --hard / "
+             "push --force）、大范围重做、删东西这几类，停下来等你点头。"),
         ]
-        for index, (number, not_yet, caption, hint) in enumerate(tiers):
+        for index, (number, caption, hint) in enumerate(tiers):
             base = 6 + index * 2
             tk.Radiobutton(body, text=caption, variable=tier_var, value=number,
-                           state="disabled" if not_yet else "normal",
                            bg=PAGE_BG, fg=TEXT, activebackground=PAGE_BG,
                            selectcolor=PANEL_BG, font=font(10), anchor="w",
-                           highlightthickness=0, bd=0, disabledforeground=MUTED,
+                           highlightthickness=0, bd=0,
                            ).grid(row=base, column=0, columnspan=2, sticky="w",
                                   pady=(0 if index == 0 else 8, 0))
             tk.Label(body, text=hint, bg=PAGE_BG, fg=MUTED, font=font(9),
                      anchor="w", justify="left", wraplength=420,
                      ).grid(row=base + 1, column=0, columnspan=2, sticky="w",
                             padx=(22, 0))
+
+        # 第 2 档要挑一个模型来当指挥。这一行平时整个藏起来——第 1、3 档用不着它，
+        # 摆在那儿只会让人以为选哪个都影响结果。
+        commander_label = tk.Label(body, text="指挥模型", bg=PAGE_BG, fg=MUTED,
+                                   font=font(10), anchor="w")
+        commander_label.grid(row=12, column=0, sticky="w", pady=(12, 4))
+        presets = discover_presets()
+        names = sorted(presets)
+        remembered = self.config_data.get("autonomy_commander") or ""
+        commander = ttk.Combobox(body, state="readonly", width=32, font=font(10),
+                                 values=names)
+        # 上次挑的那个还在就停在原处；被删了退回第一个。跟上面工作区那个下拉一样，
+        # 不给它挂 StringVar——局部变量一被 GC，Tcl 变量跟着被 unset，下拉会变空白。
+        # 一个预设都没有时**别去 current()**：-1 在 Tk 里是越界索引，直接抛
+        # TclError 把整个对话框带崩（撞过）。空着就空着，第 2 档那时也开不出去。
+        if names:
+            commander.current(names.index(remembered) if remembered in names else 0)
+        commander.grid(row=12, column=1, sticky="w", padx=(12, 0), pady=(12, 4))
+        commander_note = tk.Label(body, bg=PAGE_BG, fg=MUTED, font=font(9),
+                                  anchor="w", justify="left", wraplength=420)
+
+        def show_commander(_event=None):
+            """把挑中那个模型是什么摆出来——预设名是用户自己起的，看不出是谁。"""
+            picked = names[max(commander.current(), 0)] if names else ""
+            if not picked:
+                commander_note.configure(text="一个模型预设都没有。先去「模型」那儿加一个。")
+                return
+            commander_note.configure(text="用的是「{}」的配置：{}".format(
+                picked, read_model(presets[picked])))
+
+        def show_tier(*_args):
+            if tier_var.get() == 2:
+                commander_label.grid()
+                commander.grid()
+                commander_note.grid(row=13, column=0, columnspan=2, sticky="w",
+                                    padx=(22, 0))
+                show_commander()
+            else:
+                for widget in (commander_label, commander, commander_note):
+                    widget.grid_remove()
+
+        commander.bind("<<ComboboxSelected>>", show_commander)
+        tier_var.trace_add("write", show_tier)
+        show_tier()
 
         def start():
             item = workspaces[max(combo.current(), 0)]
@@ -645,8 +691,18 @@ class LauncherDialogs:
                 messagebox.showerror("目录不存在", "找不到目录：\n{}".format(item["path"]),
                                      parent=dialog)
                 return
+            tier = tier_var.get()
+            deputy = ""
+            if tier == 2:
+                if not names:
+                    messagebox.showerror(
+                        "还没有模型预设",
+                        "第 2 档要一个模型来替你拍板，先去「模型」那儿加一个。",
+                        parent=dialog)
+                    return
+                deputy = names[max(commander.current(), 0)]
             dialog.destroy()
-            self.start_autonomy(item, task, tier_var.get())
+            self.start_autonomy(item, task, tier, deputy)
 
         finish_form(dialog, [("开始托管", start, True), ("取消", dialog.destroy, False)])
         # 不绑 <Return>：任务目标是个多行框，回车该在那儿换行。

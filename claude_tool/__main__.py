@@ -1,8 +1,8 @@
 """入口：--hook 走 hook 那条路，其余打开窗口。
 
-被 Claude Code 的 Stop hook 回头调用时不能碰 tkinter、也不该弹任何窗口——
-所以那条分支要在 import 主界面之前就分出去。--auto-continue 是那个行为的开关，
-按启动时写进 settings 的那份从命令行传进来。
+被 Claude Code 的 hook 回头调用时不能碰 tkinter、也不该弹任何窗口——所以那条
+分支要在 import 主界面之前就分出去。开关（推着往下走 / 摁住危险动作 / 谁来答那
+个选项框）按启动时写进 settings 的那份从命令行传进来，读法在 handoff.hook_options。
 """
 import os
 import sys
@@ -15,16 +15,12 @@ import sys
 if __package__ in (None, "") and not getattr(sys, "frozen", False):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from claude_tool.handoff import (
-    CONTINUE_FLAG,
-    HOOK_FLAG,
-    run_hook,
-)
+from claude_tool.handoff import HOOK_FLAG, hook_options, run_hook
 
 
 def main():
     if HOOK_FLAG in sys.argv:
-        return run_hook(auto_continue=CONTINUE_FLAG in sys.argv)
+        return run_hook(**hook_options(sys.argv))
     from claude_tool.ui.launcher import Launcher
     Launcher().mainloop()
     return 0
