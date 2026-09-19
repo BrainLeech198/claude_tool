@@ -121,6 +121,12 @@ MIN_HEIGHT_FLOOR = 520
 # 把它连窗口带进程一起带走。
 CLOSE_GRACE_MS = 800
 
+# 迁移流水线里"等旧会话退干净""等新窗口认出来"的轮询节奏和上限。早先这几处是拍
+# 一个固定秒数硬等（关完旧窗口等 1.5 秒、重开完等 2.5 秒）：快机器上白等，慢机器
+# 上又未必够。改成看条件——一成立立刻走，到上限就不再等，记一句照常往下走。
+MIGRATE_POLL_MS = 200
+MIGRATE_WAIT_TRIES = 75          # 200 毫秒 × 75 ≈ 15 秒
+
 # hook 那一轮写交接文档，盯到这么久还没见 handoff.md 动过就不盯了。
 # 这个是兜底——正常一次写就几十秒到几分钟。放得偏长是因为提前解锁更糟：文档可能
 # 还在写，这时候放「整理交接文档」进去就是两个进程往同一份文件上写。
@@ -942,12 +948,12 @@ class Launcher(LauncherDialogs, tk.Tk):
             if known["path"] == path:
                 # 同一个目录又开了一个，只留最新那个，免得同一行重复
                 known.update({"name": name, "proc": process, "hwnd": hwnd,
-                              "hook": hook})
+                              "hook": hook, "watched": False})
                 item = known
                 break
         if item is None:
             item = {"name": name, "path": path, "proc": process, "hwnd": hwnd,
-                    "hook": hook}
+                    "hook": hook, "watched": False}
             self.running.append(item)
         self._render_running()
         key = path_key(path)
@@ -966,15 +972,21 @@ class Launcher(LauncherDialogs, tk.Tk):
         等到 30 秒就不等了。要是 Windows Terminal 被设成"新窗口开成已有窗口的
         标签页"，那就永远等不到——桌面上的窗口数压根没变，这边也就没法从里面
         认出哪一个是我们那扇。再轮下去只是白烧 CPU。
+
+        收工（认出来了、退了、或者等超时）都盖一个 watched 戳。迁移流水线靠它判断
+        刚重开的那扇是不是已经认完了，好决定能不能接着拍下一份窗口名单。
         """
         if item not in self.running or item["proc"].poll() is not None:
+            item["watched"] = True
             return
         hwnd = fresh_terminal(known)
         if hwnd is not None:
             item["hwnd"] = hwnd
+            item["watched"] = True
             self._render_running()
             return
         if tries >= 150:
+            item["watched"] = True
             return
         self.after(200, lambda: self._watch_terminal(item, known, tries + 1))
 
@@ -1250,24 +1262,65 @@ class Launcher(LauncherDialogs, tk.Tk):
         self._task_step("交接文档写好了，先把旧的窗口关掉。")
         self.after(500, lambda: self._close_old_session(job))
 
+    def _wait_until(self, pred, then, note, tries=0):
+        """等条件成立再往下走，最多 MIGRATE_WAIT_TRIES 轮（每轮 MIGRATE_POLL_MS）。
+
+        到上限就不再等，把 note 摆到进度条上照常往下走——各步自己都有兜底，卡死
+        在这儿比早走一步更糟。
+        """
+        done = pred()
+        if done or tries >= MIGRATE_WAIT_TRIES:
+            if not done:
+                self._task_step(note)
+            then()
+            return
+        self.after(MIGRATE_POLL_MS,
+                   lambda: self._wait_until(pred, then, note, tries + 1))
+
     def _close_old_session(self, job):
         item = job["item"]
         if job["was_embedded"] and self.embedded is not None:
+            # 句柄得在 close_terminal 把 self.embedded 清掉之前先拿住。它只给个
+            # WM_CLOSE，三秒还没退就硬掐（见 close_terminal），所以这一等有底。
+            process = getattr(self.embedded, "process", None)
             self.close_terminal()
-        else:
-            hwnd = item.get("hwnd")
-            if hwnd and ctypes.windll.user32.IsWindow(hwnd):
-                close_window(hwnd)
-            item["hwnd"] = None
-        # 窗口是异步退的，等它落听再开新的，免得两扇撞在同一块地方
+            if process is None:
+                self._launch_migrated(job)
+                return
+            self._task_step("等旧的那个会话退出去，退了就用新模型重开。")
+            self._wait_until(lambda: process.poll() is not None,
+                             lambda: self._launch_migrated(job),
+                             "旧会话没退利索，先往下走。")
+            return
+        hwnd = item.get("hwnd")
+        item["hwnd"] = None
+        if hwnd and ctypes.windll.user32.IsWindow(hwnd):
+            close_window(hwnd)
+            # 窗口是异步退的。等它真没了再开新的，免得两扇撞在同一块地方。
+            u = ctypes.windll.user32
+            self._task_step("等旧窗口关掉，关了就用新模型重开。")
+            self._wait_until(lambda: not u.IsWindow(hwnd),
+                             lambda: self._launch_migrated(job),
+                             "旧窗口没关利索，先往下走。")
+            return
         self._task_step("旧的关掉了，准备用新模型重开。")
-        self.after(1500, lambda: self._launch_migrated(job))
+        self._launch_migrated(job)
 
     def _launch_migrated(self, job):
         item = job["item"]
         self._task_step("用新模型重开「{}」。".format(item["name"]))
-        self.launch_workspace(item, cont=True, prompt=READ_HANDOFF_PROMPT)
-        self.after(2500, self._run_next_task)
+        entry = self.launch_workspace(item, cont=True, prompt=READ_HANDOFF_PROMPT)
+        # 下一轮开新窗口前要先拍一份窗口名单、再比出哪扇是新开的。刚开出去那扇要是
+        # 还没认出来，两扇新窗口会挤进同一次比对里，句柄认串。等它认出来再往下走。
+        # 内嵌那条路不用等：那扇是本窗口里的一栏、不参与比对，而且 _run_next_task
+        # 自己会躲着 _pending。
+        if entry is None or entry.get("watched"):
+            self._run_next_task()
+            return
+        self._wait_until(
+            lambda: entry.get("watched") or entry["proc"].poll() is not None,
+            self._run_next_task,
+            "新窗口还没认出来，先接着往下走。")
 
     def _finish_tasks(self):
         self._task_running = False
@@ -1400,7 +1453,7 @@ class Launcher(LauncherDialogs, tk.Tk):
 
         if self.embed_var.get():
             self.embed_workspace(item, cont, prompt, settings, permission)
-            return
+            return None
         # 拍快照得赶在启动之前：窗口是 claude 那边异步建出来的，等它冒出来再
         # 去数，就分不清哪扇是这次新开的、哪扇是上一轮留下的了。
         known = terminal_windows()
@@ -1421,6 +1474,7 @@ class Launcher(LauncherDialogs, tk.Tk):
         else:
             self.feedback_var.set("已在新窗口启动{}（权限：{}）：{}".format(
                 "（接着上次聊）" if cont else "", permission_option(permission), path))
+        return entry
 
     def start_autonomy(self, item, task, tier=1):
         """「AI 托管」按下去之后：在那个工作区起个新会话，把任务当开场白。
