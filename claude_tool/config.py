@@ -30,7 +30,8 @@ def default_config():
     return {
         "workplace": WORKPLACE_DIR,
         "roots": [WORKPLACE_DIR],
-        "workspaces": [{"name": "默认", "path": WORKPLACE_DIR}],
+        "workspaces": [{"name": "默认", "path": WORKPLACE_DIR,
+                        "handoff_ignore_git": False}],
         "window": None,
         # 底下这三个勾都记着上次的状态，但首次装上一定是关的：自动刷交接文档会
         # 多花 token，内嵌终端会改变新开的会话开在哪儿，自动继续会替用户拍板，
@@ -82,10 +83,13 @@ def load_config():
         for item in data["workspaces"]:
             if isinstance(item, dict) and item.get("path"):
                 path = item["path"]
+                # 每个字段都得在这儿列一遍：这段是重建条目，没列到的键会被
+                # 丢掉——新加的字段最容易在这儿被悄悄吃掉，存了等于没存。
                 workspaces.append({
                     "name": str(item.get("name") or os.path.basename(path)),
                     "path": path,
                     "permission": workspace_permission(item),
+                    "handoff_ignore_git": bool(item.get("handoff_ignore_git")),
                 })
         config["workspaces"] = workspaces
     config["auto_handoff"] = bool(data.get("auto_handoff"))

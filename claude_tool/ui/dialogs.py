@@ -448,6 +448,57 @@ class LauncherDialogs:
         self._center(dialog)
 
 
+    def ask_handoff_git(self, item):
+        """点「整理交接文档」时问一句：这份 handoff.md 要不要进版本管理。
+
+        只有 git 仓库才有这一问（是不是仓库由 write_handoff 那边先判掉了）。
+        勾选顺手记回工作区条目：自动刷文档的 Stop hook 和换模型流水线那两条都
+        不弹框，照这个存下来的值走。
+        """
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "整理交接文档")
+
+        tk.Label(body, text=item["name"], bg=PAGE_BG, fg=TEXT, font=font(11),
+                 anchor="w").grid(row=0, column=0, columnspan=2, sticky="w")
+        tk.Label(body, text=item["path"], bg=PAGE_BG, fg=MUTED, font=font(9),
+                 anchor="w", justify="left", wraplength=430,
+                 ).grid(row=1, column=0, columnspan=2, sticky="w")
+
+        ignore_var = tk.BooleanVar(value=bool(item.get("handoff_ignore_git")))
+        tk.Checkbutton(
+            body, text="handoff.md 不进版本管理（加进 .gitignore）",
+            variable=ignore_var, bg=PAGE_BG, fg=TEXT, font=font(10),
+            activebackground=PAGE_BG, selectcolor=PANEL_BG,
+            highlightthickness=0, bd=0, anchor="w",
+            ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        # 头一句自己断行：Tk 只在空格处断，中英混排时它会断出"把 / handoff.md /
+        # 加进"这种半句话。后面那句长，交给 wraplength 自己折。
+        tk.Label(body, text="这个目录是个 git 仓库。\n"
+                            "勾上的话，写文档那次会让 claude 把 " + HANDOFF_FILE
+                            + " 加进 .gitignore，确认它不会被提交；不勾就什么都"
+                              "不说。",
+                 bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
+                 wraplength=430,
+                 ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        def go():
+            chosen = ignore_var.get()
+            # 记回条目里，下次不用再选；变了才落盘。
+            if bool(item.get("handoff_ignore_git")) != chosen:
+                item["handoff_ignore_git"] = chosen
+                if item in self.config_data["workspaces"]:
+                    save_config(self.config_data)
+            dialog.destroy()
+            self.write_handoff(item, ignore_git=chosen)
+
+        finish_form(dialog, [("开始整理", go, True),
+                             ("取消", dialog.destroy, False)])
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        dialog.bind("<Return>", lambda e: go())
+        self._center(dialog)
+
+
     def _open_add_workspace_picker(self):
         """「＋ 添加工作区」：先问一句是新建一个文件夹，还是把已有的目录加进来。
 

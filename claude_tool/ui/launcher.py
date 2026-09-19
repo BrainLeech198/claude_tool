@@ -74,11 +74,12 @@ from claude_tool.handoff import (
     HANDOFF_COOLDOWN,
     HANDOFF_FILE,
     HANDOFF_MIN_TURNS,
-    HANDOFF_PROMPT,
     HANDOFF_TOOLS,
     READ_HANDOFF_PROMPT,
     ensure_hook_settings,
+    handoff_prompt,
     hook_fired_at,
+    is_git_repo,
     note_handoff_written,
     read_hook_state,
 )
@@ -1744,11 +1745,16 @@ class Launcher(LauncherDialogs, tk.Tk):
         except OSError as exc:
             messagebox.showerror("打不开", "打开 {} 失败：\n{}".format(TOOL_DIR, exc))
 
-    def write_handoff(self, item, done=None):
+    def write_handoff(self, item, done=None, ignore_git=None):
         """在那个目录里 fork 一份会话，让它写 handoff.md。
 
         done 传了的话，写完会叫它一声 done(是否成功, 原因)。换模型那条流水线
         靠这个回调接着往下走——它是"写完 → 关旧的 → 重开"里的第一步。
+
+        ignore_git 传 None 是"还没定"：手动点那个按钮、而且这个目录是 git 仓库
+        时，先弹个框问一句要不要让 handoff.md 进版本管理（见 ask_handoff_git）。
+        流水线那条路自己带着值过来，不弹框——它本来就一步接一步，插个框会把
+        整条流水线卡在那儿等人。
         """
         path = item["path"]
         if self._hook_locked(path):
@@ -1781,6 +1787,15 @@ class Launcher(LauncherDialogs, tk.Tk):
                 done(False, "上一份还在写")
             return
 
+        # 弹框这一问排在上面几道检查之后：这次要是本来就写不了，先告诉他写不了，
+        # 别让人选完一遍才发现白选。
+        if ignore_git is None:
+            if done is None and is_git_repo(path):
+                self.ask_handoff_git(item)
+                return
+            # 没弹框那两条路（流水线、非 git 目录）照工作区存下来的值走。
+            ignore_git = bool(item.get("handoff_ignore_git"))
+
         target = os.path.join(path, HANDOFF_FILE)
         try:
             before = os.path.getmtime(target)
@@ -1792,7 +1807,8 @@ class Launcher(LauncherDialogs, tk.Tk):
                                           delete=False)
         try:
             self._handoff_proc = subprocess.Popen(
-                [claude_exe(), "-c", "--fork-session", "-p", HANDOFF_PROMPT,
+                [claude_exe(), "-c", "--fork-session", "-p",
+                 handoff_prompt(ignore_git),
                  "--allowedTools", HANDOFF_TOOLS],
                 cwd=path, stdin=subprocess.DEVNULL, stdout=log,
                 stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
