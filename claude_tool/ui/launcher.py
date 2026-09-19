@@ -303,6 +303,10 @@ class Launcher(LauncherDialogs, tk.Tk):
             self.bind_all("<Control-Key-{}>".format(number),
                           lambda _e, n=number: self.launch_nth(n))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # 内嵌的那个是贴在终端栏上的独立窗口，本窗口自身的挪动它跟不动——挪窗口
+        # 时 Tk 只给顶层窗口发 <Configure>，终端栏那边一个都不发，_on_term_resize
+        # 那个绑定管不着（量过）。
+        self.bind("<Configure>", self._on_window_move)
         self._restore_geometry()
 
     def _apply_min_size(self):
@@ -366,10 +370,10 @@ class Launcher(LauncherDialogs, tk.Tk):
                 "新位置留下半份、旧的还在。\n\n真要现在关吗？"):
             return
         if self.embedded is not None:
-            # 内嵌的那个是挂在这扇窗口底下的子窗口，窗口一销毁它就跟着没了。
-            # 所以不能只是"放它走"（那等于连窗口带会话一起抽掉），也不能说完
-            # 就立刻销毁（等于拔电）。先正经道个别——等同点它标题栏的 X，给
-            # claude 一点时间把手上的活收尾——歇一下再关自己。
+            # 内嵌的那个认了本窗口当 owner，窗口一销毁它跟着一起没。所以不能只是
+            # "放它走"（那等于连窗口带会话一起抽掉），也不能说完就立刻销毁（等于
+            # 拔电）。先正经道个别——等同点它标题栏的 X，给 claude 一点时间把手
+            # 上的活收尾——歇一下再关自己。
             try:
                 self.embedded.close()
             except Exception:
@@ -2107,7 +2111,23 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.term_name_var.set("")
         self._room_for_terminal(False)
 
+    def _on_window_move(self, event):
+        """本窗口自己挪了：把内嵌的那个重新贴到终端栏上。
+
+        子控件的事件也会流到这儿（顶层窗口在 bindtags 里占一环），所以拿
+        event.widget 挡一下——只有它就是本窗口时才是真挪了窗口，不然列表里
+        随便哪个控件动一下都要白贴一遍。
+        """
+        if event.widget is not self or self.embedded is None or self._placing:
+            return
+        self._placing = True
+        try:
+            self.embedded.place()
+        finally:
+            self._placing = False
+
     def _on_term_resize(self, _event):
+        """终端栏自己变了尺寸（缩放窗口、或者右边这栏刚长出来）。"""
         if self.embedded and not self._placing:
             self._placing = True
             try:
