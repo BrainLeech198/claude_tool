@@ -93,6 +93,31 @@ def write_hook_state(state):
         pass
 
 
+def hook_fired_at(state, cwd):
+    """这个目录上次"决定要刷交接文档"的时刻；没刷过是 0.0。
+
+    只有真决定要刷的那一次才写 last（普通轮次只动 turns），所以这个值一变新，
+    就说明那个会话的 hook 刚被逼着去写文档了。
+    """
+    entry = state.get(hook_state_key(cwd))
+    if not isinstance(entry, dict):
+        return 0.0
+    return float(entry.get("last") or 0)
+
+
+def note_handoff_written(cwd):
+    """启动器自己写完了这个目录的交接文档，顺手把节流时间戳顶掉。
+
+    不顶的话会撞成一个来回：用户点了「整理交接文档」，启动器 fork 的那个 claude
+    正在写，这时候那个会话自己的 Stop hook 又够条件了，被逼出来的一轮往同一份
+    handoff.md 上再写一遍，两份搅在一起。顶掉之后 20 分钟内 hook 不会再动。
+    语义上也是对的——这份文档刚刷新过，本来就不该马上再刷。
+    """
+    state = read_hook_state()
+    state[hook_state_key(cwd)] = {"turns": 0, "last": time.time()}
+    write_hook_state(state)
+
+
 def _ensure_stdio():
     """sys.stdin / sys.stdout 是 None 的话，从原始 fd 接回来。
 
