@@ -20,11 +20,11 @@ set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 
 cd /d "%ROOT%" || exit /b 1
 
-echo === 1/2  PyInstaller ===
+echo === 1/3  PyInstaller ===
 python -m PyInstaller build\claude_tool.spec --noconfirm --clean --workpath build\_work --distpath dist || exit /b 1
 
 echo.
-echo === 2/2  Inno Setup ===
+echo === 2/3  Inno Setup ===
 rem No parenthesized if-block here: the ")" inside "Program Files (x86)" would
 rem close the block early ("\Inno was unexpected at this time"). Hence goto.
 if exist "%ISCC%" goto :have_iscc
@@ -33,6 +33,12 @@ echo PyInstaller step is done - dist\claude_tool\ is runnable as-is.
 exit /b 1
 :have_iscc
 "%ISCC%" build\claude_tool.iss || exit /b 1
+
+echo.
+echo === 3/3  website releases list ===
+rem Records this version in website\releases.js so the download page picks it up.
+rem The actual upload to Gitee releases is still manual - see that script's header.
+python build\update_releases.py || exit /b 1
 
 echo.
 echo Done. Output: %ROOT%\Output

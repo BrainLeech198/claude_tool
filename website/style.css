@@ -1,0 +1,150 @@
+/* 配色跟 claude_tool/theme.py 一套，官网和启动器得是一个长相。
+   不引任何外部字体和 CDN——页面就是三个小文件，国内打开不用等任何第三方。 */
+:root {
+  --page: #f4f5f7;
+  --panel: #ffffff;
+  --border: #e2e5ea;
+  --text: #1f2328;
+  --muted: #8b939e;
+  --accent: #4a6cf7;
+  --accent-hover: #3b5ce0;
+  --accent-soft: #eaefff;
+  --ok: #2f9e6b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text);
+  font: 15px/1.7 "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
+        system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 860px; margin: 0 auto; padding: 40px 20px 64px; }
+
+a { color: var(--accent); }
+a:hover { color: var(--accent-hover); }
+code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.9em;
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* ── 头部 ───────────────────────────────────────────────────────────── */
+
+.head { display: flex; align-items: center; gap: 16px; }
+.head img { width: 64px; height: 64px; flex: none; }
+.head h1 { margin: 0; font-size: 26px; letter-spacing: 0.5px; }
+.head .tag { margin: 4px 0 0; color: var(--muted); }
+
+/* ── 下载卡片 ───────────────────────────────────────────────────────── */
+
+h2 {
+  font-size: 17px;
+  margin: 40px 0 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cards { display: flex; gap: 14px; flex-wrap: wrap; }
+
+.card {
+  flex: 1 1 220px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.card-off { background: transparent; border-style: dashed; }
+.card-off .card-os { color: var(--muted); }
+
+.card-os { font-size: 16px; font-weight: 700; }
+.card-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+.btn {
+  display: inline-block;
+  margin: 14px 0 10px;
+  padding: 9px 20px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 7px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.btn:hover { background: var(--accent-hover); color: #fff; }
+
+.card-meta {
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+/* ── 历史版本 ───────────────────────────────────────────────────────── */
+
+.rel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 12px;
+}
+.rel-head { display: flex; align-items: baseline; gap: 12px; }
+.rel-ver { font-size: 16px; font-weight: 700; }
+.rel-date { color: var(--muted); font-size: 13px; }
+.rel-notes { margin: 6px 0 0; color: var(--text); }
+
+.rel-links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+.chip {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+.chip:hover { background: #dfe6ff; color: var(--accent-hover); }
+.chip-off {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+}
+
+.empty { color: var(--muted); }
+
+/* ── 怎么装 / 页脚 ──────────────────────────────────────────────────── */
+
+ol { padding-left: 22px; }
+ol li { margin-bottom: 8px; }
+
+.note {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 12px;
+}
+
+.foot {
+  margin-top: 48px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+.foot a { margin-right: 16px; }
+
+@media (max-width: 560px) {
+  .head { gap: 12px; }
+  .head img { width: 48px; height: 48px; }
+  .head h1 { font-size: 21px; }
+  .card { flex-basis: 100%; }
+}

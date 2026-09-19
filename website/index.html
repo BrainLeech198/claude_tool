@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude 启动器</title>
+<meta name="description" content="Windows 上的 Claude Code 图形启动器：左边挑模型，右边挑工作区，点一下就在那个目录开个窗口跑 claude。">
+<link rel="icon" href="crab.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="head">
+    <img src="crab.png" alt="">
+    <div>
+      <h1>Claude 启动器</h1>
+      <p class="tag">Windows 上的 Claude Code 图形启动器——左边挑模型，右边挑工作区，
+        点一下就在那个目录开个窗口跑 claude。</p>
+    </div>
+  </header>
+
+  <h2>下载</h2>
+  <div class="cards" id="cards"></div>
+
+  <h2>历史版本</h2>
+  <div id="versions"></div>
+
+  <h2>怎么装</h2>
+  <ol>
+    <li>下载上面那个 <code>Setup.exe</code>，双击。</li>
+    <li>装的时候默认免管理员，装在自己账户下（<code>%LOCALAPPDATA%\Programs\claude_tool</code>）。
+      想装成整机共用的，在向导里切换，或者命令行加 <code>/ALLUSERS</code>。</li>
+    <li>装完从开始菜单或桌面图标打开。第一次用先在左边加一个模型预设、填上 API key，
+      右边加个工作区目录，点一下就能开跑。</li>
+    <li>装完那个目录本身就是免安装的，整个拷到另一台机器上双击 <code>claude_tool.exe</code>
+      照样能跑。</li>
+  </ol>
+  <p class="note">安装包没做代码签名，Windows 的 SmartScreen 会拦一下，点「更多信息 → 仍要运行」即可。
+    另外它需要机器上已经装了 <a href="https://docs.claude.com/en/docs/claude-code/setup">Claude Code</a> 本身。</p>
+
+  <footer class="foot">
+    <a href="https://gitee.com/Mr_brainleech/claude_tool">Gitee 仓库</a>
+    <a href="https://github.com/BrainLeech198/claude_tool">GitHub 镜像</a>
+    <p class="note">配置、模型预设（含 API key）和工作区列表都存在 <code>~/.claude_tool</code>，
+      卸载的时候不会动它们。</p>
+  </footer>
+
+</div>
+
+<script src="releases.js"></script>
+<script>
+(function () {
+  // 平台的固定顺序，卡片和历史版本表都用这一份。以后加平台只在数组末尾追加一行。
+  var PLATFORMS = [
+    ["windows", "Windows", "Windows 10 / 11（64 位）"],
+    ["linux", "Linux", "还没做"],
+    ["macos", "macOS", "还没做"]
+  ];
+
+  var base = window.DOWNLOAD_BASE || "";
+  var releases = window.RELEASES || [];
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function downloadUrl(release, pkg) {
+    return base + "/v" + release.version + "/" + pkg.file;
+  }
+
+  function size(bytes) {
+    return bytes ? (bytes / 1024 / 1024).toFixed(1) + " MB" : "";
+  }
+
+  // ── 上面那三张平台卡片，拿最新版填 ──
+  var cards = document.getElementById("cards");
+  if (!releases.length) {
+    cards.appendChild(el("p", "empty", "还没有发出去的版本。"));
+  } else {
+    var latest = releases[0];
+    PLATFORMS.forEach(function (p) {
+      var pkg = latest[p[0]];
+      var card = el("div", pkg ? "card" : "card card-off");
+      card.appendChild(el("div", "card-os", p[1]));
+      card.appendChild(el("div", "card-sub", pkg ? p[2] : "还没做"));
+      if (pkg) {
+        var a = el("a", "btn", "下载 v" + latest.version);
+        a.href = downloadUrl(latest, pkg);
+        card.appendChild(a);
+        card.appendChild(el("div", "card-meta",
+          pkg.file + " · " + size(pkg.size) + " · " + latest.date));
+      }
+      cards.appendChild(card);
+    });
+  }
+
+  // ── 历史版本，一条一个方块 ──
+  var list = document.getElementById("versions");
+  if (!releases.length) {
+    list.appendChild(el("p", "empty", "还没有发出去的版本。"));
+  }
+  releases.forEach(function (r) {
+    var row = el("div", "rel");
+    var head = el("div", "rel-head");
+    head.appendChild(el("span", "rel-ver", "v" + r.version));
+    head.appendChild(el("span", "rel-date", r.date || ""));
+    row.appendChild(head);
+    if (r.notes) row.appendChild(el("p", "rel-notes", r.notes));
+
+    var links = el("div", "rel-links");
+    PLATFORMS.forEach(function (p) {
+      var pkg = r[p[0]];
+      if (pkg) {
+        var a = el("a", "chip", p[1] + " · " + size(pkg.size));
+        a.href = downloadUrl(r, pkg);
+        a.title = pkg.file;
+        links.appendChild(a);
+      } else {
+        links.appendChild(el("span", "chip chip-off", p[1] + " 还没做"));
+      }
+    });
+    row.appendChild(links);
+    list.appendChild(row);
+  });
+})();
+</script>
+</body>
+</html>
