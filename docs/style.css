@@ -70,23 +70,57 @@ h2 {
 .card-os { font-size: 16px; font-weight: 700; }
 .card-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 
-.btn {
+/* 下载入口统一包一层 .dl：里面要么是普通链接（只有一个源），要么是按钮 + 浮出来的
+   那块菜单。按钮用 <button>，得自己把浏览器的默认边框和字体抹平。 */
+.dl {
+  position: relative;
   display: inline-block;
   margin: 14px 0 10px;
+}
+.rel-links .dl { margin: 0; }
+
+.btn, .chip, .menu-item { font-family: inherit; cursor: pointer; }
+.btn, .chip { border: 0; }
+
+.btn {
+  display: inline-block;
   padding: 9px 20px;
   background: var(--accent);
   color: #fff;
   border-radius: 7px;
   font-weight: 700;
+  font-size: 15px;
   text-decoration: none;
 }
 .btn:hover { background: var(--accent-hover); color: #fff; }
 
-.card-mirror {
-  display: inline-block;
-  margin: -4px 0 10px;
-  font-size: 13px;
+.caret { font-size: 11px; margin-left: 5px; opacity: 0.85; }
+
+.menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 165px;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 8px 22px rgba(31, 35, 40, 0.13);
+  display: flex;
+  flex-direction: column;
 }
+
+.menu-item {
+  display: block;
+  padding: 8px 11px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.menu-item:hover { background: var(--accent-soft); color: var(--accent-hover); }
 
 .card-meta {
   color: var(--muted);
@@ -120,14 +154,6 @@ h2 {
   text-decoration: none;
 }
 .chip:hover { background: #dfe6ff; color: var(--accent-hover); }
-
-/* GitHub 那一份：同一个包的第二条路，比主源淡一档，别跟主 chip 抢眼。 */
-.chip-alt {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-}
-.chip-alt:hover { background: var(--panel); color: var(--accent-hover); }
 
 .chip-off {
   background: transparent;
