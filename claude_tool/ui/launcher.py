@@ -69,13 +69,15 @@ from claude_tool.claude import (
     launch,
 )
 from claude_tool.handoff import (
+    AUTO_CONTINUE_MAX,
+    AUTO_CONTINUE_RESET,
     HANDOFF_COOLDOWN,
     HANDOFF_FILE,
     HANDOFF_MIN_TURNS,
     HANDOFF_PROMPT,
     HANDOFF_TOOLS,
     READ_HANDOFF_PROMPT,
-    ensure_handoff_hook_settings,
+    ensure_hook_settings,
     hook_fired_at,
     note_handoff_written,
     read_hook_state,
@@ -111,7 +113,9 @@ PAGE_PAD = 16
 
 # 窗口下限按内容的自然尺寸算（见 _apply_min_size），这两条是它的兜底和冗余。
 # 冗余别省：字体在不同机器上宽窄有出入，贴着内容算迟早还会切掉一两个字。
-MIN_MARGIN = 32
+# 48 而不是 32：底下那行初始提示比那排开关还宽一点，它按设计不进下限计算
+# （会随反馈消息变长变短），这点余量留给它。
+MIN_MARGIN = 48
 MIN_HEIGHT_FLOOR = 520
 # 关窗时留给内嵌会话收尾的时间（毫秒）。过了这个点还赖着，销毁父窗口自然会
 # 把它连窗口带进程一起带走。
@@ -258,9 +262,9 @@ class Launcher(LauncherDialogs, tk.Tk):
     def _apply_min_size(self):
         """窗口下限按内容量出来，别写死。
 
-        底下一排开关（内嵌终端 + 自动刷交接文档）是最宽的一行，两段文字加上间距
-        比左列那几块都宽；原先写死的下限 560（默认宽 640）都装不下，右边那个勾的
-        标题会被切掉一截，字号再大点的机器切得更多。
+        底下那排开关（内嵌终端 + 两个挂 Stop hook 的行为，分两行摆）是最宽的一块，
+        两段文字加上间距比左列那几块都宽；原先写死的下限 560（默认宽 640）都装不下，
+        右边那个勾的标题会被切掉一截，字号再大点的机器切得更多。
 
         量的只有那排开关和左列这两块**定死**的东西，不去拿整窗的 reqwidth：顶栏
         的模型名、底下那行反馈都是会变长的字符串，它们一长整窗的自然宽度就跟着
@@ -365,21 +369,31 @@ class Launcher(LauncherDialogs, tk.Tk):
         switches.pack(fill="x", padx=PAGE_PAD, pady=(8, 0))
         self.embed_var = tk.BooleanVar(
             value=bool(self.config_data.get("embed")))
-        # 会花用户 token 的功能，默认关；这个勾只影响新开的会话，不动已经跑着的
+        # 会花用户 token、会替用户拍板的功能，默认关；这几个勾只影响新开的会话，
+        # 不动已经跑着的
         self.auto_handoff_var = tk.BooleanVar(
             value=bool(self.config_data.get("auto_handoff")))
+        self.auto_continue_var = tk.BooleanVar(
+            value=bool(self.config_data.get("auto_continue")))
         # 括号里写的是各自的真名：内嵌那条走的是 conhost（不是默认的 Windows
-        # Terminal，字形回退差些），自动刷文档靠的是 Claude Code 的 Stop hook。
-        # 熟练用户要的是这两个词，好去翻文档、翻配置文件；只写大白话他就得猜。
-        for var, text, command in (
+        # Terminal，字形回退差些），另两条挂的都是 Claude Code 的 Stop hook。
+        # 熟练用户要的是这几个词，好去翻文档、翻配置文件；只写大白话他就得猜。
+        #
+        # 拆两行摆，不是一行塞三个：窗口下限是按这排开关的自然宽度量的
+        # （见 _apply_min_size），三个挤一行会把下限从 742 顶到 1029。行按功能分——
+        # 上排是终端怎么开，下排是两个挂 Stop hook 的行为。
+        for var, text, command, row, col in (
                 (self.embed_var, "内嵌终端 conhost（不勾就在新窗口里开）",
-                 self._on_embed_toggle),
+                 self._on_embed_toggle, 0, 0),
                 (self.auto_handoff_var, "自动刷交接文档 Stop hook（会多用 token）",
-                 self._on_auto_handoff_toggle)):
+                 self._on_auto_handoff_toggle, 1, 0),
+                (self.auto_continue_var, "自动继续 Stop hook（替用户拍板）",
+                 self._on_auto_continue_toggle, 1, 1)):
             tk.Checkbutton(switches, text=text, variable=var, command=command,
                            bg=PAGE_BG, fg=TEXT, font=font(9), activebackground=PAGE_BG,
                            selectcolor=PANEL_BG, highlightthickness=0, bd=0,
-                           ).pack(side="left", padx=(0, 18))
+                           ).grid(row=row, column=col, sticky="w",
+                                  padx=(0, 18), pady=(0, 2))
         self.feedback_var = tk.StringVar(
             value="点工作区选「新会话」或「接着上次聊」；行首那个数字按住 Ctrl 就能直接开，"
                   "Ctrl+F 跳到筛选框。")
@@ -412,10 +426,9 @@ class Launcher(LauncherDialogs, tk.Tk):
 
         self.ws_list = self._build_section(
             self.side, "工作区", max_height=WORKSPACE_MAX, expand=True,
-            actions=[("＋ 新建文件夹", self._open_quick_workspace_dialog),
-                     ("＋ 选已有目录", self._open_add_workspace_dialog),
+            actions=[("＋ 添加工作区", self._open_add_workspace_picker),
                      ("重新扫描", self.rescan)],
-            search=self.ws_filter, note=self._build_workplace_note)
+            search=self.ws_filter, top=self._build_autonomy_row)
 
         self.panel = tk.Frame(body, bg=PAGE_BG)
         self._build_terminal(self.panel)
@@ -505,14 +518,17 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.term_holder.bind("<Configure>", self._on_term_resize)
 
     def _build_section(self, parent, title, max_height, actions, expand=False,
-                       search=None, note=None):
+                       search=None, top=None):
         head = tk.Frame(parent, bg=PAGE_BG)
         head.pack(fill="x", pady=(16, 6))
         tk.Label(head, text=title, bg=PAGE_BG, fg=TEXT,
                  font=font(11, True)).pack(side="left")
         for text, command in reversed(actions):
             PillButton(head, text, command, bg=PAGE_BG).pack(side="right", padx=(6, 0))
-        # 搜索框得跟在标题后面、列表前面，不然 pack 顺序会把列表挤到它上面去
+        # 标题和筛选框中间那一条。搜索框得跟在标题后面、列表前面，不然 pack 顺序
+        # 会把列表挤到它上面去，所以这一条也得赶在搜索框之前 pack。
+        if top is not None:
+            top(parent)
         if search is not None:
             box = tk.Frame(parent, bg=PAGE_BG)
             box.pack(fill="x", pady=(0, 6))
@@ -520,8 +536,6 @@ class Launcher(LauncherDialogs, tk.Tk):
                      font=font(9)).pack(side="left", padx=(2, 6))
             self.filter_entry = make_entry(box, search, width=10)
             self.filter_entry.pack(side="left", fill="x", expand=True)
-        if note is not None:
-            note(parent)
         area = ScrollArea(parent, max_height=max_height)
         # 记下标题栏，"正在跑"那块要靠它把自己插到模型区上面
         area.head = head
@@ -530,6 +544,19 @@ class Launcher(LauncherDialogs, tk.Tk):
         else:
             area.pack(fill="x")
         return area
+
+    def _build_autonomy_row(self, parent):
+        """「工作区」标题底下那一行：把一整件事布置给它自己跑。
+
+        摆在这儿而不是顶栏，是因为托管要挑的就是一个工作区——「托管哪个目录、
+        用哪一档」跟在哪儿挑工作区是同一件事，凑在一起看才顺。
+        """
+        line = tk.Frame(parent, bg=PAGE_BG)
+        line.pack(fill="x", pady=(0, 8))
+        PillButton(line, "AI 托管", self._open_autonomy_dialog, primary=True,
+                   bg=PAGE_BG).pack(side="left")
+        tk.Label(line, text="布置一个任务，交给它自己跑", bg=PAGE_BG, fg=MUTED,
+                 font=font(9)).pack(side="left", padx=(10, 0))
 
     def _on_wheel(self, event):
         widget = self.winfo_containing(event.x_root, event.y_root)
@@ -1280,8 +1307,8 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.ws_view = view
 
         if not workspaces:
-            tk.Label(inner, text="还没有工作区。右上角「＋ 新建文件夹」会在下面那个目录里"
-                                 "建一个新的；已经有目录了就用「＋ 选已有目录」。",
+            tk.Label(inner, text="还没有工作区。右上角「＋ 添加工作区」既能新建一个"
+                                 "文件夹，也能把已经有的目录加进来。",
                      bg=PAGE_BG, fg=MUTED, font=font(10)).pack(anchor="w", pady=10, padx=6)
             return
         if not view:
@@ -1349,18 +1376,27 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.refresh_workspaces()
 
 
-    def launch_workspace(self, item, cont=False, prompt=None):
-        """真正把 claude 拉起来，新窗口还是塞进本窗口看那个勾。"""
+    def launch_workspace(self, item, cont=False, prompt=None, autopilot=False):
+        """真正把 claude 拉起来，新窗口还是塞进本窗口看那个勾。
+
+        autopilot=True 是「AI 托管」那条路：这次会话无条件挂上自动继续那个 hook，
+        不看底下那个勾——用户是在托管对话框里当场选的档，那个选择就该管这一次。
+        「自动刷交接文档」是个独立的全局偏好，托管时照旧跟着勾走，两者取并集。
+        """
         path = item["path"]
         permission = workspace_permission(item)
         settings = None
-        if self.auto_handoff_var.get():
+        # 两个行为共用一个 hook 入口，任何一个开着就得把 settings 挂上去；具体
+        # 干哪几件事由命令行上的开关带过去，选择就此固化进这一份。
+        handoff = self.auto_handoff_var.get()
+        auto_continue = self.auto_continue_var.get() or autopilot
+        if handoff or auto_continue:
             try:
-                settings = ensure_handoff_hook_settings()
+                settings = ensure_hook_settings(handoff=handoff,
+                                                auto_continue=auto_continue)
             except OSError as e:
                 messagebox.showerror("挂 hook 失败",
-                                     "写不了 hook 配置，这次就不自动刷交接文档了：\n{}"
-                                     .format(e))
+                                     "写不了 hook 配置，这次就不挂了：\n{}".format(e))
 
         if self.embed_var.get():
             self.embed_workspace(item, cont, prompt, settings, permission)
@@ -1378,8 +1414,46 @@ class Launcher(LauncherDialogs, tk.Tk):
         entry = self.track_running(item["name"], path, process,
                                    hook=settings is not None)
         self._watch_terminal(entry, known)
-        self.feedback_var.set("已在新窗口启动{}（权限：{}）：{}".format(
-            "（接着上次聊）" if cont else "", permission_option(permission), path))
+        if autopilot:
+            self.feedback_var.set(
+                "已托管「{}」：它停下问你话时会自己接着说，权限 {}。关掉那扇窗口"
+                "就结束。".format(item["name"], permission_option(permission)))
+        else:
+            self.feedback_var.set("已在新窗口启动{}（权限：{}）：{}".format(
+                "（接着上次聊）" if cont else "", permission_option(permission), path))
+
+    def start_autonomy(self, item, task, tier=1):
+        """「AI 托管」按下去之后：在那个工作区起个新会话，把任务当开场白。
+
+        新会话（不 --continue）是故意的：托管是丢一件新活进去，不是接着上一段
+        聊天。不带 --continue 时 claude 把命令行上那个位置参数当第一条用户消息
+        送进去，这条路线上文书探针验过。
+        """
+        path = item["path"]
+        if not os.path.isdir(path):
+            messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
+            return
+        if tier != 1:
+            # 第 2、3 档在界面上是灰的，按不到；走到这儿说明配置被人手改成
+            # 2 或 3 了。与其按一个没实现的东西开出去，不如什么都不开。
+            messagebox.showinfo(
+                "这一档还没做",
+                "第 {} 档还没实现。现在能用的是第 1 档「让它自己定」。".format(tier))
+            return
+        # 先把 hook 配置文件写出来试一次：写不了就别开——开出去一个没挂上 hook
+        # 的会话，用户以为托管着呢，其实它停下来就在那儿干等。
+        try:
+            ensure_hook_settings(handoff=self.auto_handoff_var.get(),
+                                 auto_continue=True)
+        except OSError as e:
+            messagebox.showerror("挂 hook 失败",
+                                 "写不了 hook 配置，这次没法托管：\n{}".format(e))
+            return
+
+        self.config_data["autonomy"] = tier
+        self.config_data["autonomy_workspace"] = path
+        save_config(self.config_data)
+        self.launch_workspace(item, cont=False, prompt=task, autopilot=True)
 
     def launch_nth(self, number):
         """Ctrl+1~9：和鼠标点一样，也弹那个选择框。"""
@@ -1416,7 +1490,20 @@ class Launcher(LauncherDialogs, tk.Tk):
                 "刷一遍，多用掉的 token 算在你账上。".format(
                     HANDOFF_MIN_TURNS, HANDOFF_COOLDOWN // 60, HANDOFF_FILE))
         else:
-            self.feedback_var.set("已摘掉 Stop hook，新开的会话不再自动刷交接文档。")
+            self.feedback_var.set(
+                "新开的会话不再自动刷交接文档（「自动继续」那个勾不受影响）。")
+
+    def _on_auto_continue_toggle(self):
+        self.config_data["auto_continue"] = self.auto_continue_var.get()
+        save_config(self.config_data)
+        if self.auto_continue_var.get():
+            self.feedback_var.set(
+                "已挂上 Stop hook：它停下问话时替它接一句「接着干，自己定」，连着推 "
+                "{} 轮就放行；隔 {} 分钟重新数，它自己说「已完成」也会停。".format(
+                    AUTO_CONTINUE_MAX, AUTO_CONTINUE_RESET // 60))
+        else:
+            self.feedback_var.set(
+                "新开的会话不再自动继续（「自动刷交接文档」那个勾不受影响）。")
 
     def embed_workspace(self, item, cont=False, prompt=None, settings=None,
                         permission=None):
@@ -1728,29 +1815,6 @@ class Launcher(LauncherDialogs, tk.Tk):
         if all(path_key(r) != path_key(base) for r in roots):
             roots.insert(0, base)
         self.config_data["roots"] = roots
-        self._refresh_workplace_note()
-
-    def _build_workplace_note(self, parent):
-        """工作区列表顶上那行：新建的文件夹建在哪儿，以及改它的按钮。"""
-        line = tk.Frame(parent, bg=PAGE_BG)
-        line.pack(fill="x", pady=(0, 6))
-        tk.Label(line, text="新建文件夹建在", bg=PAGE_BG, fg=MUTED,
-                 font=font(9)).pack(side="left", padx=(2, 6))
-        # 按钮先 pack 把它那份宽度占住，否则长路径会把按钮挤出窗口。
-        PillButton(line, "更改目录", self._open_workplace_dialog,
-                   bg=PAGE_BG).pack(side="right")
-        self.workplace_label = tk.Label(line, bg=PAGE_BG, fg=TEXT, font=font(9),
-                                        anchor="w")
-        self.workplace_label.pack(side="left", fill="x", expand=True)
-        # 宽度是布局给的，只有 Configure 之后才知道，所以每次都按当前宽度重算
-        self.workplace_label.bind("<Configure>", lambda _e: self._refresh_workplace_note())
-        self._refresh_workplace_note()
-
-    def _refresh_workplace_note(self):
-        room = max(self.workplace_label.winfo_width() - 4, 60)
-        text = ellipsize(self.config_data["workplace"], room, 9)
-        if self.workplace_label.cget("text") != text:
-            self.workplace_label.configure(text=text)
 
 
     def rescan(self):

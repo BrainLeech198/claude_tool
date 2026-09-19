@@ -5,7 +5,7 @@ rem Python on the machine.
 rem
 rem Uses "python" rather than "pythonw": errors have to be visible on this path.
 rem The packaged exe is the windowless one, and it talks to Claude Code's Stop
-rem hook over stdin/stdout via the --handoff-hook branch.
+rem hook over stdin/stdout via the --hook branch.
 rem
 rem ASCII-only and CRLF on purpose - see build/pack.bat for why.
 setlocal
