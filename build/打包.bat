@@ -13,7 +13,7 @@ rem   get mis-decoded and the parser starts trying to *execute* fragments of the
 rem   line ("'xxx' is not recognized as an internal or external command"). And do
 rem   NOT add "chcp 65001": switching codepage mid-file makes cmd lose its read
 rem   position, which breaks it the same way.
-rem   The Chinese notes about packaging live in docs/design doc instead.
+rem   The Chinese notes about packaging live in the design doc instead.
 setlocal
 for %%i in ("%~dp0..") do set "ROOT=%%~fi"
 set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -35,8 +35,8 @@ exit /b 1
 "%ISCC%" build\claude_tool.iss || exit /b 1
 
 echo.
-echo === 3/3  website releases list ===
-rem Records this version in website\releases.js so the download page picks it up.
+echo === 3/3  docs release list ===
+rem Records this version in docs\releases.js so the download page picks it up.
 rem The actual upload to Gitee releases is still manual - see that script's header.
 python build\update_releases.py || exit /b 1
 

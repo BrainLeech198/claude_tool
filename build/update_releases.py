@@ -1,4 +1,4 @@
-"""把刚打出来的这一版写进 website/releases.js。
+"""把刚打出来的这一版写进 docs/releases.js。
 
 不用手动跑——build/打包.bat 的最后一步会调它。想单独补一条也可以：
 
@@ -8,7 +8,7 @@
 Output\\ 里按版本号找。同一个版本号只更新不重复，别的版本一个字不动。
 
 **发布说明（notes）得自己填**：那是写给人看的话，机器猜不出来。自动补进来的条目
-notes 是空的，页面上就不显示那一行；想写就在 website/releases.js 里补一句。
+notes 是空的，页面上就不显示那一行；想写就在 docs/releases.js 里补一句。
 
 文件名是 ASCII 的：打包.bat 只能用 ASCII，它要按名字调这个脚本。（这个文件本身
 没有那个限制，中文随便写——cmd 只限制自己解析的那份 bat。）
@@ -24,7 +24,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ISS = os.path.join(ROOT, "build", "claude_tool.iss")
-DATA = os.path.join(ROOT, "website", "releases.js")
+DATA = os.path.join(ROOT, "docs", "releases.js")
 OUTPUT = os.path.join(ROOT, "Output")
 # releases.js 里那行赋值。这个脚本只换等号后面那个数组，文件里其它东西（注释、
 # DOWNLOAD_BASE）原样留着。
@@ -80,7 +80,7 @@ def main():
     with open(DATA, "w", encoding="utf-8", newline="\n") as f:
         f.write(text[:start] + body + text[end:])
 
-    print("website/releases.js  <-  v{} · {} · {:.1f} MB".format(
+    print("docs/releases.js  <-  v{} · {} · {:.1f} MB".format(
         version, exe, size / 1048576))
 
 
