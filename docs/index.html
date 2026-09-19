@@ -70,7 +70,8 @@
 
   function downloadUrl(release, pkg) {
     // 包里手填了 url 就用它（比如指到镜像源），没填就按 Gitee 发行版那个形状拼。
-    return pkg.url || (base + "/v" + release.version + "/" + pkg.file);
+    // tag 就是版本号本身，不带 v 前缀——Gitee 上那个发行版打的 tag 是 0.1.0。
+    return pkg.url || (base + "/" + release.version + "/" + pkg.file);
   }
 
   function size(bytes) {
