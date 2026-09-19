@@ -1,12 +1,18 @@
-"""交接文档：手动那个按钮，和挂在会话上的那个 Stop hook 本体。
+"""交接文档，和挂在会话上的那个 Stop hook 本体。
+
+交接文档这边只有一条路：**手动点**那个「整理交接文档」按钮，在目标目录里 fork
+一份会话让它写 handoff.md。写出来的东西谁读？下一段会话起来时那句"先读
+handoff.md"（见 READ_HANDOFF_PROMPT），以及换模型重开时同样那句。
+
+本来还有第二条路——挂在会话上的 Stop hook 定时自动刷一份。砍掉了：claude 自己
+的 `--continue` 已经能把上次的上下文整个接过来，那份文档只在"新模型从头读一遍旧
+上下文"这种场合才值（见 _offer_migration）；而自动刷每次都要真烧一轮 token、还
+往会话自己的上下文里再塞一坨，加速它撞上 compact。要文档就手点一下。
 
 做不到"用户喊停时往正在跑的会话里塞提示词"——Windows 上没法从外部给一个开着
 的交互式会话投喂输入。能用的只有 Stop hook：claude 每把控制权交还给用户之前
-会跑它，回一句 {"decision":"block","reason":...} 就能逼它再干一轮。两个功能都
-架在这个杠杆上，各自一个开关：停下时顺手刷一份交接文档；停下时接着往下推，
-别等用户（见 CONTINUE_PROMPT）。
-
-所以这个 hook 是"每次它停下来时我们唯一能插手的地方"，要加新行为就往这儿加。
+会跑它，回一句 {"decision":"block","reason":...} 就能逼它再干一轮。现在这个杠杆
+上只剩一件事：停下时接着往下推，别等用户（见 CONTINUE_PROMPT）。
 """
 import json
 import os
@@ -15,7 +21,6 @@ import time
 
 from claude_tool.paths import TOOL_DIR
 from claude_tool.claude import python_exe
-from claude_tool.config import load_config, path_key
 
 # 源码模式下 hook 要回头调的那个文件。不能写 handoff.py 自己——那样会被当成
 # 脚本直接跑，包内的相对导入就全崩了；__main__.py 认得这个入口标记。
@@ -23,18 +28,15 @@ from claude_tool.config import load_config, path_key
 ENTRY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "__main__.py")
 
-# 入口标记 + 每个行为一个开关。启动时按当时勾了哪些，把对应的开关拼进命令行；
-# 勾选状态就此固化进那一份 settings，改勾不影响已经跑着的会话。
+# 入口标记 + 开关。启动时按当时勾了哪些，把对应的开关拼进命令行；勾选状态就此
+# 固化进那一份 settings，改勾不影响已经跑着的会话。
 HOOK_FLAG = "--hook"
-HANDOFF_FLAG = "--handoff"
 CONTINUE_FLAG = "--auto-continue"
 
 
-def hook_command(handoff=False, auto_continue=False):
+def hook_command(auto_continue=False):
     """拼给 Claude Code 的那条命令行。"""
     flags = [HOOK_FLAG]
-    if handoff:
-        flags.append(HANDOFF_FLAG)
     if auto_continue:
         flags.append(CONTINUE_FLAG)
     tail = " ".join(flags)
@@ -89,24 +91,8 @@ def is_git_repo(path):
     return os.path.exists(os.path.join(path, ".git"))
 
 
-def workspace_ignores_git(cwd):
-    """这个目录在启动器里是不是设了「交接文档不进 git」。
-
-    hook 是另一个进程，拿到的只有 cwd，所以得回配置里把那个工作区条目按路径
-    翻出来。翻不到（目录已经从列表里移掉了）就当没设过——宁可多留一份可能被
-    提交的文档，也不要凭空去改一个我们并不了解的工作区。
-    """
-    config = load_config()
-    if not config:
-        return False
-    wanted = path_key(cwd)
-    for item in config.get("workspaces") or []:
-        if isinstance(item, dict) and path_key(item.get("path") or "") == wanted:
-            return bool(item.get("handoff_ignore_git"))
-    return False
-
-
-# 点工作区弹框里那个"先读交接文档"勾上时用的开场白
+# 点工作区弹框里那个"先读交接文档"勾上时用的开场白；换模型重开时目录里要是有
+# 这份文档，也用它
 READ_HANDOFF_PROMPT = (
     "先读当前目录下的 " + HANDOFF_FILE + "，那是上次的交接文档。"
     "读完接着上面的进度继续干，已经做完的不要重做。"
@@ -134,20 +120,15 @@ AUTO_CONTINUE_MAX = 8
 # 这也顺带兜住了总量——不在这儿清的话，一个卡住的会话会被无限期地催下去。
 AUTO_CONTINUE_RESET = 10 * 60
 
-# ── 自动刷交接文档 ────────────────────────────────────────────────────────
-# 做不到"用户喊停时往正在跑的会话里塞提示词"——Windows 上没法从外部给一个开着
-# 的交互式会话投喂输入。能用的只有 Stop hook：claude 每把控制权交还给用户之前
-# 会跑它，回一句 {"decision":"block","reason":...} 就能逼它再干一轮。
-# 于是改成"每次它停下来就顺手刷一份"，用户随时关窗口，文档都是新的。
-#
-# 节流：距上次写够久、且又聊够了轮数才动手，否则每问一句都要写一遍文档。
+# ── hook 的配置文件和节流状态 ─────────────────────────────────────────────
 HOOK_DIR = os.path.join(TOOL_DIR, "hooks")
 HOOK_SETTINGS = os.path.join(HOOK_DIR, "hook.json")
-# 老版本只干刷文档这一件事，配置叫这个名字、命令行上写的是 --handoff-hook。
-# 现在两个行为共用一个入口，写新配置时顺手把它删掉——留着只会让人以为它还管用。
+# 老版本那份配置：只干刷文档这一件事，命令行上写的是 --handoff-hook。刷文档那条
+# 路已经砍了，写新配置时顺手把它删掉——留着只会让人以为它还管用。
 LEGACY_HOOK_SETTINGS = os.path.join(HOOK_DIR, "auto_handoff.json")
-HANDOFF_COOLDOWN = 20 * 60
-HANDOFF_MIN_TURNS = 3
+# 自动继续那个连计数按目录分开记在这儿。名字里带 handoff、文件名也没改，都是
+# 历史遗留（它原来还装着刷文档的轮数和时刻）——改了就得去动用户盘上那份文件，
+# 不值当。
 HANDOFF_STATE = os.path.join(TOOL_DIR, "handoff_state.json")
 
 
@@ -174,45 +155,13 @@ def write_hook_state(state):
         pass
 
 
-def hook_fired_at(state, cwd):
-    """这个目录上次"决定要刷交接文档"的时刻；没刷过是 0.0。
-
-    只有真决定要刷的那一次才写 last（普通轮次只动 turns），所以这个值一变新，
-    就说明那个会话的 hook 刚被逼着去写文档了。
-    """
-    entry = state.get(hook_state_key(cwd))
-    if not isinstance(entry, dict):
-        return 0.0
-    return float(entry.get("last") or 0)
-
-
-def note_handoff_written(cwd):
-    """启动器自己写完了这个目录的交接文档，顺手把节流时间戳顶掉。
-
-    不顶的话会撞成一个来回：用户点了「整理交接文档」，启动器 fork 的那个 claude
-    正在写，这时候那个会话自己的 Stop hook 又够条件了，被逼出来的一轮往同一份
-    handoff.md 上再写一遍，两份搅在一起。顶掉之后 20 分钟内 hook 不会再动。
-    语义上也是对的——这份文档刚刷新过，本来就不该马上再刷。
-    """
-    state = read_hook_state()
-    key = hook_state_key(cwd)
-    entry = state.get(key)
-    if not isinstance(entry, dict):
-        entry = {}
-    # 往条目里改而不是整个换掉：这个条目里还躺着自动继续那边的连计数，
-    # 换掉就把它清了，一个刚被整理过文档的会话会因此又被催着往下干。
-    entry.update({"turns": 0, "last": time.time()})
-    state[key] = entry
-    write_hook_state(state)
-
-
 def _ensure_stdio():
     """sys.stdin / sys.stdout 是 None 的话，从原始 fd 接回来。
 
     实测过：--noconsole 的 exe 被管道拉起时（Claude Code 跑 hook 就是这么拉的），
     三个流 Python 都给赋了值，走不到这里。留着是防另一种情形——句柄没传进来时
     sys.stdout 会是 None，而 **print 到 None 是静默无操作**（CPython 认这个分支），
-    于是 block 答复凭空消失、自动交接文档永远不触发，还一声不吭。这种漏法不报错，
+    于是 block 答复凭空消失、自动继续永远不触发，还一声不吭。这种漏法不报错，
     查起来得不偿失。
     """
     if sys.stdin is None:
@@ -240,17 +189,20 @@ def _block(reason):
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=True))
 
 
-def run_hook(handoff=False, auto_continue=False):
+def run_hook(auto_continue=False):
     """Stop hook 的本体。返回进程退出码。
 
     Claude Code 每轮把控制权交还给用户之前会跑一遍这个：stdin 给一段 JSON
     （含 cwd、stop_hook_active、last_assistant_message），stdout 的 JSON 就是
-    答复。什么都不打印 = 放行。两个开关按启动时勾的从命令行传进来。
+    答复。什么都不打印 = 放行。开关按启动时勾的从命令行传进来。
+
+    这里**故意不认 stop_hook_active**——认了就等于一次对话最多只能续一轮，那这个
+    功能等于没有（护栏改由 AUTO_CONTINUE_MAX 自己数）。
 
     stdin 必须按字节读、自己解 UTF-8：这台机器 locale 是 cp936，直接
     json.load(sys.stdin) 会拿 GBK 去解 UTF-8 字节，只要路径里有中文
     （工作区叫「冉」「小说」「2026数学建模」这种）就抛 UnicodeDecodeError，
-    被下面的 except 吞掉，自动交接文档就永远不触发。
+    被下面的 except 吞掉，自动继续就永远不触发。
     """
     _ensure_stdio()
     try:
@@ -267,22 +219,6 @@ def run_hook(handoff=False, auto_continue=False):
     if not isinstance(entry, dict):
         entry = {}
     now = time.time()
-    # 已经在"被 hook 逼出来的那一轮"里了。刷文档那条得认这个标记，再拦就成了
-    # 来回写同一份文件；自动继续那条**故意不认**——认了就等于一次对话最多只
-    # 能续一轮，那这个功能等于没有（护栏改由 AUTO_CONTINUE_MAX 自己数）。
-    forced = bool(payload.get("stop_hook_active"))
-
-    if handoff and not forced:
-        entry["turns"] = int(entry.get("turns") or 0) + 1
-        last = float(entry.get("last") or 0)
-        if (entry["turns"] >= HANDOFF_MIN_TURNS
-                and now - last >= HANDOFF_COOLDOWN):
-            # 该写了：把轮数清零并记下时间，免得紧接着的那一轮又被拦一次
-            entry.update({"turns": 0, "last": now})
-            state[key] = entry
-            write_hook_state(state)
-            _block(handoff_prompt(workspace_ignores_git(cwd)))
-            return 0
 
     if auto_continue:
         said_done = DONE_MARK in str(payload.get("last_assistant_message") or "")
@@ -304,9 +240,6 @@ def run_hook(handoff=False, auto_continue=False):
     # 能走到这儿 = 放行，让它真的停下来等用户。两种情形：它自己说了「已完成」，
     # 或者连着续到 AUTO_CONTINUE_MAX 了。前者把连计数清零再记下时刻；后者原样
     # 存回去——不存的话下一轮又从旧值往上数，上限永远到不了。
-    #
-    # 刷文档那条路也靠这儿落盘：上面给 turns 加了 1 但够不到阈值就先不写，
-    # 攒到下一次进来（entry 非空）才落盘。
     if auto_continue:
         entry["consec"] = consec
         if said_done:
@@ -317,22 +250,22 @@ def run_hook(handoff=False, auto_continue=False):
     return 0
 
 
-def ensure_hook_settings(handoff=False, auto_continue=False):
+def ensure_hook_settings(auto_continue=False):
     """写出 hook 用的 settings 文件，返回它的路径。
 
     不往 Claude Code 自己的 settings.json 里写东西——这份是启动时用 --settings
-    传真上去的，Claude Code 会把它跟用户那份合并，用完即弃。两个开关按启动时勾了
-    哪些拼进命令行；勾选状态就此固化，之后改勾不影响已经跑着的会话。
+    传真上去的，Claude Code 会把它跟用户那份合并，用完即弃。开关按启动时勾了哪些
+    拼进命令行；勾选状态就此固化，之后改勾不影响已经跑着的会话。
 
     顺手删掉老版本那份配置：它只干刷文档这一件事、命令行上写的是 --handoff-hook。
-    现在两个行为共用一个入口，留着只会让人以为它还管用。
+    刷文档那条路已经砍了，留着只会让人以为它还管用。
     """
     os.makedirs(HOOK_DIR, exist_ok=True)
     try:
         os.remove(LEGACY_HOOK_SETTINGS)
     except OSError:
         pass
-    command = hook_command(handoff=handoff, auto_continue=auto_continue)
+    command = hook_command(auto_continue=auto_continue)
     payload = {"hooks": {"Stop": [{"hooks": [
         {"type": "command", "command": command}]}]}}
     with open(HOOK_SETTINGS, "w", encoding="utf-8") as f:

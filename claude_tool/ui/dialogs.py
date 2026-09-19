@@ -451,8 +451,7 @@ class LauncherDialogs:
         """点「整理交接文档」时问一句：这份 handoff.md 要不要进版本管理。
 
         只有 git 仓库才有这一问（是不是仓库由 write_handoff 那边先判掉了）。
-        勾选顺手记回工作区条目：自动刷文档的 Stop hook 和换模型流水线那两条都
-        不弹框，照这个存下来的值走。
+        勾选顺手记回工作区条目，下次不用再选。
         """
         dialog = tk.Toplevel(self)
         dialog.grab_set()
