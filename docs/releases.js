@@ -17,8 +17,11 @@ window.DOWNLOAD_BASE = "https://gitee.com/Mr_brainleech/claude_tool/releases/dow
 window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/download";
 
 // 一条记录 = 一个版本。windows / linux / macos 三个字段，有包就填成 {file, size}，
-// 还没有就写 null——页面上那一格会自动画成灰的「还没做」。以后 Linux 的包出来了，
-// 把 null 换成 {"file": "...", "size": 12345} 就行，页面一个字都不用动。
+// 还没有就写 null——页面上那一格会自动画成灰的「还没做」。以后哪个平台的包出来了，
+// 把 null 换成 {"file": "...", "size": 12345} 就行，**链接不用在这儿写**：Gitee 和
+// GitHub 那两个地址都是拿上面两个 base 加版本号、加文件名现拼的，附件传上去就通。
+// 唯一的例外是平台卡上那句说明（比如 Linux 的"64 位，解开放着就能跑"），那份写在
+// docs/index.html 的 PLATFORMS 里，跟这儿是两处。
 //
 // 包里还能再填一个可选的 url：填了就直接拿它当下载地址，不填才按上面的
 // DOWNLOAD_BASE 拼。指到别处（镜像源、别的盘）就填这个。重新打包不会把它抹掉。
@@ -36,7 +39,10 @@ window.RELEASES = [
       "file": "ClaudeLauncher-0.1.0-Setup.exe",
       "size": 10145146
     },
-    "linux": null,
+    "linux": {
+      "file": "ClaudeLauncher-0.1.0-linux-x86_64.tar.gz",
+      "size": 13787980
+    },
     "macos": null
   }
 ];

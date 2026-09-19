@@ -5,6 +5,7 @@ Windows Terminal 是 WinUI3 应用，窗口没法当子窗口塞进别的窗口�
 claude 界面里少数符号会显示成方框，而 WT 里不会。
 """
 import ctypes
+import os
 import subprocess
 
 from claude_tool.claude import CREATE_NEW_CONSOLE, claude_command
@@ -97,6 +98,31 @@ def fresh_terminal(known):
     return None
 
 
+def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
+                   permission=None, beside=None):
+    """在新控制台窗口里跑 claude，返回那个进程对象。
+
+    完整的字符串命令行 + CREATE_NEW_CONSOLE，理由见 claude.claude_command。
+    beside 是"把窗口摆到启动器旁边"的坐标提示，非 Windows 上要靠终端的
+    -geometry 参数实现；这边本来就有一套按句柄挪窗口的办法（bring_next_to），
+    不用它。
+
+    那个进程对象调用方留着轮询 poll()，就知道这个会话还开没开着。
+    """
+    return subprocess.Popen(
+        "cmd /k " + claude_command(cont, prompt, settings, permission),
+        cwd=workdir,
+        creationflags=CREATE_NEW_CONSOLE,
+    )
+
+
+def window_alive(handle):
+    """那个句柄还作不作数。用户已经关掉那扇窗口的话就是 False。"""
+    if not handle:
+        return False
+    return bool(_user32.IsWindow(handle))
+
+
 def bring_next_to(owner_window, target, gap=16):
     """把 target 挪到 owner 旁边——优先右边，右边放不下就放左边。
 
@@ -111,10 +137,7 @@ def bring_next_to(owner_window, target, gap=16):
     width = target_rect.right - target_rect.left
     height = target_rect.bottom - target_rect.top
 
-    left = _user32.GetSystemMetrics(76)
-    right = left + _user32.GetSystemMetrics(78)
-    top = _user32.GetSystemMetrics(77)
-    bottom = top + _user32.GetSystemMetrics(79)
+    left, top, right, bottom = screen_bounds(owner_window)
 
     x = rect.right + gap
     if x + width > right:
@@ -254,6 +277,81 @@ def place_window(window, x, y):
     ctypes.windll.user32.SetWindowPos(
         _frame_handle(window), 0, x, y, 0, 0,
         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+
+
+def screen_bounds(window):
+    """虚拟桌面的边界（左, 上, 右, 下）。多屏拼起来的那一整块，副屏在主屏左边时
+    左边界是负的。window 只是为了跟 nixhost 那份对上签名——那边得问 Tk。"""
+    left = _user32.GetSystemMetrics(76)
+    top = _user32.GetSystemMetrics(77)
+    return (left, top, left + _user32.GetSystemMetrics(78),
+            top + _user32.GetSystemMetrics(79))
+
+
+# ── 交给系统的默认程序 ────────────────────────────────────────────────────
+# startfile 就是双击那件事：目录交给资源管理器，网址交给默认浏览器。它在
+# Windows 上只认 Unicode 参数，正好——路径里有中文也不会乱码。
+
+
+def open_path(path):
+    """用资源管理器打开一个目录（或文件）。"""
+    os.startfile(path)
+
+
+def open_url(url):
+    """用默认浏览器打开一个网址。"""
+    os.startfile(url)
+
+
+# ── 丢回收站 ──────────────────────────────────────────────────────────────
+# 系统里没有"移到回收站"这种调用，只有 shell 的"删除、顺便允许撤销"——带
+# FOF_ALLOWUNDO 就是进回收站，不带就是永久删（两种都实测过，差的就是这一位）。
+# 用的是 shell32 的普通导出，不是 COM，所以不吃这台机器上"裸 ctypes 调 COM
+# 一律 0x80040154"那个坑。
+
+FO_DELETE = 3
+FOF_SILENT = 0x0004
+FOF_NOCONFIRMATION = 0x0010
+FOF_ALLOWUNDO = 0x0040
+FOF_NOCONFIRMMKDIR = 0x0200
+FOF_NOERRORUI = 0x0400
+
+
+class _SHFILEOPSTRUCTW(ctypes.Structure):
+    # 字段顺序和宽度照 shellapi.h 抄。fFlags 是 WORD 而不是 DWORD，写成 DWORD
+    # 后面几个字段全错位——错位了还是照样返回 0，只是删的是别的东西，最难查。
+    _fields_ = [("hwnd", ctypes.c_void_p),
+                ("wFunc", ctypes.c_uint),
+                ("pFrom", ctypes.c_wchar_p),
+                ("pTo", ctypes.c_wchar_p),
+                ("fFlags", ctypes.c_uint16),
+                ("fAnyOperationsAborted", ctypes.c_int),
+                ("hNameMappings", ctypes.c_void_p),
+                ("lpszProgressTitle", ctypes.c_wchar_p)]
+
+
+def trash_path(path):
+    """把 path 丢进回收站，返回成没成。
+
+    这个 API 要的是一串以 NUL 分隔、末尾再来一个 NUL 收尾的路径列表，所以喂
+    进去的字符串自己带一个 NUL——ctypes 转 c_wchar_p 时还会再加一个，正好两个。
+
+    盘上没有回收站（网络盘、可移动盘之类）时它会退化成永久删还照样返回 0，
+    没法从返回值上看出来。所以调用方那边一旦失败就要如实报出来，别当成删干净了。
+    """
+    if not path:
+        return False
+    op = _SHFILEOPSTRUCTW()
+    op.hwnd = None
+    op.wFunc = FO_DELETE
+    op.pFrom = os.path.abspath(path) + "\0"
+    op.pTo = None
+    op.fFlags = (FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI |
+                 FOF_NOCONFIRMMKDIR | FOF_ALLOWUNDO)
+    op.fAnyOperationsAborted = False
+    op.hNameMappings = None
+    op.lpszProgressTitle = None
+    return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
 
 
 # ── 绘制零件 ──────────────────────────────────────────────────────────────

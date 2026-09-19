@@ -15,7 +15,6 @@ from claude_tool.paths import (
     ILLEGAL_CHARS,
     PRESET_DIR,
     SETTINGS_FILE,
-    TOOL_DIR,
     WORKPLACE_DIR,
 )
 from claude_tool.theme import (
@@ -660,8 +659,10 @@ class LauncherDialogs:
     def _open_quick_workspace_dialog(self):
         """「新建一个文件夹」：在默认工作区目录下面建一个新文件夹，当工作区用。
 
-        底下那行「建在 <路径> [更改目录]」是改默认目录的地方——以前主窗口上还
-        并排摆着一行一样的，那行撤了，改到这儿改。
+        底下那行「建在 <路径> [更改目录]」只是把这位默认目录亮出来，顺手也能
+        改。改的入口正经在主界面「工作区」那行上；这儿这个按钮走的是同一个
+        pick_workplace，点完当场落盘——所以点「取消」取消的只是"建这个文件夹"，
+        不会把刚改的默认目录一起吞掉（早先就是这么吞的）。
         """
         dialog = tk.Toplevel(self)
         dialog.grab_set()
@@ -693,10 +694,8 @@ class LauncherDialogs:
                  anchor="w").pack(side="left", padx=(6, 8), fill="x", expand=True)
 
         def choose_base():
-            chosen = filedialog.askdirectory(parent=dialog, title="选择默认工作区目录",
-                                             initialdir=base_var.get() or TOOL_DIR)
-            if chosen:
-                base_var.set(os.path.normpath(chosen))
+            if self.pick_workplace(dialog):
+                base_var.set(self.config_data["workplace"])
 
         PillButton(line, "更改目录", choose_base, bg=PAGE_BG).pack(side="right")
 
@@ -738,6 +737,10 @@ class LauncherDialogs:
 
         self._set_workplace(base)
         save_config(self.config_data)
+        # 这行的按钮是当场落盘的，所以正常走到这儿 base 跟 workplace 已经一样了；
+        # 但主界面那行路径字是听 workplace_var 的，还是问它一声保险——万一以后
+        # 又冒出别的改法，不至于两边显示对不上。
+        self.refresh_workplace_label()
         dialog.destroy()
         self.refresh_workspaces()
         self.feedback_var.set("已建好工作区 {}：{}".format(name, target))
@@ -806,6 +809,70 @@ class LauncherDialogs:
         self.refresh_workspaces()
         self.feedback_var.set("已添加工作区 {}。".format(name))
 
+
+    # ── 搬工作区 ──
+
+    def open_move_dialog(self, item):
+        """「搬迁」：填一个完整的新路径，顺手把末尾那段改了就等于改名。
+
+        真正能不能搬是 mover.check 说了算，这里不自己判一遍——两套判据迟早会
+        分家，而用户看到的话得跟实际拦他的那条是同一句。填错了就把 mover 那句
+        原话摆在对话框里让他改，不关窗口。
+        """
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "搬迁工作区")
+
+        old_path = item["path"]
+
+        tk.Label(body, text="现在的位置", bg=PAGE_BG, fg=MUTED, font=font(10),
+                 anchor="w").grid(row=0, column=0, sticky="w", pady=4)
+        cur_var = tk.StringVar(value=old_path)
+        cur = make_entry(body, cur_var, width=38)
+        cur.configure(state="readonly")
+        cur.grid(row=0, column=1, columnspan=2, sticky="ew", padx=(12, 0), pady=4)
+
+        tk.Label(body, text="搬到哪儿", bg=PAGE_BG, fg=MUTED, font=font(10),
+                 anchor="w").grid(row=1, column=0, sticky="w", pady=4)
+        to_var = tk.StringVar(value=old_path)
+        to_entry = make_entry(body, to_var, width=38)
+        to_entry.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=4)
+
+        def browse():
+            parent = filedialog.askdirectory(parent=dialog,
+                                             title="选新位置上面那层目录")
+            if parent:
+                # 只换"在哪一层"，末尾那一段照旧带过来——想改名的人接着改这里。
+                to_var.set(os.path.join(os.path.normpath(parent),
+                                        os.path.basename(old_path.rstrip("/\\"))))
+
+        PillButton(body, "浏览…", browse, bg=PAGE_BG).grid(row=1, column=2, padx=(8, 0))
+        body.columnconfigure(1, weight=1)
+
+        tk.Label(body,
+                 text="填完整的新路径。末尾那一段想改就改，等于顺手改名。\n"
+                      "搬的过程：先把整个文件夹复制过去 → 逐条对账 → 对上了才把"
+                      "旧的丢进回收站（不是永久删）。\n"
+                      "这个工作区的会话记录（~/.claude/projects 里那一份）跟着走，"
+                      "换到新位置还接得上。",
+                 bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
+                 wraplength=430).grid(row=2, column=0, columnspan=3, sticky="w",
+                                      pady=(10, 0))
+
+        def go():
+            target = os.path.normpath(to_var.get().strip())
+            if not target or target == ".":
+                messagebox.showerror("没填新位置", "请填一个完整的新路径。",
+                                     parent=dialog)
+                return
+            dialog.destroy()
+            self.move_workspace_to(item, target)
+
+        finish_form(dialog, [("开始搬迁", go, True), ("取消", dialog.destroy, False)])
+        dialog.bind("<Return>", lambda e: go())
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        to_entry.focus_set()
+        self._center(dialog)
 
     def _center(self, dialog):
         """把对话框摆到主窗口中间。"""

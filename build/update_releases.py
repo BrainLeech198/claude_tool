@@ -1,10 +1,15 @@
 """把刚打出来的这一版写进 docs/releases.js。
 
-不用手动跑——build/打包.bat 的最后一步会调它。想单独补一条也可以：
+不用手动跑——build/打包.bat 和 build/打包.sh 的最后一步都会调它：
 
-    python build/update_releases.py
+    python build/update_releases.py            # Windows（打包.bat 调的就是这条）
+    python3 build/update_releases.py linux     # Linux（打包.sh 调的）
 
-版本号从 build/claude_tool.iss 里读，那是唯一一处写死版本的地方；安装包从
+不写平台就是 Windows，所以那条老命令一个字没变。两个平台各写各的那一格
+（`windows` / `linux`），互不覆盖：同一个版本号先打 Windows 再打 Linux，第二次
+是在已有那条上补 `linux`，`notes` 和另一格原样留着。
+
+版本号从 build/claude_tool.iss 里读，那是唯一一处写死版本的地方；产物从
 Output\\ 里按版本号找。同一个版本号只更新不重复，别的版本一个字不动。
 
 **发布说明（notes）得自己填**：那是写给人看的话，机器猜不出来。自动补进来的条目
@@ -13,14 +18,16 @@ notes 是空的，页面上就不显示那一行；想写就在 docs/releases.js
 **配着测过哪个版本的 claude 不用填**：脚本自己跑一次本机 `claude --version`，
 记进这一条记录的 `claude` 字段。打包机上装的是哪个版本，官网上就写哪个。没装
 claude、或者读不出版本号，这格就留空，页面上不显示（跟 notes 一个道理）。
+注意它有平台差异：Linux 上得 PATH 里真有 claude 才读得到，读不到就留空。
 
 文件名是 ASCII 的：打包.bat 只能用 ASCII，它要按名字调这个脚本。（这个文件本身
 没有那个限制，中文随便写——cmd 只限制自己解析的那份 bat。）
 
 Gitee 那边的「发行版」得手动建一遍：tag 就打版本号本身（`0.1.0`，别加 v 前缀），
-把 Output 里那个 setup.exe
-传成附件。官网的下载直链就按这个形状拼出来的，少了哪一步点下载就是 404。
+把 Output 里那个 setup.exe（或者 Linux 的 tar.gz）传成附件。官网的下载直链就按
+这个形状拼出来的，少了哪一步点下载就是 404。
 """
+import glob
 import json
 import os
 import re
@@ -41,6 +48,16 @@ OUTPUT = os.path.join(ROOT, "Output")
 # releases.js 里那行赋值。这个脚本只换等号后面那个数组，文件里其它东西（注释、
 # DOWNLOAD_BASE）原样留着。
 MARKER = "window.RELEASES = "
+
+# 每个平台怎么在 Output/ 里认出自己的产物。Windows 是死的（Inno 的
+# OutputBaseFilename 定下了）；Linux 用通配是因为 tar 的名字里带架构（uname -m），
+# 脚本不写死，将来在 ARM 上打也认得出。
+ARTIFACTS = {
+    "windows": "ClaudeLauncher-{}-Setup.exe",
+    "linux": "ClaudeLauncher-{}-linux-*.tar.gz",
+}
+# releases.js 里每条记录都有的三个平台格子，没有的那格是 null，页面上画成灰的。
+PLATFORM_KEYS = ("windows", "linux", "macos")
 
 
 def read_version():
@@ -73,14 +90,32 @@ def local_claude():
     return number(parts) if parts else ""
 
 
-def main():
-    version = read_version()
-    exe = "ClaudeLauncher-{}-Setup.exe".format(version)
-    installer = os.path.join(OUTPUT, exe)
-    if not os.path.isfile(installer):
-        sys.exit("找不到安装包：{}\n先把 打包.bat 的 PyInstaller 和 Inno 两步跑完。".format(installer))
+def find_artifact(platform, version):
+    """在 Output/ 里认出这一版这个平台的产物，返回文件名。
 
-    size = os.path.getsize(installer)
+    Linux 用通配匹配架构那一段，所以可能一匹配就是好几个（同一版打了 x86_64 又打
+    了 aarch64）。releases.js 里一格只放得下一个，这时候不猜——报出来让人自己删。
+    """
+    pattern = os.path.join(OUTPUT, ARTIFACTS[platform].format(version))
+    hits = sorted(os.path.basename(p) for p in glob.glob(pattern))
+    if not hits:
+        sys.exit("找不到产物：{}\n先把这个平台的打包那几步跑完。".format(pattern))
+    if len(hits) > 1:
+        sys.exit("Output/ 里这一版的 {} 产物不止一个，releases.js 一格放不下：\n"
+                 "  {}\n只留要发的那一个，其余挪走再跑。".format(platform,
+                                                              "\n  ".join(hits)))
+    return hits[0]
+
+
+def main():
+    platform = sys.argv[1] if len(sys.argv) > 1 else "windows"
+    if platform not in ARTIFACTS:
+        sys.exit("不认识这个平台：{}（只能是 {}）".format(
+            platform, " / ".join(sorted(ARTIFACTS))))
+
+    version = read_version()
+    name = find_artifact(platform, version)
+    size = os.path.getsize(os.path.join(OUTPUT, name))
     date = time.strftime("%Y-%m-%d")
 
     with open(DATA, encoding="utf-8") as f:
@@ -90,20 +125,22 @@ def main():
     releases = json.loads(text[start:end])
 
     fresh = {"version": version, "date": date, "notes": "",
-             "claude": local_claude(),
-             "windows": {"file": exe, "size": size}, "linux": None, "macos": None}
+             "claude": local_claude(), "windows": None, "linux": None,
+             "macos": None}
+    fresh[platform] = {"file": name, "size": size}
     for old in releases:
         if old.get("version") == version:
-            # 重打同一个版本：只刷新日期和 file/size，其余一律留着。说明（notes）
-            # 是手写的；windows 里还可能有个手填的 url（指到镜像源），整块换掉
-            # 就把它们一起抹了。
+            # 重打同一个版本：只刷新日期和本平台那格的 file/size，其余一律留着。
+            # 说明（notes）是手写的；本平台那格里还可能有个手填的 url（指到镜像
+            # 源），整格换掉就把它们一起抹了。另外两格是别的平台的东西，一个字节
+            # 都不动——先打 Windows 再打 Linux，第二次不能把第一次写的抹了。
             old["date"] = date
-            pkg = old.get("windows")
+            pkg = old.get(platform)
             if isinstance(pkg, dict):
-                pkg.update(fresh["windows"])
+                pkg.update(fresh[platform])
             else:
-                old["windows"] = fresh["windows"]
-            for key in ("notes", "linux", "macos"):
+                old[platform] = fresh[platform]
+            for key in PLATFORM_KEYS + ("notes",):
                 old.setdefault(key, fresh[key])
             # claude 这格只补空的：上一版记录里已经写了"配 claude X 测过"，就不
             # 改动它——重打包不等于重新测过，别让"最近一次打包时本机是哪个版本"
@@ -118,8 +155,8 @@ def main():
     with open(DATA, "w", encoding="utf-8", newline="\n") as f:
         f.write(text[:start] + body + text[end:])
 
-    print("docs/releases.js  <-  v{} · {} · {:.1f} MB · claude {}".format(
-        version, exe, size / 1048576, fresh["claude"] or "没测到"))
+    print("docs/releases.js  <-  v{} · {} · {} · {:.1f} MB · claude {}".format(
+        version, platform, name, size / 1048576, fresh["claude"] or "没测到"))
 
 
 if __name__ == "__main__":
