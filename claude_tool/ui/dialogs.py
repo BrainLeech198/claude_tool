@@ -11,7 +11,13 @@ import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from claude_tool.paths import ILLEGAL_CHARS, PRESET_DIR, TOOL_DIR, WORKPLACE_DIR
+from claude_tool.paths import (
+    ILLEGAL_CHARS,
+    PRESET_DIR,
+    SETTINGS_FILE,
+    TOOL_DIR,
+    WORKPLACE_DIR,
+)
 from claude_tool.theme import (
     ACCENT,
     BORDER,
@@ -28,7 +34,18 @@ from claude_tool.permissions import (
     permission_option,
     workspace_permission,
 )
-from claude_tool.presets import PROVIDERS, discover_presets, host_of, preset_path, read_env
+from claude_tool.presets import (
+    IMPORT_ALREADY,
+    IMPORT_NO_ENV,
+    IMPORT_NO_FILE,
+    PROVIDERS,
+    discover_presets,
+    host_of,
+    preset_path,
+    probe_current_settings,
+    read_env,
+    suggest_preset_name,
+)
 from claude_tool.config import path_key, save_config
 from claude_tool.handoff import HANDOFF_FILE, READ_HANDOFF_PROMPT
 from claude_tool.widgets import PillButton, finish_form, make_entry, make_form
@@ -46,8 +63,14 @@ class LauncherDialogs:
         dialog.grab_set()
         body = make_form(dialog, "编辑模型" if is_edit else "添加模型")
 
-        fields = [("预设名称", "name", False), ("Base URL", "base_url", False),
-                  ("API Token", "token", True), ("模型名", "model", False)]
+        # 每个字段除了术语本身，再带一句人话备注：懂的人看标签，不懂的看备注，
+        # 谁也不必将就。
+        fields = [
+            ("预设名称", "列表里显示的名字，随便起", "name", False),
+            ("Base URL", "服务商的接口地址，上面挑一家会自动填", "base_url", False),
+            ("API Token", "你在这家后台拿到的密钥", "token", True),
+            ("模型名", "具体用哪款，挑完供应商会自动填", "model", False),
+        ]
         values = {"name": old_name or "", "base_url": env.get("ANTHROPIC_BASE_URL", ""),
                   "token": env.get("ANTHROPIC_AUTH_TOKEN", ""),
                   "model": env.get("ANTHROPIC_MODEL", "")}
@@ -100,9 +123,13 @@ class LauncherDialogs:
                     break
         row += 1
 
-        for label, key, secret in fields:
-            tk.Label(body, text=label, bg=PAGE_BG, fg=MUTED, font=font(10),
-                     anchor="w").grid(row=row, column=0, sticky="w", pady=4)
+        for label, hint, key, secret in fields:
+            cell = tk.Frame(body, bg=PAGE_BG)
+            cell.grid(row=row, column=0, sticky="w", pady=4)
+            tk.Label(cell, text=label, bg=PAGE_BG, fg=TEXT, font=font(10),
+                     anchor="w").pack(anchor="w")
+            tk.Label(cell, text=hint, bg=PAGE_BG, fg=MUTED, font=font(9),
+                     anchor="w").pack(anchor="w")
             var = tk.StringVar(value=values[key])
             entry = make_entry(body, var, width=40, secret=secret)
             entry.grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=4)
@@ -135,9 +162,9 @@ class LauncherDialogs:
                        ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
         row += 1
 
-        note = "改名会一并重命名 claude_settings\\<名称>.json；" if is_edit else \
-               "设置会存成 .claude_tool\\claude_settings\\<名称>.json；"
-        tk.Label(body, text=note + "env 之外的公共设置沿用原文件。",
+        note = "改名会一并重命名那份配置文件；" if is_edit else "会存成一份配置文件；"
+        tk.Label(body, text=note + "就在 ~/.claude_tool/claude_settings/ 里，"
+                                  "以后想手改也行。",
                  bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
                  ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
@@ -221,6 +248,101 @@ class LauncherDialogs:
             "language": "简体中文",
             "skipDangerousModePermissionPrompt": True,
         }
+
+
+    # ── 导入当前配置 ──
+
+    def _import_current(self):
+        """把 Claude Code 正在用的那份配置一键存成预设。
+
+        新手最常见的开局是"我已经在用 claude 了"，可让他到别处把 Base URL 和
+        key 抄进表单纯属折腾——那两样本来就躺在 settings.json 里。全程只读那份
+        文件；会写它的地方全项目只有 switch_model() 一处，而且是有意的覆盖。
+        """
+        status, payload = probe_current_settings()
+        if status == IMPORT_NO_FILE:
+            messagebox.showinfo(
+                "还没用过 Claude Code",
+                "这台机器上还没有 Claude Code 的配置：\n{}\n\n"
+                "先在别的地方用一次 claude（或者点顶上的「一键安装」），"
+                "再回来点这里。".format(SETTINGS_FILE), parent=self)
+            return
+        if status == IMPORT_NO_ENV:
+            messagebox.showinfo(
+                "不用导入",
+                "这份配置里没有第三方服务商的地址和密钥，说明你用的是"
+                "官方账号登录。\n\n这种情况不用建模型，直接点右边的工作区就能开跑。",
+                parent=self)
+            return
+        if status == IMPORT_ALREADY:
+            messagebox.showinfo(
+                "已经在用了",
+                "当前生效的就是预设「{}」，不用再导一份。".format(payload), parent=self)
+            return
+        self._ask_import_name(payload)
+
+    def _ask_import_name(self, payload):
+        """导入前确认名字——列表里那张卡片就靠它认人。"""
+        env = payload.get("env") or {}
+        base = str(env.get("ANTHROPIC_BASE_URL") or "")
+        model = str(env.get("ANTHROPIC_MODEL") or "")
+
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "导入当前配置")
+
+        tk.Label(body, text="从 Claude Code 正在用的配置里读到的：", bg=PAGE_BG,
+                 fg=MUTED, font=font(9), anchor="w",
+                 ).grid(row=0, column=0, columnspan=2, sticky="w")
+        tk.Label(body, text="{}  ·  {}".format(host_of(base), model), bg=PAGE_BG,
+                 fg=TEXT, font=font(10), anchor="w", justify="left",
+                 wraplength=430).grid(row=1, column=0, columnspan=2, sticky="w",
+                                      pady=(2, 14))
+
+        tk.Label(body, text="预设名称", bg=PAGE_BG, fg=MUTED, font=font(10),
+                 anchor="w").grid(row=2, column=0, sticky="w", pady=4)
+        name_var = tk.StringVar(value=suggest_preset_name(env) or "")
+        entry = make_entry(body, name_var, width=34)
+        entry.grid(row=2, column=1, sticky="ew", padx=(12, 0), pady=4)
+        body.columnconfigure(1, weight=1)
+
+        hint = tk.StringVar(value="以后在列表里就认这个名字。")
+        tk.Label(body, textvariable=hint, bg=PAGE_BG, fg=MUTED, font=font(9),
+                 justify="left", anchor="w", wraplength=440,
+                 ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        def save():
+            name = name_var.get().strip()
+            if not name:
+                hint.set("给它起个名字。")
+                return
+            if re.search(ILLEGAL_CHARS, name):
+                hint.set("名字里不能有 < > : \" / \\ | ? * 和空格。")
+                return
+            target = preset_path(name)
+            if os.path.exists(target):
+                hint.set("已经有一个叫「{}」的预设了，换个名字。".format(name))
+                return
+            try:
+                os.makedirs(PRESET_DIR, exist_ok=True)
+                with open(target, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                messagebox.showerror("保存失败",
+                                     "写入 {} 失败：\n{}".format(target, e),
+                                     parent=dialog)
+                return
+            dialog.destroy()
+            # 不调 switch_model：存下的内容跟 settings.json 逐字一样，本来就是当前
+            # 生效的那份。刷新一下列表，它自己会亮成"当前"。
+            self.feedback_var.set("已把当前在用的配置存成预设「{}」。".format(name))
+            self.refresh_models()
+
+        finish_form(dialog, [("保存", save, True), ("取消", dialog.destroy, False)])
+        dialog.bind("<Return>", lambda e: save())
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        entry.focus_set()
+        self._center(dialog)
 
 
     def open_workspace(self, item):

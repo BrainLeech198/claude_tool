@@ -228,3 +228,65 @@ def test_preset(path, timeout=15):
         return False, "连不上 · " + reason
     except Exception as e:
         return False, type(e).__name__
+
+
+# ── 导入当前配置 ──────────────────────────────────────────────────────────
+# 新手最常见的开局不是"从零填表单"，是"我已经在别的窗口里用着 claude 了，想让
+# 启动器认出来"。可 Base URL 和 API Token 本来就躺在 ~/.claude/settings.json 里，
+# 让人从别处抄一遍再粘进表单，纯属折腾。所以给一条一键路：读出来，存成预设。
+#
+# 这份文件是 Claude Code 自己的，全程只读——全项目会写它的地方只有
+# switch_model() 一处，而且是有意的覆盖。
+
+IMPORT_OK = "ok"            # 有第三方服务商配置，能导
+IMPORT_NO_FILE = "no-file"  # 机器上还没这份配置 = 还没用过 Claude Code
+IMPORT_NO_ENV = "no-env"    # 有配置但没那三样 = 走的是官方账号登录
+IMPORT_ALREADY = "already"  # 已经有内容一样的预设了
+
+
+def read_current_settings():
+    """Claude Code 现在那份 settings.json 的内容，读不到给空字典。"""
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def probe_current_settings():
+    """当前配置能不能导成预设，返回 (状态, 附加数据)。
+
+    already 的附加数据是那个已有预设的名字，好让提示语能直说"就是「X」"。
+    ok 的附加数据是整份 settings 内容——存的时候照抄整份而不是只抄 env，
+    这样它跟当前配置逐字一样，列表里立刻认得出是"当前"。
+    """
+    data = read_current_settings()
+    if not data:
+        return IMPORT_NO_FILE, None
+    env = data.get("env")
+    if not isinstance(env, dict):
+        env = {}
+    if not (env.get("ANTHROPIC_BASE_URL") and env.get("ANTHROPIC_AUTH_TOKEN")
+            and env.get("ANTHROPIC_MODEL")):
+        return IMPORT_NO_ENV, None
+    name = active_preset(discover_presets())
+    if name:
+        return IMPORT_ALREADY, name
+    return IMPORT_OK, data
+
+
+def suggest_preset_name(env):
+    """给导入的预设起个名字。
+
+    先拿域名去常用供应商表里对——用户认的是"DeepSeek"这种名字，不是
+    "api.deepseek.com"。对不上就用模型名，再不行用域名。都没有返回 None。
+    """
+    base = str(env.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
+    model = str(env.get("ANTHROPIC_MODEL") or "").strip()
+    host = host_of(base) if base else ""
+    if host:
+        for _short, label, known_base, _known_model in PROVIDERS:
+            if host_of(known_base) == host:
+                return label
+    return model or host or None

@@ -98,6 +98,7 @@ from claude_tool.widgets import (
     PillButton,
     Row,
     ScrollArea,
+    Tip,
     make_entry,
 )
 
@@ -346,8 +347,12 @@ class Launcher(LauncherDialogs, tk.Tk):
         header.pack(fill="x")
         line = tk.Frame(header, bg=PANEL_BG)
         line.pack(fill="x", padx=20, pady=12)
-        PillButton(line, "打开配置目录", self._open_tool_dir,
-                   bg=PANEL_BG).pack(side="right")
+        # "配置目录"四个字对没上手的人等于没解释，得补一句这是哪儿。但顶栏就
+        # 一条，左边还摆着模型名和版本号——塞一句话进去版本号立刻被截掉半截。
+        # 所以挂悬停提示，鼠标停上去才出。
+        tool_dir = PillButton(line, "打开配置目录", self._open_tool_dir, bg=PANEL_BG)
+        tool_dir.pack(side="right")
+        Tip(tool_dir, "模型预设和工作区都记在这儿，想手改文件就从这儿进去")
 
         tk.Label(line, text="当前模型", bg=PANEL_BG, fg=MUTED,
                  font=font(9)).pack(side="left", padx=(0, 8))
@@ -427,6 +432,7 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.model_list = self._build_section(
             self.side, "模型", max_height=MODEL_MAX,
             actions=[("＋ 添加", self._open_model_dialog),
+                     ("导入当前", self._import_current),
                      ("测试", self.test_all_models),
                      ("刷新", self.refresh_models)])
 
@@ -1091,8 +1097,21 @@ class Launcher(LauncherDialogs, tk.Tk):
         inner = self.model_list.inner
 
         if not presets:
-            tk.Label(inner, text="还没有模型预设，点右上角「＋ 添加」建一个。",
-                     bg=PAGE_BG, fg=MUTED, font=font(10)).pack(anchor="w", pady=10, padx=6)
+            # 空状态是新手第一眼撞上的东西，别只丢一句"点右上角"。先把"模型"这
+            # 个词解释了（备注留着，术语本身不动），再把两条路直接摆到眼前。
+            tk.Label(inner, text="还没有模型。", bg=PAGE_BG, fg=TEXT,
+                     font=font(10, True)).pack(anchor="w", padx=6, pady=(12, 3))
+            tk.Label(inner, text="模型 = 你打算用哪家的 AI（DeepSeek、Kimi 这种）。\n"
+                                 "已经在别的窗口里用着 claude 了，就直接导进来；"
+                                 "没配过就手动填一个。",
+                     bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
+                     ).pack(anchor="w", padx=6, pady=(0, 9))
+            buttons = tk.Frame(inner, bg=PAGE_BG)
+            buttons.pack(anchor="w", padx=6)
+            PillButton(buttons, "导入当前在用的", self._import_current, primary=True,
+                       bg=PAGE_BG).pack(side="left")
+            PillButton(buttons, "手动填", self._open_model_dialog, bg=PAGE_BG,
+                       ).pack(side="left", padx=(8, 0))
             self._update_model_chip("未设置", False)
             self.model_list.fit()
             return
