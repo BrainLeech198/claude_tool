@@ -86,6 +86,80 @@
     return bytes ? (bytes / 1024 / 1024).toFixed(1) + " MB" : "";
   }
 
+  // ── 下载源菜单 ──
+  // 同一个包挂在两个源上（Gitee 是主源、GitHub 是镜像）。两个链接并排摆着太占地方，
+  // 收成一个按钮：点开再选。只有一个源的时候不弹菜单，直接当普通链接用——没得选就
+  // 别多点一下。
+  function sourcesOf(release, pkg) {
+    var out = [{ url: downloadUrl(release, pkg), name: "Gitee（主源）" }];
+    var m = mirrorUrl(release, pkg);
+    if (m) out.push({ url: m, name: "GitHub（镜像）" });
+    return out;
+  }
+
+  var openMenu = null;
+
+  function closeMenu() {
+    if (!openMenu) return;
+    if (openMenu.menu.parentNode) openMenu.menu.parentNode.removeChild(openMenu.menu);
+    openMenu.trigger.setAttribute("aria-expanded", "false");
+    openMenu = null;
+    document.removeEventListener("click", onDocClick, true);
+    document.removeEventListener("keydown", onKeyDown);
+  }
+
+  function onDocClick(e) {
+    if (openMenu && !openMenu.root.contains(e.target)) closeMenu();
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "Escape") closeMenu();
+  }
+
+  function makeDownload(ctlCls, label, sources, title) {
+    var root = el("div", "dl");
+    var trigger;
+    if (sources.length < 2) {
+      trigger = el("a", ctlCls, label);
+      trigger.href = sources[0].url;
+      if (title) trigger.title = title;
+      root.appendChild(trigger);
+      return root;
+    }
+
+    trigger = el("button", ctlCls, label);
+    trigger.type = "button";
+    trigger.setAttribute("aria-haspopup", "true");
+    trigger.setAttribute("aria-expanded", "false");
+    if (title) trigger.title = title;
+    trigger.appendChild(el("span", "caret", "▾"));
+
+    var menu = el("div", "menu");
+    menu.setAttribute("role", "menu");
+    sources.forEach(function (s) {
+      var item = el("a", "menu-item", s.name);
+      item.href = s.url;
+      item.setAttribute("role", "menuitem");
+      menu.appendChild(item);
+    });
+
+    trigger.addEventListener("click", function () {
+      // 先收掉所有开着的（包括自己），再决定这次是开还是关——点另一个按钮时
+      // 那一个得先关掉，不然页面上会同时浮着两块。
+      var wasOpen = root.contains(menu);
+      closeMenu();
+      if (wasOpen) return;
+      root.appendChild(menu);
+      trigger.setAttribute("aria-expanded", "true");
+      openMenu = { root: root, menu: menu, trigger: trigger };
+      document.addEventListener("click", onDocClick, true);
+      document.addEventListener("keydown", onKeyDown);
+    });
+
+    root.appendChild(trigger);
+    return root;
+  }
+
   // ── 上面那三张平台卡片，拿最新版填 ──
   var cards = document.getElementById("cards");
   if (!releases.length) {
@@ -98,16 +172,8 @@
       card.appendChild(el("div", "card-os", p[1]));
       card.appendChild(el("div", "card-sub", pkg ? p[2] : "还没做"));
       if (pkg) {
-        var a = el("a", "btn", "下载 v" + latest.version);
-        a.href = downloadUrl(latest, pkg);
-        card.appendChild(a);
-        var m = mirrorUrl(latest, pkg);
-        if (m) {
-          var ma = el("a", "card-mirror", "GitHub 下载");
-          ma.href = m;
-          ma.title = pkg.file;
-          card.appendChild(ma);
-        }
+        card.appendChild(makeDownload("btn", "下载 v" + latest.version,
+                                      sourcesOf(latest, pkg), pkg.file));
         card.appendChild(el("div", "card-meta",
           pkg.file + " · " + size(pkg.size) + " · " + latest.date));
       }
@@ -132,17 +198,8 @@
     PLATFORMS.forEach(function (p) {
       var pkg = r[p[0]];
       if (pkg) {
-        var a = el("a", "chip", p[1] + " · " + size(pkg.size));
-        a.href = downloadUrl(r, pkg);
-        a.title = pkg.file;
-        links.appendChild(a);
-        var m = mirrorUrl(r, pkg);
-        if (m) {
-          var ma = el("a", "chip chip-alt", p[1] + " · GitHub");
-          ma.href = m;
-          ma.title = pkg.file + "（GitHub 上下载）";
-          links.appendChild(ma);
-        }
+        links.appendChild(makeDownload("chip", p[1] + " · " + size(pkg.size),
+                                       sourcesOf(r, pkg), pkg.file));
       } else {
         links.appendChild(el("span", "chip chip-off", p[1] + " 还没做"));
       }
