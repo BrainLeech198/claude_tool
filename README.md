@@ -48,18 +48,22 @@ build\打包.bat
 ## 目录
 
 ```
-claude_tool/       源码包，见 docs/设计说明.md 里的模块划分和依赖方向
-docs/              设计说明
+claude_tool/       源码包，见 设计说明.md 里的模块划分和依赖方向
+设计说明.md        设计说明
 build/             PyInstaller spec、Inno 脚本、图标、打包用的 bat
-website/           官网，挂在 GitHub Pages 上，下载直链指 Gitee 发行版
+docs/              官网，GitHub Pages 就发这个目录，下载直链指 Gitee 发行版
 ```
+
+官网发的是 `docs/` 这个目录的原因：GitHub Pages 的「Deploy from a branch」只认仓库
+根 `/` 或 `/docs`，中间没有别的选项。发布源设成 `master` 分支 + `/docs` 目录即可，
+不需要任何 Actions 或额外的 token 权限。
 
 发一版要手动做的只有两件：把 `build\claude_tool.iss` 里的 `AppVersion` 改掉；在
 Gitee 上建一个 tag 为 `v<版本号>` 的发行版，把 `Output\` 里那个 Setup.exe 传成附件。
 其余都包在 `build\打包.bat` 里了，包括把这一版记进官网的版本清单。
 
 用户数据在 `~/.claude_tool/`，跟 Claude Code 的配置分开，卸载时不该删。
-详见 [docs/设计说明.md](docs/设计说明.md)。
+详见 [设计说明.md](设计说明.md)。
 
 ## 状态
 
@@ -70,6 +74,6 @@ Gitee 上建一个 tag 为 `v<版本号>` 的发行版，把 `Output\` 里那个
       主窗口和"加模型"对话框都与重构前逐像素比对过
 - [x] PyInstaller + Inno Setup 打包（冻结版与源码版逐像素一致；装一遍卸一遍
       验过，用户数据不受影响）
-- [x] 面向使用者的说明（官网 `website/` 上的「怎么装」）
+- [x] 面向使用者的说明（官网 `docs/` 上的「怎么装」）
 - [x] 官网：下载最新版和历史版本，Linux / macOS 的位置先留着
 - [ ] 代码签名（不然转发出去会被 SmartScreen 拦）
