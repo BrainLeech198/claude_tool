@@ -82,7 +82,7 @@ from claude_tool.handoff import (
     note_handoff_written,
     read_hook_state,
 )
-from claude_tool.winhost import (
+from claude_tool.host import (
     EmbeddedConsole,
     bring_next_to,
     close_window,
