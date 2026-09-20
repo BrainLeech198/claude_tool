@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 
+from claude_tool.paths import LOCAL_BIN, LOCAL_NAMES
 from claude_tool.permissions import DEFAULT_PERMISSION, PERMISSION_VALUES
 
 # 新开一扇控制台窗口 / 别开控制台窗口，都是 Windows 的 creationflags。非 Windows
@@ -62,14 +63,29 @@ def claude_command(cont=False, prompt=None, settings=None, permission=None):
                     for item in argv)
 
 
-def claude_exe():
+def claude_exe(which=shutil.which):
     """claude 的完整路径。直接写 "claude" 在 Windows 上未必解析得到。"""
-    return shutil.which("claude") or "claude"
+    return find_claude(which) or "claude"
 
 
-def find_claude():
-    """找得到 claude 就返回完整路径，找不到返回 None。"""
-    return shutil.which("claude")
+def find_claude(which=shutil.which):
+    """找得到 claude 就返回完整路径，找不到返回 None。
+
+    which 之外还认原生安装脚本那几个落地位置：启动器这个进程的 PATH 不会因为
+    别处装了个东西就刷新，用户装完当场点「重新检测」得能找到——不然他会以为
+    没装上，再装一遍。
+
+    which 能塞假的进来，跟 install.routes 那边一个路数：探针要撞"PATH 里没有、
+    但 ~/.local/bin 里躺着"这一种，不能去改这台机器真正的 PATH。
+    """
+    found = which("claude")
+    if found:
+        return found
+    for name in LOCAL_NAMES:
+        candidate = os.path.join(LOCAL_BIN, name)
+        if os.path.exists(candidate):
+            return candidate
+    return None
 
 
 def python_exe():
@@ -85,11 +101,6 @@ def python_exe():
         if os.path.exists(candidate):
             return candidate
     return exe
-
-
-CLAUDE_INSTALL_URL = "https://docs.claude.com/en/docs/claude-code/setup"
-CLAUDE_WINGET_ID = "Anthropic.ClaudeCode"
-CLAUDE_NPM_PACKAGE = "@anthropic-ai/claude-code"
 
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0

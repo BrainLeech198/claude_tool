@@ -39,6 +39,9 @@ def default_config():
         "auto_continue": False,
         "embed": False,
         "auto_version_check": False,
+        # 查的是启动器**自己**有没有新版（官网上那份 releases.js），跟上面那条
+        # "查 claude 有没有新版"是两件事：一个问 npm，一个问我们自己的官网。
+        "auto_self_update": False,
         # 「AI 托管」上次选的档、上次丢给它的那个工作区、以及第 2 档用哪个模型
         # 当指挥。记着是为了下次打开对话框直接停在原处，不用重挑。档位只认 1/2/3。
         "autonomy": 1,

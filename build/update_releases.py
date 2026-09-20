@@ -9,8 +9,9 @@
 （`windows` / `linux`），互不覆盖：同一个版本号先打 Windows 再打 Linux，第二次
 是在已有那条上补 `linux`，`notes` 和另一格原样留着。
 
-版本号从 build/claude_tool.iss 里读，那是唯一一处写死版本的地方；产物从
-Output\\ 里按版本号找。同一个版本号只更新不重复，别的版本一个字不动。
+版本号从 claude_tool/__init__.py 的 __version__ 读，那是唯一一处写死版本的地方
+（启动器自己也要拿它跟网上比，见 claude_tool/versions.py）；产物从 Output\\ 里按
+版本号找。同一个版本号只更新不重复，别的版本一个字不动。
 
 **发布说明（notes）得自己填**：那是写给人看的话，机器猜不出来。自动补进来的条目
 notes 是空的，页面上就不显示那一行；想写就在 docs/releases.js 里补一句。
@@ -30,7 +31,6 @@ Gitee 那边的「发行版」得手动建一遍：tag 就打版本号本身（`
 import glob
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -39,10 +39,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 找 claude、解版本号都借包里的那份定义——官网上写下的这个数，回头要跟启动器
 # 自己查出来的比大小（claude_tool/versions.py），两边解出来的形状必须一样。
 sys.path.insert(0, ROOT)
+from claude_tool import __version__               # noqa: E402
 from claude_tool.claude import find_claude        # noqa: E402
 from claude_tool.versions import number, parse    # noqa: E402
 
-ISS = os.path.join(ROOT, "build", "claude_tool.iss")
 DATA = os.path.join(ROOT, "docs", "releases.js")
 OUTPUT = os.path.join(ROOT, "Output")
 # releases.js 里那行赋值。这个脚本只换等号后面那个数组，文件里其它东西（注释、
@@ -61,13 +61,7 @@ PLATFORM_KEYS = ("windows", "linux", "macos")
 
 
 def read_version():
-    # .iss 是 UTF-8 带 BOM 的（Inno 靠 BOM 认出它是 UTF-8），utf-8-sig 吃掉 BOM。
-    with open(ISS, encoding="utf-8-sig") as f:
-        text = f.read()
-    found = re.search(r'^#define\s+AppVersion\s+"([^"]+)"', text, re.M)
-    if not found:
-        sys.exit("claude_tool.iss 里没找到 #define AppVersion")
-    return found.group(1)
+    return __version__
 
 
 def local_claude():

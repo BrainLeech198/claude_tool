@@ -7,10 +7,15 @@ feedback_var、refresh_*），所以没有把状态收进单独的对象——�
 """
 import json
 import os
+import queue
 import re
+import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from claude_tool import install
+from claude_tool.claude import find_claude
+from claude_tool.host import open_url
 from claude_tool.paths import (
     ILLEGAL_CHARS,
     PRESET_DIR,
@@ -21,6 +26,7 @@ from claude_tool.theme import (
     ACCENT,
     BORDER,
     MUTED,
+    OK,
     PAGE_BG,
     PANEL_BG,
     TEXT,
@@ -264,7 +270,7 @@ class LauncherDialogs:
             messagebox.showinfo(
                 "还没用过 Claude Code",
                 "这台机器上还没有 Claude Code 的配置：\n{}\n\n"
-                "先在别的地方用一次 claude（或者点顶上的「一键安装」），"
+                "先在别的地方用一次 claude（或者点顶上横幅那颗「帮我装 claude」），"
                 "再回来点这里。".format(SETTINGS_FILE), parent=self)
             return
         if status == IMPORT_NO_ENV:
@@ -710,6 +716,212 @@ class LauncherDialogs:
         goal.focus_set()
         self._center(dialog)
 
+    def _open_install_dialog(self):
+        """没找到 claude 时，那颗「帮我装 claude」开的面板。
+
+        三块，从上到下：这台机器上是什么（体检表）、能走哪几条装法（全列出来，
+        前提不满足的灰着并写明为什么）、选中那条的命令行。点「开始安装」之后
+        输出直接流进底下那块，不另开控制台窗口——不然用户点完还得自己去找那扇
+        新窗口，装完了也不知道该看哪儿。
+
+        装法那份清单在 install.routes() 里，这层只管画。
+        """
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "帮你装 claude")
+
+        routes = install.routes()
+        claude_path = find_claude()
+        table = install.checkup(claude_path=claude_path)
+
+        tk.Label(body, text="这台机器上是什么", bg=PAGE_BG, fg=TEXT,
+                 font=font(10, True), anchor="w").grid(
+                     row=0, column=0, columnspan=2, sticky="w")
+
+        for index, (label, value, good) in enumerate(table, start=1):
+            tk.Label(body, text=label, bg=PAGE_BG, fg=MUTED, font=font(9),
+                     anchor="w").grid(row=index, column=0, sticky="w", padx=(12, 0))
+            tk.Label(body, text=value, bg=PAGE_BG, fg=OK if good else WARN,
+                     font=font(9), anchor="e").grid(row=index, column=1, sticky="e")
+
+        head = len(table) + 2
+        tk.Label(body, text="怎么装", bg=PAGE_BG, fg=TEXT, font=font(10, True),
+                 anchor="w").grid(row=head, column=0, columnspan=2, sticky="w",
+                                  pady=(14, 2))
+
+        # 选中的那条下标。默认落在第一条能走的路上——第一条就是官方推荐的原生
+        # 脚本，Windows 上它不需要任何前提，所以几乎总是它。
+        picked = tk.IntVar(value=next(
+            (i for i, r in enumerate(routes) if r["ready"]), 0))
+        first_ready = next((i for i, r in enumerate(routes) if r["ready"]), None)
+
+        row = head + 1
+        # usable 只收前提满足的那几颗：装的时候锁上、装完放开的是它们。
+        # 前提不满足的那几颗本来就是灰的，装完不能顺手把它们也点亮——那等于
+        # 告诉用户"这条现在能走了"，而它还是走不了。
+        usable = []
+        for index, route in enumerate(routes):
+            caption = route["name"] + ("（推荐）" if index == 0 else "")
+            if not route["ready"]:
+                caption += "　走不了"
+            radio = tk.Radiobutton(body, text=caption, variable=picked,
+                                   value=index, bg=PAGE_BG,
+                                   fg=TEXT if route["ready"] else MUTED,
+                                   activebackground=PAGE_BG,
+                                   selectcolor=PANEL_BG, font=font(10),
+                                   anchor="w", highlightthickness=0, bd=0,
+                                   state="normal" if route["ready"] else "disabled")
+            radio.grid(row=row, column=0, columnspan=2, sticky="w",
+                       pady=(8 if index else 4, 0))
+            if route["ready"]:
+                usable.append(radio)
+            # 说明和前提合成一行小字。前提不满足的那条，理由就在这儿——灰着
+            # 不说为什么，用户只能猜。
+            note = "{}　·　{}".format(route["why"], route["needs"])
+            tk.Label(body, text=note, bg=PAGE_BG,
+                     fg=MUTED if route["ready"] else WARN, font=font(9),
+                     anchor="w", justify="left", wraplength=460,
+                     ).grid(row=row + 1, column=0, columnspan=2, sticky="w",
+                            padx=(22, 0))
+            row += 2
+
+        tk.Label(body, text="要跑的命令", bg=PAGE_BG, fg=MUTED,
+                 font=font(10), anchor="w").grid(row=row, column=0, sticky="w",
+                                                 pady=(14, 4))
+        command_holder = tk.Frame(body, bg=PAGE_BG)
+        command_holder.grid(row=row + 1, column=0, columnspan=2, sticky="ew")
+        command_var = tk.StringVar()
+        # 只读的 Entry 而不是 Label：命令要能选中、能复制，Label 做不到。
+        command_box = tk.Entry(command_holder, textvariable=command_var,
+                               state="readonly", readonlybackground=PANEL_BG,
+                               fg=TEXT, relief="flat", font=font(9),
+                               highlightthickness=1, highlightbackground=BORDER)
+        command_box.pack(side="left", fill="x", expand=True)
+
+        # width 写死：Text 默认按 80 个字符要宽度，那比上面几行小字宽出一截，
+        # 一摆上去整个对话框就跟着被撑开。
+        out = tk.Text(body, height=9, width=62, bg=PANEL_BG, fg=TEXT, relief="flat",
+                      font=font(9), highlightthickness=1,
+                      highlightbackground=BORDER, wrap="word", state="disabled")
+
+        def show_command(*_args):
+            index = picked.get()
+            if 0 <= index < len(routes):
+                command_var.set(routes[index]["show"])
+
+        picked.trace_add("write", show_command)
+        show_command()
+
+        def copy_command():
+            self.clipboard_clear()
+            self.clipboard_append(command_var.get())
+            self.feedback_var.set("命令已复制。")
+
+        PillButton(command_holder, "复制", copy_command, bg=PAGE_BG).pack(
+            side="left", padx=(8, 0))
+
+        row += 2
+        tk.Label(body, text="装的过程", bg=PAGE_BG, fg=MUTED, font=font(10),
+                 anchor="w").grid(row=row, column=0, sticky="w", pady=(14, 4))
+        out.grid(row=row + 1, column=0, columnspan=2, sticky="ew")
+
+        def put(text, color=None):
+            out.configure(state="normal")
+            if color:
+                out.tag_configure(color, foreground=color)
+                out.insert("end", text + "\n", color)
+            else:
+                out.insert("end", text + "\n")
+            out.see("end")
+            out.configure(state="disabled")
+
+        put("点「开始安装」之后，装的过程会打在这儿。")
+
+        box = queue.Queue()
+        # 装的时候锁一阵：单选按钮是真能禁用的，按钮那个是 Canvas（PillButton），
+        # 没有 state 这一说，所以只能靠这个标记把回调拦在门口。
+        running = [False]
+
+        def drain():
+            """把读数线程塞进队列的东西画出来。
+
+            **取和画都在主线程**：读数线程只碰 queue，碰 Tk 会炸（而且是在
+            用户机器上偶发地炸）。所以这边用 after 轮询，不用线程回调界面。
+
+            装到一半把窗口关掉不用另做处理：这条 after 链是挂在 dialog 上的，
+            Toplevel 一销毁，tkinter 自己会把排着的活一起撤掉（见 Misc.destroy
+            对 _tclCommands 的清理）。读数线程那边照常跑完、往队列里塞，没人取
+            就是了。
+            """
+            done = None
+            while True:
+                try:
+                    kind, payload = box.get_nowait()
+                except queue.Empty:
+                    break
+                if kind == "line":
+                    put(payload)
+                else:
+                    done = payload
+            if done is not None:
+                finish(done)
+                return
+            dialog.after(80, drain)
+
+        def finish(code):
+            running[0] = False
+            for widget in usable:
+                widget.configure(state="normal")
+            put("— 装完了，退出码 {} —".format(code), OK if code == 0 else WARN)
+            # 装完自己再看一眼。find_claude 认原生脚本那个落地位置，所以这时候
+            # 多半当场就能找到——不用用户自己再去点一次「重新检测」。
+            self._recheck_claude()
+            if find_claude():
+                put("已经找到 claude 了，可以关掉这个窗口。", OK)
+            else:
+                put("还是没找到。上面那几行里有报错的话，照它说的来看看；"
+                    "也可以点「打开官网说明」。", WARN)
+
+        def start_install():
+            if running[0]:
+                return
+            index = picked.get()
+            argv = routes[index]["argv"]
+            if not messagebox.askyesno(
+                    "开始安装",
+                    "要在这台机器上跑这条命令：\n\n{}\n\n"
+                    "它会动系统里的东西（装 claude）。开始吗？"
+                    .format(routes[index]["show"]), parent=dialog):
+                return
+            # 跑起来之后把这些都锁上：装到一半再点一次，同一台机器上会同时跑两
+            # 个安装，谁也说不清最后装成了哪一版。
+            running[0] = True
+            for widget in usable:
+                widget.configure(state="disabled")
+            put("$ " + routes[index]["show"])
+            thread = threading.Thread(
+                target=lambda: box.put(
+                    ("done", install.run_stream(argv, lambda line: box.put(
+                        ("line", line))))),
+                daemon=True)
+            thread.start()
+            dialog.after(80, drain)
+
+        def open_docs():
+            try:
+                open_url(install.DOCS_URL)
+            except OSError as error:
+                messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(error),
+                                     parent=dialog)
+
+        PillButton(body, "开始安装", start_install, primary=True,
+                   bg=PAGE_BG).grid(row=row + 2, column=1, sticky="e", pady=(12, 0))
+        PillButton(body, "打开官网说明", open_docs, bg=PAGE_BG).grid(
+            row=row + 2, column=0, sticky="w", pady=(12, 0))
+        if first_ready is None:
+            put("这台机器上一条现成的路都没有。可以照着「打开官网说明」"
+                "自己装，或者先把上面缺的那几样装好。")
+        self._center(dialog)
 
     def _open_quick_workspace_dialog(self):
         """「新建一个文件夹」：在默认工作区目录下面建一个新文件夹，当工作区用。

@@ -20,6 +20,19 @@ TOOL_DIR = os.path.join(os.path.expanduser("~"), ".claude_tool")
 CONFIG_FILE = os.path.join(TOOL_DIR, "launcher.json")
 PRESET_DIR = os.path.join(TOOL_DIR, "claude_settings")
 WORKPLACE_DIR = os.path.join(TOOL_DIR, "workplace")
+
+# 启动器自己升级时下载的安装包落在哪儿。留在用户数据目录下面（而不是系统临时
+# 目录）是有意的：装完那一步用户没点"是"、或者安装包跑不起来，文件还在原地，
+# 他自己能找过去双击。名字跟安装包同名，一看就知道是哪一版（见 selfupdate.py）。
+DOWNLOAD_DIR = os.path.join(TOOL_DIR, "downloads")
+
+# Claude Code 官方那个原生安装脚本把 claude 装在这儿（Windows 上同一个目录，
+# 只是带扩展名）。这是**别人的**东西，启动器只读不写；摆在这个文件里是因为
+# find_claude 得认它——刚装完这会儿启动器自己的 PATH 还没刷新，不认这儿就
+# 找不到刚装好的那个。
+LOCAL_BIN = os.path.join(os.path.expanduser("~"), ".local", "bin")
+LOCAL_NAMES = ("claude", "claude.exe", "claude.cmd")
+
 # 老版本的遗留位置，只用来各迁移一次，迁完就不再看它们
 LEGACY_CONFIG = os.path.join(CLAUDE_DIR, "launcher.json")
 LEGACY_PREFIX = "settings_"

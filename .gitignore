@@ -15,6 +15,10 @@ build/_venv/
 Output/
 *.iss.bak
 
+# claude_tool.iss 用 #include 吃的那个版本号：由 build/write_version.py 按
+# claude_tool/__init__.py 里的 __version__ 现生成，是产物不是源码。
+build/_version.iss
+
 # 本地调试留下的探针、截图、临时脚本
 _probe_*.py
 _probe_*.png
