@@ -8,7 +8,7 @@ import os
 import shutil
 import sys
 
-from claude_tool.paths import LOCAL_BIN, LOCAL_NAMES
+from claude_tool.paths import LOCAL_BIN, LOCAL_NAMES, NODE_DIR
 from claude_tool.permissions import DEFAULT_PERMISSION, PERMISSION_VALUES
 
 # 新开一扇控制台窗口 / 别开控制台窗口，都是 Windows 的 creationflags。非 Windows
@@ -71,9 +71,11 @@ def claude_exe(which=shutil.which):
 def find_claude(which=shutil.which):
     """找得到 claude 就返回完整路径，找不到返回 None。
 
-    which 之外还认原生安装脚本那几个落地位置：启动器这个进程的 PATH 不会因为
-    别处装了个东西就刷新，用户装完当场点「重新检测」得能找到——不然他会以为
-    没装上，再装一遍。
+    which 之外还认两个"装完就有、但 PATH 里还没有"的落地位置：原生安装脚本那个
+    ~/.local/bin，和便携版 Node 那条路那个 ~/.claude_tool/node（Windows 上 shim
+    直接摆在那儿，别的平台上在它底下的 bin/——见 paths.NODE_DIR）。启动器这个
+    进程的 PATH 不会因为别处装了个东西就刷新，用户装完当场点「重新检测」得能
+    找到——不然他会以为没装上，再装一遍。
 
     which 能塞假的进来，跟 install.routes 那边一个路数：探针要撞"PATH 里没有、
     但 ~/.local/bin 里躺着"这一种，不能去改这台机器真正的 PATH。
@@ -81,10 +83,11 @@ def find_claude(which=shutil.which):
     found = which("claude")
     if found:
         return found
-    for name in LOCAL_NAMES:
-        candidate = os.path.join(LOCAL_BIN, name)
-        if os.path.exists(candidate):
-            return candidate
+    for directory in (LOCAL_BIN, os.path.join(NODE_DIR, "bin"), NODE_DIR):
+        for name in LOCAL_NAMES:
+            candidate = os.path.join(directory, name)
+            if os.path.exists(candidate):
+                return candidate
     return None
 
 

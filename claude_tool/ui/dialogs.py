@@ -716,22 +716,28 @@ class LauncherDialogs:
         goal.focus_set()
         self._center(dialog)
 
-    def _open_install_dialog(self):
-        """没找到 claude 时，那颗「帮我装 claude」开的面板。
+    def _open_install_dialog(self, updating=False):
+        """没找到 claude 时，那颗「帮我装 claude」开的面板；claude 旧了时，顶栏
+        那颗「有新版」开的也是它，只是 updating=True。
 
-        三块，从上到下：这台机器上是什么（体检表）、能走哪几条装法（全列出来，
-        前提不满足的灰着并写明为什么）、选中那条的命令行。点「开始安装」之后
-        输出直接流进底下那块，不另开控制台窗口——不然用户点完还得自己去找那扇
-        新窗口，装完了也不知道该看哪儿。
+        三块，从上到下：这台机器上是什么（体检表）、能走哪几条路（全列出来，
+        前提不满足的灰着并写明为什么）、选中那条的命令行。点「开始」之后输出
+        直接流进底下那块，不另开控制台窗口——不然用户点完还得自己去找那扇新
+        窗口，做完了也不知道该看哪儿。
 
-        装法那份清单在 install.routes() 里，这层只管画。
+        两种模式共用一套控件，差在措辞、差在默认选中哪条：装的时候默认是第一条
+        能走的（官方原生脚本）；升级的时候默认是"这份 claude 当初就是用这条装
+        的"那条（见 install.installed_via），认不出来才退回第一条能走的。
+
+        路那份清单在 install.routes() 里，这层只管画。
         """
         dialog = tk.Toplevel(self)
         dialog.grab_set()
-        body = make_form(dialog, "帮你装 claude")
+        what = "升级" if updating else "装"
+        body = make_form(dialog, "帮你{} claude".format(what))
 
-        routes = install.routes()
         claude_path = find_claude()
+        routes = install.routes(upgrade=updating, claude_path=claude_path)
         table = install.checkup(claude_path=claude_path)
 
         tk.Label(body, text="这台机器上是什么", bg=PAGE_BG, fg=TEXT,
@@ -745,23 +751,25 @@ class LauncherDialogs:
                      font=font(9), anchor="e").grid(row=index, column=1, sticky="e")
 
         head = len(table) + 2
-        tk.Label(body, text="怎么装", bg=PAGE_BG, fg=TEXT, font=font(10, True),
+        tk.Label(body, text="怎么" + what, bg=PAGE_BG, fg=TEXT, font=font(10, True),
                  anchor="w").grid(row=head, column=0, columnspan=2, sticky="w",
                                   pady=(14, 2))
 
-        # 选中的那条下标。默认落在第一条能走的路上——第一条就是官方推荐的原生
-        # 脚本，Windows 上它不需要任何前提，所以几乎总是它。
+        # 选中那条的下标。先看有没有哪条是 routes() 标了 pick 的（升级模式下那
+        # 就是"你现在这份 claude 用的那条"）；没标就落在第一条能走的路上——第一
+        # 条是官方推荐的原生脚本，Windows 上它不需要任何前提，所以几乎总是它。
         picked = tk.IntVar(value=next(
-            (i for i, r in enumerate(routes) if r["ready"]), 0))
+            (i for i, r in enumerate(routes) if r["pick"] and r["ready"]),
+            next((i for i, r in enumerate(routes) if r["ready"]), 0)))
         first_ready = next((i for i, r in enumerate(routes) if r["ready"]), None)
 
         row = head + 1
-        # usable 只收前提满足的那几颗：装的时候锁上、装完放开的是它们。
-        # 前提不满足的那几颗本来就是灰的，装完不能顺手把它们也点亮——那等于
+        # usable 只收前提满足的那几颗：跑的时候锁上、跑完放开的是它们。
+        # 前提不满足的那几颗本来就是灰的，跑完不能顺手把它们也点亮——那等于
         # 告诉用户"这条现在能走了"，而它还是走不了。
         usable = []
         for index, route in enumerate(routes):
-            caption = route["name"] + ("（推荐）" if index == 0 else "")
+            caption = route["name"] + ("（推荐）" if route["pick"] else "")
             if not route["ready"]:
                 caption += "　走不了"
             radio = tk.Radiobutton(body, text=caption, variable=picked,
@@ -775,9 +783,12 @@ class LauncherDialogs:
                        pady=(8 if index else 4, 0))
             if route["ready"]:
                 usable.append(radio)
-            # 说明和前提合成一行小字。前提不满足的那条，理由就在这儿——灰着
-            # 不说为什么，用户只能猜。
+            # 说明、前提、"这条是不是你那份 claude"，合成一行小字。前提不满足的
+            # 那条，理由就在这儿——灰着不说为什么，用户只能猜。升级模式下选错
+            # 一条会在旁边多装一份，那句话也得摆在这儿，不能只写在别处。
             note = "{}　·　{}".format(route["why"], route["needs"])
+            if route["note"]:
+                note = "{}　·　{}".format(note, route["note"])
             tk.Label(body, text=note, bg=PAGE_BG,
                      fg=MUTED if route["ready"] else WARN, font=font(9),
                      anchor="w", justify="left", wraplength=460,
@@ -821,7 +832,7 @@ class LauncherDialogs:
             side="left", padx=(8, 0))
 
         row += 2
-        tk.Label(body, text="装的过程", bg=PAGE_BG, fg=MUTED, font=font(10),
+        tk.Label(body, text=what + "的过程", bg=PAGE_BG, fg=MUTED, font=font(10),
                  anchor="w").grid(row=row, column=0, sticky="w", pady=(14, 4))
         out.grid(row=row + 1, column=0, columnspan=2, sticky="ew")
 
@@ -835,10 +846,10 @@ class LauncherDialogs:
             out.see("end")
             out.configure(state="disabled")
 
-        put("点「开始安装」之后，装的过程会打在这儿。")
+        put("点「开始{}」之后，过程会打在这儿。".format(what))
 
         box = queue.Queue()
-        # 装的时候锁一阵：单选按钮是真能禁用的，按钮那个是 Canvas（PillButton），
+        # 跑的时候锁一阵：单选按钮是真能禁用的，按钮那个是 Canvas（PillButton），
         # 没有 state 这一说，所以只能靠这个标记把回调拦在门口。
         running = [False]
 
@@ -848,7 +859,7 @@ class LauncherDialogs:
             **取和画都在主线程**：读数线程只碰 queue，碰 Tk 会炸（而且是在
             用户机器上偶发地炸）。所以这边用 after 轮询，不用线程回调界面。
 
-            装到一半把窗口关掉不用另做处理：这条 after 链是挂在 dialog 上的，
+            跑到一半把窗口关掉不用另做处理：这条 after 链是挂在 dialog 上的，
             Toplevel 一销毁，tkinter 自己会把排着的活一起撤掉（见 Misc.destroy
             对 _tclCommands 的清理）。读数线程那边照常跑完、往队列里塞，没人取
             就是了。
@@ -872,37 +883,47 @@ class LauncherDialogs:
             running[0] = False
             for widget in usable:
                 widget.configure(state="normal")
-            put("— 装完了，退出码 {} —".format(code), OK if code == 0 else WARN)
-            # 装完自己再看一眼。find_claude 认原生脚本那个落地位置，所以这时候
-            # 多半当场就能找到——不用用户自己再去点一次「重新检测」。
+            put("— {}完了，退出码 {} —".format(what, code),
+                OK if code == 0 else WARN)
+            # 做完自己再看一眼。find_claude 认原生脚本和便携版 Node 那两个落地
+            # 位置，所以这时候多半当场就能找到——不用用户自己再去点一次「重新
+            # 检测」。升级完还要再问一次网上是哪版：顶栏那颗「有新版」得靠这个
+            # 掉下去，不然升完了它还杵在那儿。那条自动查的勾没开也得问这一次
+            # ——用户是手动点的「有新版」过来的，勾没开也该看到结果。
+            if updating and code == 0:
+                self._force_version_check = True
             self._recheck_claude()
             if find_claude():
-                put("已经找到 claude 了，可以关掉这个窗口。", OK)
+                put("{}好了，claude 在 {}。".format(what, find_claude()), OK)
             else:
                 put("还是没找到。上面那几行里有报错的话，照它说的来看看；"
                     "也可以点「打开官网说明」。", WARN)
 
-        def start_install():
+        def start():
             if running[0]:
                 return
             index = picked.get()
-            argv = routes[index]["argv"]
+            route = routes[index]
             if not messagebox.askyesno(
-                    "开始安装",
+                    "开始" + what,
                     "要在这台机器上跑这条命令：\n\n{}\n\n"
-                    "它会动系统里的东西（装 claude）。开始吗？"
-                    .format(routes[index]["show"]), parent=dialog):
+                    "它会动系统里的东西（{} claude）。开始吗？"
+                    .format(route["show"], what), parent=dialog):
                 return
-            # 跑起来之后把这些都锁上：装到一半再点一次，同一台机器上会同时跑两
-            # 个安装，谁也说不清最后装成了哪一版。
+            # 跑起来之后把这些都锁上：跑到一半再点一次，同一台机器上会同时跑两
+            # 个，谁也说不清最后装成了哪一版。
             running[0] = True
             for widget in usable:
                 widget.configure(state="disabled")
-            put("$ " + routes[index]["show"])
+            put("$ " + route["show"])
+            # 每条路可以自己定最长跑多久：便携版 Node 那条要下几十兆，用默认那
+            # 600 秒会在慢网上被拦腰掐掉。
+            timeout = route["timeout"] or install.INSTALL_TIMEOUT
+            argv = route["argv"]
             thread = threading.Thread(
                 target=lambda: box.put(
                     ("done", install.run_stream(argv, lambda line: box.put(
-                        ("line", line))))),
+                        ("line", line)), timeout=timeout))),
                 daemon=True)
             thread.start()
             dialog.after(80, drain)
@@ -914,7 +935,7 @@ class LauncherDialogs:
                 messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(error),
                                      parent=dialog)
 
-        PillButton(body, "开始安装", start_install, primary=True,
+        PillButton(body, "开始" + what, start, primary=True,
                    bg=PAGE_BG).grid(row=row + 2, column=1, sticky="e", pady=(12, 0))
         PillButton(body, "打开官网说明", open_docs, bg=PAGE_BG).grid(
             row=row + 2, column=0, sticky="w", pady=(12, 0))
