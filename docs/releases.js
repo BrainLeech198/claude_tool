@@ -31,6 +31,21 @@ window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/down
 // 也拿官网上这个数当兜底（npm 问不到的时候用）——改它没用，那是打包时写死的。
 window.RELEASES = [
   {
+    "version": "0.2.1",
+    "date": "2026-09-20",
+    "notes": "修了「帮我装 claude」那个面板：撞上官方那个地址的地区限制、拿回来的是一张网页时，不再把它当脚本喂给解释器，而是直接告诉你去挂代理、或者换 winget / npm 那两条路。",
+    "claude": "2.1.150",
+    "windows": {
+      "file": "ClaudeLauncher-0.2.1-Setup.exe",
+      "size": 10236707
+    },
+    "linux": {
+      "file": "ClaudeLauncher-0.2.1-linux-x86_64.tar.gz",
+      "size": 13827653
+    },
+    "macos": null
+  },
+  {
     "version": "0.2.0",
     "date": "2026-09-20",
     "notes": "没装 claude 时能开个面板挑一种装法装上；启动器自己也认得出有没有新版，点一下就把安装包下下来、问一句再打开。",
