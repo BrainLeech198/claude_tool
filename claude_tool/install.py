@@ -96,6 +96,78 @@ def _route(name, why, needs, ready, argv, show):
             "argv": argv, "show": show}
 
 
+def ps_guard(url=NATIVE_PS1):
+    """Windows 上跑原生脚本那条真正要跑的东西：取回来、验一眼、再执行。
+
+    **为什么不能就写 `irm <url> | iex`**：这个地址不是对所有网络都开着。从国内
+    直连会被 302 到 claude.com/app-unavailable-in-region，那页是 Webflow 的
+    HTML，HTTP 状态还是 200——`irm` 高高兴兴把它当内容交给 `iex`，屏幕上刷一屏
+    「此语言版本中不支持 var」「参数列表中缺少参量」，用户只看到「退出码 1」，
+    完全不知道发生了什么（这是真事，0.2.0 上被报回来的就是这个）。
+
+    官方自己的 bootstrap.ps1 里也有一模一样的一道防御（搜它那句 "Reject
+    non-version content"），只是那道防线在第二跳——第一跳就被换成网页的时候它
+    根本轮不到跑。
+
+    url 能换是给探针用的：喂一张 HTML 进去，看它拒不拒。默认就是官方那个地址。
+    """
+    return r"""
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+try {
+    $raw = (Invoke-WebRequest -UseBasicParsing -Uri '__URL__').Content
+} catch {
+    [Console]::WriteLine('安装脚本没取回来：' + $_.Exception.Message)
+    exit 1
+}
+# 那份脚本回来时带的是 application/octet-stream，这种没有 charset 的头，
+# PowerShell 会把 .Content 给成 byte[] 而不是字符串——不先摆平它，下面那些
+# -match 就是在数组上做匹配，好好的脚本会被当成"不像脚本"拒掉（踩过，探针
+# 当场抓住的）。脚本是纯 ASCII，按 UTF-8 解不会有歧义。
+if ($raw -is [byte[]]) { $raw = [Text.Encoding]::UTF8.GetString($raw) }
+if (-not $raw -or $raw -match '<!DOCTYPE|<html|<\?xml' -or
+    $raw -notmatch 'param\s*\(|\$env:|\$ErrorActionPreference') {
+    [Console]::WriteLine('取回来的不是安装脚本，是一张网页——没有执行它。')
+    [Console]::WriteLine('这个地址从国内直连会被引到「你所在的地区用不了」那一页，')
+    [Console]::WriteLine('挂上代理再点一次，或者换下面 winget / npm 那两条路。')
+    exit 1
+}
+Invoke-Expression $raw
+""".strip().replace("__URL__", url)
+
+
+def sh_guard(url=NATIVE_SH):
+    """Linux/macOS 上那条真正要跑的东西，跟 ps_guard 是同一件事两种写法。
+
+    `curl -fsSL ... | bash` 一样挡不住：那边被换成的是一张 HTML 网页，`bash`
+    咬下去就是一屏语法错误。这里的判断是"第一行得以 #! 开头"——真脚本都带
+    shebang，网页没有。用 read 和 [[ ]] 都是 bash 自带的，不额外要 head/grep。
+
+    **别指望 curl 的 -f 帮你挡**：那个地区限制页回的 HTTP 状态是 200。
+    """
+    return r"""
+tmp=$(mktemp) || { echo '建不了临时文件，没往下走。'; exit 1; }
+if ! curl -fsSL -o "$tmp" '__URL__'; then
+    echo '安装脚本没取回来。'
+    rm -f "$tmp"
+    exit 1
+fi
+IFS= read -r first < "$tmp" || first=''
+if [[ "$first" != '#!'* ]]; then
+    echo '取回来的不是安装脚本，是一张网页——没有执行它。'
+    echo '这个地址从国内直连会被引到「你所在的地区用不了」那一页，'
+    echo '挂上代理再试一次，或者换下面 npm 那条路。'
+    rm -f "$tmp"
+    exit 1
+fi
+bash "$tmp"
+code=$?
+rm -f "$tmp"
+exit $code
+""".strip().replace("__URL__", url)
+
+
 def routes(platform=None, which=shutil.which, node=UNSET):
     """这台机器能走的装法，一条一项。
 
@@ -106,7 +178,9 @@ def routes(platform=None, which=shutil.which, node=UNSET):
       name  装法叫什么        why   一句人话说明
       needs 前提（说明白了灰着也是有用的信息）
       ready 能不能走          argv  真要跑的命令
-      show  摆给用户看/复制的那一行（跟 argv 是同一件事的两种形态）
+      show  摆给用户看/复制的那一行——官方那条命令的原样。argv 可能比它多一层
+            校验（见 ps_guard / sh_guard），所以这两者不保证一字不差：show 得短
+            到塞得进面板那一格单行 Entry，还得是用户能拿去别处照着敲的那句。
 
     第一条永远是原生脚本——官方推荐它，而且它不需要任何前提。顺序就是面板上
     从上到下的顺序。
@@ -120,21 +194,22 @@ def routes(platform=None, which=shutil.which, node=UNSET):
         # irm 是 PowerShell 自带的，Windows 上这条不需要前提。
         found.append(_route(
             "官方原生脚本",
-            "官方推荐的那条，装完它自己会更新，不用你管。",
+            "官方推荐的那条，装完它自己会更新，不用你管。"
+            "跑之前会先验一眼取回来的是不是脚本。",
             "不需要装别的东西",
             True,
-            ["powershell", "-NoProfile", "-Command",
-             "irm {} | iex".format(NATIVE_PS1)],
+            ["powershell", "-NoProfile", "-Command", ps_guard()],
             "irm {} | iex".format(NATIVE_PS1)))
     else:
         # install.sh 自己就是 curl 拉下来的，所以 curl 是这条唯一的前提。
         have_curl = which("curl") is not None
         found.append(_route(
             "官方原生脚本",
-            "官方推荐的那条，装完它自己会更新，不用你管。",
+            "官方推荐的那条，装完它自己会更新，不用你管。"
+            "跑之前会先验一眼取回来的是不是脚本。",
             "不需要装别的东西" if have_curl else "没找到 curl，这条走不了",
             have_curl,
-            ["bash", "-c", "curl -fsSL {} | bash".format(NATIVE_SH)],
+            ["bash", "-c", sh_guard()],
             "curl -fsSL {} | bash".format(NATIVE_SH)))
 
     if platform == "win32":
