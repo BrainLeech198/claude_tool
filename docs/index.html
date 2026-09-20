@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Claude 启动器</title>
-<meta name="description" content="Windows 上的 Claude Code 图形启动器：左边挑模型，右边挑工作区，点一下就在那个目录开个窗口跑 claude。">
+<meta name="description" content="Windows / Linux 上的 Claude Code 图形启动器：左边挑模型，右边挑工作区，点一下就在那个目录开个窗口跑 claude。">
 <link rel="icon" href="crab.png">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -15,7 +15,7 @@
     <img src="crab.png" alt="">
     <div>
       <h1>Claude 启动器</h1>
-      <p class="tag">Windows 上的 Claude Code 图形启动器——左边挑模型，右边挑工作区，
+      <p class="tag">Windows / Linux 上的 Claude Code 图形启动器——左边挑模型，右边挑工作区，
         点一下就在那个目录开个窗口跑 claude。</p>
     </div>
   </header>
@@ -28,6 +28,11 @@
   <div id="versions"></div>
 
   <h2>怎么装</h2>
+  <p class="note">两个平台都得先有 <a href="https://docs.claude.com/en/docs/claude-code/setup">Claude Code</a>
+    本身<span id="need-claude"></span>。没装的话启动器顶上会挂一条横幅，点「帮我装 claude」，
+    它照这台机器能走的装法一条条列出来，装的过程直接流在面板里。</p>
+
+  <h3>Windows</h3>
   <ol>
     <li>下载上面那个 <code>Setup.exe</code>，双击。</li>
     <li>装的时候默认免管理员，装在自己账户下（<code>%LOCALAPPDATA%\Programs\claude_tool</code>）。
@@ -37,9 +42,29 @@
     <li>装完那个目录本身就是免安装的，整个拷到另一台机器上双击 <code>claude_tool.exe</code>
       照样能跑。</li>
   </ol>
-  <p class="note">安装包没做代码签名，Windows 的 SmartScreen 会拦一下，点「更多信息 → 仍要运行」即可。
-    另外它需要机器上已经装了 <a href="https://docs.claude.com/en/docs/claude-code/setup">Claude Code</a> 本身<span
-      id="need-claude"></span>。</p>
+  <p class="note">安装包没做代码签名，Windows 的 SmartScreen 会拦一下，点「更多信息 → 仍要运行」即可。</p>
+
+  <h3>Linux</h3>
+  <ol>
+    <li>下载上面 Linux 那格的 <code>ClaudeLauncher-&lt;版本号&gt;-linux-x86_64.tar.gz</code>。</li>
+    <li>解开放到一个你记得住的地方（下面这条里的 <code>*</code> 会自己匹配上版本号）：
+      <br><code>mkdir -p ~/apps &amp;&amp; tar -xzf ClaudeLauncher-*-linux-x86_64.tar.gz -C ~/apps</code>
+      <br>解开是一个 <code>claude_tool/</code> 目录。里面的可执行文件本身就带着执行位，不用再
+      <code>chmod</code>。</li>
+    <li>跑起来：<code>~/apps/claude_tool/claude_tool</code>。第一次用先在左边加一个模型预设、
+      填上 API key，右边加一个工作区目录，点一下就能开跑。</li>
+    <li>想有个点着就能打开的入口，自己写个 <code>.desktop</code> 或者做个软链接就行——这包不带
+      安装器，放哪儿、怎么起都由你定。要挪走或者不要了，把那个目录删掉即可，用户数据在
+      <code>~/.claude_tool</code>，不跟着走。</li>
+  </ol>
+  <p class="note">那包是 x86_64 的，解开放着就能跑，不用另装 Python——运行时都在包里。要有个图形桌面；
+    另外要有个终端模拟器，因为每个会话是开一扇终端窗口跑 claude：启动器会自己找
+    <code>gnome-terminal</code> / <code>konsole</code> / <code>xterm</code> 这一类的，都认不出来就看
+    <code>$TERMINAL</code> 指的是哪个。有两样是 Windows 版才有的：内嵌终端，以及「把窗口挪到启动器
+    旁边 / 压到最上层」（那边认的是窗口句柄，这边只记得自己起出去的那个进程号）。
+    「删交接文档」还要求机器上有 <code>gio</code> 或 <code>trash-put</code>，两个都没有时会报一句。</p>
+  <p class="note">实话说一句：这个 Linux 包只在 WSL 里验过，还没在一台真 Linux 桌面的机器上解压跑过——
+    缺个 so、字体不对这类事有可能出得来。碰上了到仓库提一句。</p>
 
   <footer class="foot">
     <a href="https://gitee.com/Mr_brainleech/claude_tool">Gitee 仓库</a>
