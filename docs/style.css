@@ -51,6 +51,13 @@ h2 {
   border-bottom: 1px solid var(--border);
 }
 
+/* 「怎么装」底下按平台分块用的（Windows / Linux）。比 h2 小一号、不带下划线，
+   免得跟上面那排章节标题抢。 */
+h3 {
+  font-size: 14px;
+  margin: 24px 0 10px;
+}
+
 .cards { display: flex; gap: 14px; flex-wrap: wrap; }
 
 .card {
