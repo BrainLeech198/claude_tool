@@ -30,12 +30,13 @@ if ! "$PY" -c "import PyInstaller" 2>/dev/null; then
     exit 1
 fi
 
-# 版本号只写死在 claude_tool.iss 里一处（跟 Windows 共用那一份），这儿读出来拼
-# 文件名。update_releases.py 自己也会再读一遍——同一处来源，各读各的。
-VER=$(sed -n 's/^#define[[:space:]]*AppVersion[[:space:]]*"\(.*\)"/\1/p' \
-          build/claude_tool.iss | head -1)
+# 版本号只写死在 claude_tool/__init__.py 里一处（Windows 那边也是从这儿取的，
+# 只是它还得多生成一份 build/_version.iss 给 Inno），这儿读出来拼文件名。
+# update_releases.py 自己也会再读一遍——同一处来源，各读各的。
+VER=$(sed -n 's/^__version__[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' \
+          claude_tool/__init__.py | head -1)
 if [ -z "$VER" ]; then
-    echo "build/claude_tool.iss 里没找到 AppVersion" >&2
+    echo "claude_tool/__init__.py 里没找到 __version__" >&2
     exit 1
 fi
 ARCH=$(uname -m)

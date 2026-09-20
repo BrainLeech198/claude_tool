@@ -20,11 +20,18 @@ set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 
 cd /d "%ROOT%" || exit /b 1
 
-echo === 1/3  PyInstaller ===
+echo === 1/4  version ===
+rem Generates build\_version.iss, which claude_tool.iss #includes. The version
+rem number itself lives in claude_tool\__init__.py (the launcher compares it
+rem against the online release list to notice its own updates).
+python build\write_version.py || exit /b 1
+
+echo.
+echo === 2/4  PyInstaller ===
 python -m PyInstaller build\claude_tool.spec --noconfirm --clean --workpath build\_work --distpath dist || exit /b 1
 
 echo.
-echo === 2/3  Inno Setup ===
+echo === 3/4  Inno Setup ===
 rem No parenthesized if-block here: the ")" inside "Program Files (x86)" would
 rem close the block early ("\Inno was unexpected at this time"). Hence goto.
 if exist "%ISCC%" goto :have_iscc
@@ -35,7 +42,7 @@ exit /b 1
 "%ISCC%" build\claude_tool.iss || exit /b 1
 
 echo.
-echo === 3/3  docs release list ===
+echo === 4/4  docs release list ===
 rem Records this version in docs\releases.js so the download page picks it up.
 rem The actual upload to Gitee releases is still manual - see that script's header.
 python build\update_releases.py || exit /b 1

@@ -11,7 +11,11 @@
 
 #define AppName "Claude 启动器"
 #define AppExe "claude_tool.exe"
-#define AppVersion "0.1.0"
+; 版本号不写在这儿——真源是 claude_tool/__init__.py 里的 __version__（启动器自己
+; 要拿它跟网上比，比过一次才知道有没有新版）。这一行是 build/write_version.py
+; 按那个号生成出来的，由 build/打包.bat 在 ISCC 之前跑。单跑 ISCC 会找不到这个
+; 文件，所以照头上那两步走。
+#include "_version.iss"
 
 [Setup]
 ; AppId 是唯一标识，升级安装靠它认出"这还是同一个软件"。**定下来就别改**——

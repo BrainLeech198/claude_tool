@@ -4,7 +4,6 @@
 对话框（加模型、加工作区、点工作区那次询问）在 ui/dialogs.py，以 mixin
 的形式挂在这个类上——它们跟主窗口共享 config_data / feedback_var 那些状态。
 """
-import json
 import os
 import queue
 import shutil
@@ -22,8 +21,11 @@ from claude_tool.paths import (
     SETTINGS_FILE,
     TOOL_DIR,
 )
+from claude_tool import install
 from claude_tool import mover
+from claude_tool import selfupdate
 from claude_tool import versions
+from claude_tool import __version__
 from claude_tool.theme import (
     ACCENT,
     ACCENT_SOFT,
@@ -61,9 +63,6 @@ from claude_tool.config import (
     save_config,
 )
 from claude_tool.claude import (
-    CLAUDE_INSTALL_URL,
-    CLAUDE_WINGET_ID,
-    CREATE_NEW_CONSOLE,
     CREATE_NO_WINDOW,
     claude_exe,
     find_claude,
@@ -243,6 +242,15 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.version_check_queue = queue.Queue()
         self._local_version = ""     # 顶栏那个版本号的原文，比大小时拿它跟网上比
         self._update_pill = None     # 「有新版」那个胶囊，第一次查出落后才建
+        # 启动器**自己**有没有新版，跟上面那套是分开的两件事（一个问 npm，一个问
+        # 我们自己的官网）。这条队列里跑三种消息（见 _poll_self_update）：
+        #   ("check", 是不是手动点的, versions.launcher() 的结果或 None)
+        #   ("progress", 已下字节, 总字节或 None)
+        #   ("done"/"failed", 落盘的路径 / 出错说明)
+        self.self_queue = queue.Queue()
+        self._self_pill = None       # 「下载最新版 X」那颗，查出落后才建
+        self._self_release = None    # 那颗胶囊对应的清单记录，下载要用
+        self._downloading = False    # 下载进行中：那颗胶囊点第二下不理它
         # 目录骨架和一次性迁移都在启动时做完，之后各处只管用，不必再判存在。
         for directory in (TOOL_DIR, PRESET_DIR):
             try:
@@ -271,6 +279,10 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.refresh_workspaces()
         self._apply_min_size()
         self._probe_claude_version()
+        # 勾着才问官网。这条不依赖本机 claude 的版本号（问的是我们自己），所以
+        # 不跟 claude 那条一起挂在 version_queue 上，直接起。
+        if self.auto_self_var.get():
+            self._start_self_check()
         self.after(1000, self._poll_running)
         self.ws_filter.trace_add("write", lambda *_: self.refresh_workspaces())
         self.bind_all("<MouseWheel>", self._on_wheel)
@@ -434,6 +446,9 @@ class Launcher(LauncherDialogs, tk.Tk):
             value=bool(self.config_data.get("auto_continue")))
         self.auto_version_var = tk.BooleanVar(
             value=bool(self.config_data.get("auto_version_check")))
+        # 查的是启动器自己。跟旁边那条一样默认关：都联网。
+        self.auto_self_var = tk.BooleanVar(
+            value=bool(self.config_data.get("auto_self_update")))
         # 括号里写的是各自的真名：内嵌那条走的是 conhost（不是默认的 Windows
         # Terminal，字形回退差些），另一条挂的是 Claude Code 的 Stop hook。
         # 熟练用户要的是这几个词，好去翻文档、翻配置文件；只写大白话他就得猜。
@@ -455,6 +470,8 @@ class Launcher(LauncherDialogs, tk.Tk):
              self._on_auto_continue_toggle, base, 1),
             (self.auto_version_var, "自动查 claude 新版（联网）",
              self._on_version_check_toggle, base + 1, 0),
+            (self.auto_self_var, "自动查启动器新版（联网）",
+             self._on_self_check_toggle, base + 1, 1),
         ]
         for var, text, command, row, col in rows:
             tk.Checkbutton(switches, text=text, variable=var, command=command,
@@ -515,7 +532,14 @@ class Launcher(LauncherDialogs, tk.Tk):
             self._build_terminal(self.panel)
 
     def _build_claude_banner(self):
-        """找不到 claude 时在顶上挂一条，给三条明路。找到就什么都不摆。"""
+        """找不到 claude 时在顶上挂一条。找到就什么都不摆。
+
+        右起第一颗是「帮我装 claude」，开那个安装面板（见 dialogs 那边的
+        _open_install_dialog）：哪几条装法这台机器走得通、每条要跑什么命令、
+        跑起来的输出，都在那一个窗口里。早先这儿直接挂一颗 winget 一键装，
+        别的平台还挂不出来——面板把这些都收进去了，这条横幅只留"进去看看"
+        和"再看看装上了没"。
+        """
         self.claude_path = find_claude()
         if self.claude_path is not None:
             return
@@ -528,13 +552,10 @@ class Launcher(LauncherDialogs, tk.Tk):
                  fg=WARN, font=font(10, True)).pack(side="left")
         PillButton(inner, "重新检测", self._recheck_claude, bg=ALERT_BG,
                    ).pack(side="right", padx=(6, 0))
-        PillButton(inner, "打开官网说明", self._open_install_page, bg=ALERT_BG,
-                   ).pack(side="right", padx=(6, 0))
-        # 一键安装走的是 winget，只有 Windows 有。别的平台上不摆这个按钮——
-        # 摆一个按下去只会弹「没有 winget」的，不如不摆。
-        if shutil.which("winget"):
-            PillButton(inner, "一键安装", self._install_claude, primary=True,
-                       bg=ALERT_BG).pack(side="right")
+        install_pill = PillButton(inner, "帮我装 claude", self._open_install_dialog,
+                                  primary=True, bg=ALERT_BG)
+        install_pill.pack(side="right")
+        Tip(install_pill, "照这台机器能走的装法一条条摆出来，挑一条就能装")
         tk.Frame(banner, bg=BORDER, height=1).pack(fill="x", side="bottom")
 
     def _recheck_claude(self):
@@ -549,38 +570,17 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.feedback_var.set("找到 claude 了：{}".format(self.claude_path))
 
     def _open_install_page(self):
+        """开官方那份说明。顶栏「有新版」那颗胶囊也走这儿。
+
+        跟安装面板里那颗「打开官网说明」是同一个地址（install.DOCS_URL），
+        别在这儿另写一份——这个地址官方是会挪的，两处各存一份迟早对不上。
+        """
         try:
-            open_url(CLAUDE_INSTALL_URL)
+            open_url(install.DOCS_URL)
         except OSError as e:
             messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(e))
             return
         self.feedback_var.set("已在浏览器里打开安装说明。")
-
-    def _install_claude(self):
-        """调 winget 装。这是动系统的操作，先问一声，不偷偷跑。"""
-        if not shutil.which("winget"):
-            messagebox.showinfo(
-                "没有 winget",
-                "这台机器上没有 winget，没法一键装。\n\n"
-                "点「打开官网说明」照着装，或者装好 Node 之后跑：\n"
-                "npm install -g @anthropic-ai/claude-code")
-            return
-        if not messagebox.askyesno(
-                "安装 claude",
-                "会用 winget 装 Anthropic 官方的 Claude Code：\n\n"
-                "winget install --id {}\n\n"
-                "会弹一个新窗口显示进度，装完自己关掉就行。要继续吗？"
-                .format(CLAUDE_WINGET_ID)):
-            return
-        try:
-            subprocess.Popen(
-                ["winget", "install", "--id", CLAUDE_WINGET_ID,
-                 "--accept-package-agreements", "--accept-source-agreements"],
-                creationflags=CREATE_NEW_CONSOLE)
-        except Exception as e:
-            messagebox.showerror("启动失败", "拉不起 winget：\n{}".format(e))
-            return
-        self.feedback_var.set("正在装 claude，装完点「重新检测」。")
 
     def _build_terminal(self, parent):
         """内嵌终端那一块，先建好但不摆出来，等真要内嵌时再 pack。"""
@@ -858,6 +858,7 @@ class Launcher(LauncherDialogs, tk.Tk):
         except queue.Empty:
             pass
         self._poll_version_check()
+        self._poll_self_update()
 
         live = [item for item in self.running if item["proc"].poll() is None]
         if len(live) != len(self.running):
@@ -999,7 +1000,13 @@ class Launcher(LauncherDialogs, tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def check_claude_update(self):
-        """手动查一次（顶栏那个「查更新」）。不管底下那个勾开没开都查。"""
+        """手动查一次（顶栏那个「查更新」）。不管底下那个勾开没开都查。
+
+        只管 claude。启动器自己那件事不搭这颗按钮的车——一次点击出两条结果，反馈
+        栏就一行，后到的把先到的顶掉，用户只看得到一半。自己那个要手动查，就去
+        底下勾一下那颗「自动查启动器新版」（勾上当场就查一次，见
+        _on_self_check_toggle）。
+        """
         if not self._local_version:
             self.feedback_var.set("还没读到本机 claude 的版本号，过一两秒再点一次。")
             return
@@ -1096,6 +1103,175 @@ class Launcher(LauncherDialogs, tk.Tk):
         # 当场就问一次，不用等下次启动：不然勾上去像是没反应。
         if self._local_version:
             self._start_version_check()
+
+    # ── 启动器自己有没有新版 ────────────────────────────────────────────────
+    # 跟上面那条 claude 的流水线是两套：查的是不同东西（一个 npm、一个我们自己的
+    # 官网），能做的事也不一样——claude 那边只能指路，这边能把包装下来替掉自己。
+
+    def _on_self_check_toggle(self):
+        self.config_data["auto_self_update"] = self.auto_self_var.get()
+        save_config(self.config_data)
+        if not self.auto_self_var.get():
+            self.feedback_var.set(
+                "关掉了：启动时不再联网查启动器自己有没有新版。想再查一次就再勾上"
+                "——勾上那一下当场会查。")
+            return
+        self.feedback_var.set("正在问官网启动器出到哪版了…")
+        self._start_self_check(manual=True)
+
+    def _start_self_check(self, manual=False):
+        """后台问一次官网。结果走 self_queue 回主线程。
+
+        跟 claude 那条一样得在后台：网络不通时单是超时就好几秒。
+
+        manual 就是"用户自己勾的/点的"：查不到或者已经是最新，这两种"什么事都
+        没发生"的结果只有手动那次需要说出来，自动那次闭嘴。
+        """
+        def work():
+            try:
+                result = versions.launcher(__version__)
+            except Exception:
+                result = None
+            self.self_queue.put(("check", manual, result))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _poll_self_update(self):
+        """self_queue 里那三种消息各自理事。取和画都在主线程。"""
+        try:
+            while True:
+                message = self.self_queue.get_nowait()
+                if message[0] == "check":
+                    self._apply_self_check(message[1], message[2])
+                elif message[0] == "progress":
+                    self._show_download_progress(*message[1:])
+                elif message[0] == "done":
+                    self._downloaded(message[1])
+                else:
+                    self._download_failed(message[1], message[2])
+        except queue.Empty:
+            pass
+
+    def _apply_self_check(self, manual, result):
+        if result is None:
+            # 跟 claude 那边同一个道理：查不到就闭嘴，除非是用户自己点的。
+            if manual:
+                self.feedback_var.set(
+                    "没查到官网上最新是几版（可能联不上网），比不了。")
+            return
+        if not result.stale:
+            self._hide_self_update()
+            if manual:
+                self.feedback_var.set(
+                    "启动器本机是 {}，网上也是这一版，不用更新。".format(
+                        __version__))
+            return
+        self._show_self_update(result)
+
+    def _show_self_update(self, release):
+        """网上那份比本机新：在顶栏摆一颗「下载最新版 X」。
+
+        跟 claude 那颗「有新版」一路货：都是查出来才建（宽度按文字量，得先知道版本
+        号）。查到的记录连着那颗胶囊一起记下来，下载时直接用，不再问一遍官网。
+        """
+        self._self_release = release
+        if self._self_pill is not None:
+            self._self_pill.destroy()
+        pill = PillButton(self.top_line, "下载最新版 " + release.latest,
+                          self._download_update, primary=True, bg=PANEL_BG)
+        Tip(pill, "点一下：把这一版的安装包下到 ~/.claude_tool/downloads，"
+                  "下完问你要不要现在装")
+        pill.pack(side="left", padx=(10, 0))
+        self._self_pill = pill
+        self.feedback_var.set(
+            "启动器本机是 {}，官网上已经出到 {} 了。".format(
+                __version__, release.latest))
+
+    def _hide_self_update(self):
+        if self._self_pill is None:
+            return
+        self._self_pill.destroy()
+        self._self_pill = None
+
+    def _download_update(self):
+        """胶囊点下去：后台把包装下来。下载中不再理第二下。"""
+        if self._downloading or self._self_release is None:
+            return
+        release = self._self_release
+        self._downloading = True
+        self.feedback_var.set("正在下载 {} …".format(release.latest))
+        seen = [-1]        # 上一个报过的百分比，只在这三个数变了才往队列里塞
+
+        def work():
+            def progress(done, total):
+                percent = int(done * 100 / total) if total else -1
+                if percent != seen[0]:
+                    seen[0] = percent
+                    self.self_queue.put(("progress", done, total))
+            try:
+                path = selfupdate.download(release, progress)
+            except LookupError as error:
+                # 这一版压根没给我们这个系统打包，跟"网断了"是两回事
+                self.self_queue.put(("failed", True, str(error)))
+            except Exception as error:
+                self.self_queue.put(("failed", False, str(error)))
+            else:
+                self.self_queue.put(("done", path))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_download_progress(self, done, total):
+        if total:
+            self.feedback_var.set("正在下载启动器最新版… {}%（{:.1f} / {:.1f} MB）".format(
+                int(done * 100 / total), done / 1048576.0, total / 1048576.0))
+        else:
+            self.feedback_var.set("正在下载启动器最新版… {:.1f} MB".format(
+                done / 1048576.0))
+
+    def _download_failed(self, missing, reason):
+        self._downloading = False
+        if missing:
+            # 这一版还没给我们这个系统打包——不是故障，是我们自己还没打，别写成
+            # "下载失败"吓人。官网上有下载页，问一句要不要开过去。
+            if messagebox.askyesno("这版还没给你的系统打包",
+                                   "{}\n\n要去官网的下载页看一眼吗？".format(reason)):
+                try:
+                    open_url(versions.SITE)
+                except OSError:
+                    pass
+                self.feedback_var.set("官网下载页：{}".format(versions.SITE))
+            else:
+                self.feedback_var.set("{}。".format(reason))
+            return
+        messagebox.showerror("下载没成",
+                             "启动器最新版的包没下下来：\n\n{}".format(reason))
+        self.feedback_var.set("下载没成，看弹窗里那句。")
+
+    def _downloaded(self, path):
+        """包已经在盘上了。Windows 上是安装包——装它就等于替掉正在跑的这个程序，
+        所以得先把启动器关掉；别处那个是 tar.gz，没有安装器，弹个文件夹拉倒。"""
+        self._downloading = False
+        if not selfupdate.INSTALLER:
+            selfupdate.open_artifact(path)
+            self.feedback_var.set(
+                "下好了：{}\n已经弹出它所在的文件夹，解开就能用。".format(path))
+            return
+        if not messagebox.askyesno(
+                "下好了，现在装吗",
+                "新版安装包下好了：\n{}\n\n"
+                "装它得先把启动器关掉——安装程序要覆写的就是正在跑的这些文件。\n"
+                "（内嵌终端里那个 claude 会跟着一起关；开在独立窗口里的不受影响。）\n\n"
+                "现在关掉启动器并运行安装包吗？选「否」的话文件留在那儿，"
+                "你自己双击也行。".format(path)):
+            self.feedback_var.set("安装包放在 {}，想装的时候双击它。".format(path))
+            return
+        try:
+            selfupdate.open_artifact(path)
+        except OSError as error:
+            messagebox.showerror("拉不起来", "安装包没能跑起来：\n{}".format(error))
+            return
+        # 让安装程序先站稳再关自己：这边一 destroy，进程就没了。
+        self.after(800, self._on_close)
 
     def _update_model_chip(self, text, known):
         """模型名胶囊。text 是要显示的字，known 是说这个名字是不是一个真预设。
