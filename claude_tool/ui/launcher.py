@@ -242,6 +242,11 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.version_check_queue = queue.Queue()
         self._local_version = ""     # 顶栏那个版本号的原文，比大小时拿它跟网上比
         self._update_pill = None     # 「有新版」那个胶囊，第一次查出落后才建
+        # 用户从「有新版」那颗胶囊点进安装面板、真把 claude 升级成功了的话，这一格
+        # 就是 True：_poll_running 下次读到版本号（升完那一下会重问一遍，见
+        # _recheck_claude）时，就算"自动查新版"没勾也得去网上问一次——刚升完，顶上
+        # 那个版本号和那颗「有新版」总得跟着变，不然用户以为白升了。
+        self._force_version_check = False
         # 启动器**自己**有没有新版，跟上面那套是分开的两件事（一个问 npm，一个问
         # 我们自己的官网）。这条队列里跑三种消息（见 _poll_self_update）：
         #   ("check", 是不是手动点的, versions.launcher() 的结果或 None)
@@ -457,6 +462,10 @@ class Launcher(LauncherDialogs, tk.Tk):
         # _apply_min_size），挤成一行会把下限顶宽一大截。行按功能分——上排是终端
         # 怎么开，中排是挂 Stop hook 那个行为，最后一行是联网那件事。
         #
+        # 每行都从第 0 列起头。第 0 列空着、第 1 列有东西的那种摆法（"自动继续"
+        # 先前就落在 base 行第 1 列）看着像缩进了一格，四个勾的左边缘参差不齐——
+        # 只有最后一行那两个"联网"是特意并排的，第 1 列才该有东西。
+        #
         # 内嵌那个勾只在 Windows 上摆，摆上了它独占第 0 行。别的平台上这行是空
         # 的，于是下面那几行就落到第 0、1 行——行号得跟着挪，不然中间空出一行。
         base = 1 if EMBED_SUPPORTED else 0
@@ -467,7 +476,7 @@ class Launcher(LauncherDialogs, tk.Tk):
                          self._on_embed_toggle, 0, 0))
         rows += [
             (self.auto_continue_var, "自动继续 Stop hook（替用户拍板）",
-             self._on_auto_continue_toggle, base, 1),
+             self._on_auto_continue_toggle, base, 0),
             (self.auto_version_var, "自动查 claude 新版（联网）",
              self._on_version_check_toggle, base + 1, 0),
             (self.auto_self_var, "自动查启动器新版（联网）",
@@ -570,10 +579,10 @@ class Launcher(LauncherDialogs, tk.Tk):
         self.feedback_var.set("找到 claude 了：{}".format(self.claude_path))
 
     def _open_install_page(self):
-        """开官方那份说明。顶栏「有新版」那颗胶囊也走这儿。
+        """开官方那份说明。安装面板里那颗「打开官网说明」走这儿。
 
-        跟安装面板里那颗「打开官网说明」是同一个地址（install.DOCS_URL），
-        别在这儿另写一份——这个地址官方是会挪的，两处各存一份迟早对不上。
+        跟面板里是同一个地址（install.DOCS_URL），别在这儿另写一份——这个地址
+        官方是会挪的，两处各存一份迟早对不上。
         """
         try:
             open_url(install.DOCS_URL)
@@ -852,8 +861,12 @@ class Launcher(LauncherDialogs, tk.Tk):
                 self.version_var.set(text)
                 self._local_version = text
                 # 勾着"自动查新版"才联网问一次；不勾就只把版本号贴上顶栏。没读到
-                # 版本号（没装 claude）就别去联那次网了，比不出什么来。
-                if self.auto_version_var.get() and versions.parse(text):
+                # 版本号（没装 claude）就别去联那次网了，比不出什么来。刚在安装
+                # 面板里升成功的（_force_version_check）是个例外：用户自己点的
+                # 升级，顶上这几处总得跟着变。
+                if versions.parse(text) and (self.auto_version_var.get()
+                                             or self._force_version_check):
+                    self._force_version_check = False
                     self._start_version_check()
         except queue.Empty:
             pass
@@ -1070,18 +1083,20 @@ class Launcher(LauncherDialogs, tk.Tk):
 
         胶囊是查出来落后才建的（不预先建好再 pack_forget）：它的宽度是按文字量
         出来的，版本号得先知道才能建。
+
+        点它是开安装面板的升级模式，不是开官网：面板那边会先认这份 claude 是
+        哪条路装的，把对的那条升级命令替我们填好、预选上，用户点两下就升完了。
         """
         if self._update_pill is not None:
             self._update_pill.destroy()
         pill = PillButton(self.top_line, "有新版 " + latest,
-                          self._open_install_page, primary=True, bg=PANEL_BG)
-        # "只提醒不替你升级"这句放悬停提示里：反馈栏就一行，塞进去会被裁掉尾巴。
-        Tip(pill, "本机这版 claude 旧了，点开就是官方的安装/升级说明"
-                  "——启动器只提醒，不替你升级")
+                          lambda: self._open_install_dialog(updating=True),
+                          primary=True, bg=PANEL_BG)
+        Tip(pill, "本机这版 claude 旧了，点开就是把升级命令给你填好的面板")
         pill.pack(side="left", padx=(10, 0))
         self._update_pill = pill
         self.feedback_var.set(
-            "本机 claude {}，{} 上已经是 {} 了。点「有新版」看官方升级办法。".format(
+            "本机 claude {}，{} 上已经是 {} 了。点「有新版」帮你升级。".format(
                 local, source, latest))
 
     def _hide_update(self):
@@ -1099,7 +1114,7 @@ class Launcher(LauncherDialogs, tk.Tk):
             return
         self.feedback_var.set(
             "开着了：开启动器时问一次网上 claude 出到哪版了，本机旧了就在版本号"
-            "旁边提一句。只提示，不替你升级。")
+            "旁边提一句。升级命令得你自己点「有新版」去跑。")
         # 当场就问一次，不用等下次启动：不然勾上去像是没反应。
         if self._local_version:
             self._start_version_check()

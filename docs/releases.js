@@ -31,6 +31,21 @@ window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/down
 // 也拿官网上这个数当兜底（npm 问不到的时候用）——改它没用，那是打包时写死的。
 window.RELEASES = [
   {
+    "version": "0.3.0",
+    "date": "2026-09-20",
+    "notes": "顶栏那颗「有新版」不再只是把你送去官网，点开就是升级：先看你这份 claude 当初是哪条路装的（winget / Homebrew / npm / 官方脚本），把那条对的升级命令填好、预选上，其余每条都写明「不是这条装的，选它会再装一份」——认不出来就不替你选。另外多了一条装法「便携版 Node + npm」：机器上连 Node 都没有时，它把官方那个 Node 便携包整个下到 ~/.claude_tool/node 里，再用它自带的 npm 装 claude，不动系统 PATH。最后修了底下四个勾选框没对齐。",
+    "claude": "2.1.150",
+    "windows": {
+      "file": "ClaudeLauncher-0.3.0-Setup.exe",
+      "size": 10242935
+    },
+    "linux": {
+      "file": "ClaudeLauncher-0.3.0-linux-x86_64.tar.gz",
+      "size": 13832425
+    },
+    "macos": null
+  },
+  {
     "version": "0.2.1",
     "date": "2026-09-20",
     "notes": "修了「帮我装 claude」那个面板：撞上官方那个地址的地区限制、拿回来的是一张网页时，不再把它当脚本喂给解释器，而是直接告诉你去挂代理、或者换 winget / npm 那两条路。",

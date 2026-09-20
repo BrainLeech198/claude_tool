@@ -26,6 +26,12 @@ WORKPLACE_DIR = os.path.join(TOOL_DIR, "workplace")
 # 他自己能找过去双击。名字跟安装包同名，一看就知道是哪一版（见 selfupdate.py）。
 DOWNLOAD_DIR = os.path.join(TOOL_DIR, "downloads")
 
+# 便携版 Node + npm 那条路（见 install.node_setup）把东西搁在这儿：官方那个
+# Node 便携包解在这，npm 的 --prefix 也指着它，所以 claude 的 shim 就跟 node
+# 挨着——npm 生成的 shim 是去自己旁边找 node 来跑自己的，两个分开放就跑不起来。
+# 整个目录都是启动器自己拉下来的，卸载就是把它删掉，系统里不留别的痕迹。
+NODE_DIR = os.path.join(TOOL_DIR, "node")
+
 # Claude Code 官方那个原生安装脚本把 claude 装在这儿（Windows 上同一个目录，
 # 只是带扩展名）。这是**别人的**东西，启动器只读不写；摆在这个文件里是因为
 # find_claude 得认它——刚装完这会儿启动器自己的 PATH 还没刷新，不认这儿就
