@@ -35,31 +35,47 @@ def rounded_rect(canvas, x1, y1, x2, y2, radius, **kwargs):
 
 
 class PillButton(tk.Canvas):
-    """圆角胶囊按钮。"""
+    """圆角胶囊按钮。可以置灰：画成灰底灰字、不吃悬停、点了也不回调。"""
 
-    def __init__(self, parent, text, command, primary=False, bg=PAGE_BG, height=28):
+    def __init__(self, parent, text, command, primary=False, bg=PAGE_BG, height=28,
+                 enabled=True):
         width = measure(text, 10, primary) + 26
         super().__init__(parent, width=width, height=height, bg=bg,
                          highlightthickness=0, borderwidth=0)
         self._text = text
         self._command = command
         self._primary = primary
+        self._enabled = enabled
         self._hover = False
         self._cw, self._ch = width, height
 
         self.bind("<Enter>", lambda e: self._set_hover(True))
         self.bind("<Leave>", lambda e: self._set_hover(False))
-        self.bind("<Button-1>", lambda e: self._command())
+        self.bind("<Button-1>", lambda e: self._click())
+        self._draw()
+
+    def _click(self):
+        # Canvas 按钮没有 state 可配，禁用只能自己拦——照 dialogs 里装东西那排
+        # 按钮的老办法。拦在这儿而不是调用方，是为了让"灰的按不动"跟画出来的
+        # 样子是一回事。
+        if self._enabled:
+            self._command()
+
+    def set_enabled(self, value):
+        self._enabled = value
+        self._set_hover(False)
         self._draw()
 
     def _set_hover(self, value):
-        self._hover = value
-        self.configure(cursor="hand2" if value else "arrow")
+        self._hover = value and self._enabled
+        self.configure(cursor="hand2" if self._hover else "arrow")
         self._draw()
 
     def _draw(self):
         self.delete("all")
-        if self._primary:
+        if not self._enabled:
+            fill, outline, fg = HOVER_BG, BORDER, MUTED
+        elif self._primary:
             fill = ACCENT_HOVER if self._hover else ACCENT
             outline, fg = "", "#ffffff"
         else:
@@ -68,7 +84,7 @@ class PillButton(tk.Canvas):
         rounded_rect(self, 0, 0, self._cw - 1, self._ch - 1, self._ch / 2,
                      fill=fill, outline=outline or fill)
         self.create_text(self._cw / 2, self._ch / 2 + 1, text=self._text,
-                         fill=fg, font=font(10, self._primary))
+                         fill=fg, font=font(10, self._primary and self._enabled))
 
 
 class Row(tk.Canvas):
@@ -329,6 +345,22 @@ def make_entry(parent, var, width=40, secret=False):
                     bg=PANEL_BG, fg=TEXT, relief="flat", font=font(11),
                     insertbackground=TEXT, highlightthickness=1,
                     highlightbackground=BORDER, highlightcolor=ACCENT)
+
+
+def make_combo(parent, values, size=10, min_chars=18, textvariable=None):
+    """只读下拉，宽度按最长那条选项量出来。
+
+    ttk.Combobox 的 width 既不是像素也不是字数，单位是"数字 0 的宽度"：字号 10 时
+    一个单位正好 10 像素。中文一条比西文宽得多（「改文件不问，跑命令才问
+    （acceptEdits）」量出来 314 像素），照着字数写死 width=30 只给 300 像素的文本区，
+    末尾那几个字连同括号一起被下拉箭头切掉。这里先量最长那条，再换算成这个单位。
+    """
+    values = [str(v) for v in values]
+    unit = max(measure("0", size), 1)
+    widest = max((measure(v, size) for v in values), default=0)
+    chars = max(min_chars, int(widest // unit) + 2)
+    return ttk.Combobox(parent, state="readonly", width=chars, font=font(size),
+                        values=values, textvariable=textvariable)
 
 
 def make_form(dialog, title):

@@ -18,6 +18,7 @@ from claude_tool.claude import find_claude
 from claude_tool.host import open_url
 from claude_tool.paths import (
     ILLEGAL_CHARS,
+    ILLEGAL_FILE_CHARS,
     PRESET_DIR,
     SETTINGS_FILE,
     WORKPLACE_DIR,
@@ -32,6 +33,7 @@ from claude_tool.theme import (
     TEXT,
     WARN,
     font,
+    measure,
 )
 from claude_tool.permissions import (
     PERMISSION_VALUES,
@@ -43,7 +45,6 @@ from claude_tool.presets import (
     IMPORT_ALREADY,
     IMPORT_NO_ENV,
     IMPORT_NO_FILE,
-    PROVIDERS,
     discover_presets,
     host_of,
     preset_path,
@@ -52,9 +53,25 @@ from claude_tool.presets import (
     read_model,
     suggest_preset_name,
 )
+from claude_tool.providers import (
+    PROVIDERS_FILE,
+    SOURCE_LABELS,
+    fetch_community,
+    load_providers,
+    load_table,
+    query_with_ai,
+    save_providers,
+)
 from claude_tool.config import path_key, save_config
 from claude_tool.handoff import HANDOFF_FILE, READ_HANDOFF_PROMPT
-from claude_tool.widgets import PillButton, finish_form, make_entry, make_form
+from claude_tool.widgets import (
+    PillButton,
+    ScrollArea,
+    finish_form,
+    make_combo,
+    make_entry,
+    make_form,
+)
 
 
 class LauncherDialogs:
@@ -86,45 +103,63 @@ class LauncherDialogs:
             value="从下拉里挑一个供应商，地址和模型名会自动填好，你只要贴自己的 key。")
 
         # 常用供应商：选一个就把 Base URL 和模型名填好，用户只剩贴 key 这件事。
-        picked = tk.Frame(body, bg=PAGE_BG)
-        picked.grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 4))
-        tk.Label(picked, text="常用供应商", bg=PAGE_BG, fg=MUTED, font=font(9),
-                 ).pack(side="left", padx=(0, 6))
+        # 这一格跟下面那四行同一个摆法（标签在第 0 列、控件在第 1 列），下拉才跟四
+        # 个输入框左边缘对齐；单独拎出来居中摆会跟它们错开小半格。
+        cell = tk.Frame(body, bg=PAGE_BG)
+        cell.grid(row=row, column=0, sticky="w", pady=4)
+        tk.Label(cell, text="常用供应商", bg=PAGE_BG, fg=TEXT, font=font(10),
+                 anchor="w").pack(anchor="w")
+        tk.Label(cell, text="挑一家，下面两格自动填", bg=PAGE_BG, fg=MUTED,
+                 font=font(9), anchor="w").pack(anchor="w")
         entries = {}
         provider_var = tk.StringVar()
-        combo = ttk.Combobox(picked, textvariable=provider_var, state="readonly",
-                             width=30, font=font(10),
-                             values=["（自己填）"] + [p[0] for p in PROVIDERS])
+        combo = make_combo(body, ["（自己填）"] + [item.name for item in load_providers()],
+                           textvariable=provider_var)
         combo.current(0)
-        combo.pack(side="left")
+        combo.grid(row=row, column=1, sticky="w", padx=(12, 0), pady=4)
+
+        def refresh(rows):
+            """那张表被刷新之后把下拉的选项换掉。
+
+            不换的话用户刚更新完，下拉里还是旧的那几家——他会以为没生效，再点一次。
+            """
+            combo.configure(values=["（自己填）"] + [item.name for item in rows])
+
+        PillButton(body, "更新这张表…",
+                   lambda: self._open_providers_dialog(refresh),
+                   bg=PAGE_BG).grid(row=row, column=2, sticky="w", padx=(8, 0), pady=4)
 
         # 记住名字框里那个名字是不是下拉给填的：是的话换一家就跟着换，
         # 用户自己敲过的就不动。免得挑完 DeepSeek 改挑 OpenRouter，名字还留着 DeepSeek。
         auto_name = [""]
 
         def pick(_event=None):
-            """选中哪个就把那家的地址/模型名灌进对应的框。"""
-            for short, label, base, model in PROVIDERS:
-                if short != provider_var.get():
+            """选中哪个就把那家的地址/模型名灌进对应的框。
+
+            现读而不是用打开对话框时那份：用户可能刚在这扇窗里点过「更新这张表」，
+            挑的该是刷新之后那一家。
+            """
+            for item in load_providers():
+                if item.name != provider_var.get():
                     continue
-                entries["base_url"][0].set(base)
-                entries["model"][0].set(model)
+                entries["base_url"][0].set(item.base_url)
+                entries["model"][0].set(item.model)
                 current = entries["name"][0].get().strip()
                 if not current or current == auto_name[0]:
-                    entries["name"][0].set(label)
-                    auto_name[0] = label
+                    entries["name"][0].set(item.preset)
+                    auto_name[0] = item.preset
                 entries["token"][1].focus_set()
                 hint_var.set(
                     "已填好 {} 的地址（{}）和模型名 {}。贴上你的 key；"
                     "模型名各家会变，不对就改一下再点「测试」验。"
-                    .format(short, host_of(base), model))
+                    .format(item.name, host_of(item.base_url), item.model))
                 return
 
         combo.bind("<<ComboboxSelected>>", pick)
         if is_edit:
             # 编辑已有预设时，地址对得上哪家就把下拉停在哪家
-            for index, provider in enumerate(PROVIDERS, start=1):
-                if values["base_url"].rstrip("/") == provider[2]:
+            for index, item in enumerate(load_providers(), start=1):
+                if values["base_url"].rstrip("/") == item.base_url:
                     combo.current(index)
                     break
         row += 1
@@ -154,8 +189,10 @@ class LauncherDialogs:
             row += 1
         body.columnconfigure(1, weight=1)
 
+        # wraplength 给到 700：这幅对话框是被第 1 列那四个输入框撑到 796 宽的，说明
+        # 文字按 470 折会提前一行——初句量出来 494，末尾那个「key。」被甩到第二行。
         tk.Label(body, textvariable=hint_var, bg=PAGE_BG, fg=MUTED, font=font(9),
-                 justify="left", anchor="w", wraplength=470,
+                 justify="left", anchor="w", wraplength=700,
                  ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(6, 0))
         row += 1
 
@@ -182,6 +219,200 @@ class LauncherDialogs:
         self._center(dialog)
 
 
+    def _open_providers_dialog(self, on_saved=None):
+        """更新那张「常用供应商」表。
+
+        两条路都得用户点一下才发请求，查回来的先摊在复核表里让他勾，勾完按「写入」
+        才落盘——AI 报的地址是可能编的，查到什么就写什么等于拿用户当小白鼠。写盘只
+        落在 ~/.claude_tool/providers.json 这一个启动器自己的文件上。
+        """
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "更新常用供应商表")
+
+        rows_now, meta = load_table()
+        source_label = SOURCE_LABELS.get(meta["source"], meta["source"])
+        if meta["updated"]:
+            state = "现在是 {} 家；上次更新 {}（{}）。".format(
+                len(rows_now), meta["updated"], source_label or "来路不明")
+        else:
+            state = "现在是内置那 {} 家，还没更新过。".format(len(rows_now))
+        body.columnconfigure(1, weight=1)
+        tk.Label(body, text=state, bg=PAGE_BG, fg=MUTED, font=font(9),
+                 anchor="w", justify="left", wraplength=520,
+                 ).grid(row=0, column=0, columnspan=3, sticky="w")
+
+        # 用哪个模型来查：默认当前生效那个。一个能用的都没有时 AI 那条路走不通，
+        # 但社区清单那条不用模型，照样能点——所以只灰一边，不整块禁用。
+        usable = [name for name, path in discover_presets().items()
+                  if all(read_env(path).get(key) for key in
+                         ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+                          "ANTHROPIC_MODEL"))]
+        if self.active_name in usable:
+            usable.remove(self.active_name)
+            usable.insert(0, self.active_name)
+
+        picker = tk.Frame(body, bg=PAGE_BG)
+        picker.grid(row=1, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        tk.Label(picker, text="用哪个模型来查", bg=PAGE_BG, fg=TEXT,
+                 font=font(10)).pack(side="left")
+        query_var = tk.StringVar(value=usable[0] if usable else "")
+        combo = make_combo(picker, usable or ["（还没有能用的模型）"],
+                           textvariable=query_var)
+        combo.pack(side="left", padx=(8, 0))
+        if not usable:
+            combo.configure(state="disabled")
+
+        buttons = tk.Frame(body, bg=PAGE_BG)
+        buttons.grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ai_button = PillButton(buttons, "用 AI 查最新", lambda: start("ai"),
+                               primary=True, bg=PAGE_BG, enabled=bool(usable))
+        ai_button.pack(side="left")
+        web_button = PillButton(buttons, "拉社区清单", lambda: start("community"),
+                                bg=PAGE_BG)
+        web_button.pack(side="left", padx=(8, 0))
+
+        note = tk.StringVar(value="查回来的会摆在下面，你勾要留下的那几家——"
+                                  "没勾的不会写进去。")
+        tk.Label(body, textvariable=note, bg=PAGE_BG, fg=TEXT, font=font(9),
+                 anchor="w", justify="left", wraplength=640,
+                 ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
+        area = ScrollArea(body, 260, bg=PAGE_BG)
+        area.grid(row=4, column=0, columnspan=3, sticky="ew")
+        review = area.inner
+
+        box = queue.Queue()
+        running = [False]
+        shown = []          # 复核表里摆着的那些行，写盘就按它按顺序来
+        picked = {}         # 名称 -> 勾没勾
+        origin = ["ai"]     # 这批是谁查来的，写进文件的 source
+
+        def write():
+            keep = [item for item in shown if picked[item.name].get()]
+            if not keep:
+                messagebox.showinfo("一行都没勾", "勾上要留下的那几家再写。",
+                                    parent=dialog)
+                return
+            try:
+                path = save_providers(keep, origin[0])
+            except OSError as e:
+                messagebox.showerror("写不进去",
+                                     "写入 {} 失败：\n{}".format(PROVIDERS_FILE, e),
+                                     parent=dialog)
+                return
+            if on_saved is not None:
+                on_saved(keep)
+            note.set("已经写进 {}，{} 家。下拉里马上就能挑到。".format(path, len(keep)))
+
+        # 按钮先建出来：下面 show() 要看它能不能按。它 pack 进的是 dialog 而不是
+        # body，而 body 是先 pack 的，所以先建也照样摆在最底下。
+        holder = tk.Frame(dialog, bg=PAGE_BG)
+        holder.pack(fill="x", padx=20, pady=(16, 16))
+        write_button = PillButton(holder, "写入", write, primary=True, bg=PAGE_BG,
+                                  enabled=False)
+        write_button.pack(side="right", padx=(8, 0))
+        PillButton(holder, "关闭", dialog.destroy, bg=PAGE_BG).pack(side="right")
+
+        def show(rows):
+            """把查回来的跟原有的合成一张表摆出来。
+
+            合而不是只摆查回来的那几行：AI 这一趟没提到的家也得留着，不然写下去等于
+            把用户自己手加的那几家悄悄删掉了。
+            """
+            area.clear()
+            del shown[:]
+            picked.clear()
+            old = {item.name: item for item in load_providers()}
+            fresh = {item.name for item in rows}
+            for item in list(rows) + [one for name, one in old.items()
+                                      if name not in fresh]:
+                shown.append(item)
+                var = tk.BooleanVar(value=True)
+                picked[item.name] = var
+                line = tk.Frame(review, bg=PAGE_BG)
+                line.pack(fill="x", pady=1)
+                tk.Checkbutton(line, variable=var, bg=PAGE_BG,
+                               activebackground=PAGE_BG, selectcolor=PANEL_BG,
+                               highlightthickness=0, bd=0).pack(side="left")
+                cell = tk.Frame(line, bg=PAGE_BG)
+                cell.pack(side="left", fill="x", expand=True)
+                mark = self._provider_mark(item, old.get(item.name))
+                tk.Label(cell, text=item.name + ("　" + mark if mark else ""),
+                         bg=PAGE_BG, fg=TEXT, font=font(10), anchor="w",
+                         ).pack(anchor="w")
+                tk.Label(cell, text="{}  ·  {}".format(item.base_url, item.model),
+                         bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
+                         ).pack(anchor="w")
+            area.fit()
+            write_button.set_enabled(bool(shown))
+
+        def drain():
+            """把查数线程塞进队列的东西画出来。取和画都在主线程，线程只碰队列。"""
+            done = None
+            while True:
+                try:
+                    _kind, payload = box.get_nowait()
+                except queue.Empty:
+                    break
+                done = payload
+            if done is not None:
+                finish(*done)
+                return
+            dialog.after(80, drain)
+
+        def start(kind):
+            if running[0]:
+                return
+            if kind == "ai" and not usable:
+                messagebox.showinfo(
+                    "还没有能用的模型",
+                    "AI 那条路得拿一个已经配好的模型去打请求。先在「添加模型」里配"
+                    "一个，或者改用「拉社区清单」。", parent=dialog)
+                return
+            running[0] = True
+            origin[0] = kind
+            ai_button.set_enabled(False)
+            web_button.set_enabled(False)
+            note.set("正在查…")
+            if kind == "ai":
+                env = read_env(preset_path(query_var.get()))
+                worker = lambda: box.put(("done", query_with_ai(
+                    env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_AUTH_TOKEN"),
+                    env.get("ANTHROPIC_MODEL"), rows_now)))
+            else:
+                worker = lambda: box.put(("done", fetch_community()))
+            threading.Thread(target=worker, daemon=True).start()
+            dialog.after(80, drain)
+
+        def finish(rows, text):
+            running[0] = False
+            ai_button.set_enabled(bool(usable))
+            web_button.set_enabled(True)
+            note.set(text)
+            if rows:
+                show(rows)
+
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        self._center(dialog)
+
+    @staticmethod
+    def _provider_mark(item, old):
+        """这一行跟现在表里的同名家比，变了什么。
+
+        用户是拿这份标记决定勾不勾的，所以"新的""地址变了""模型名换了"都得写出来；
+        一模一样就返回空串，看着不吵。
+        """
+        if old is None:
+            return "新"
+        changes = []
+        if old.base_url.rstrip("/") != item.base_url.rstrip("/"):
+            changes.append("地址变了")
+        if old.model != item.model:
+            changes.append("模型 {} → {}".format(old.model, item.model))
+        return "；".join(changes)
+
+
     def _save_model(self, dialog, entries, apply_now, edit):
         _old_name, old_path = edit or (None, None)
         name = entries["name"][0].get().strip()
@@ -192,9 +423,9 @@ class LauncherDialogs:
         if not all([name, base_url, token, model]):
             messagebox.showerror("缺少信息", "四个字段都要填。", parent=dialog)
             return
-        if re.search(ILLEGAL_CHARS, name):
+        if re.search(ILLEGAL_FILE_CHARS, name):
             messagebox.showerror("名称非法",
-                                 "名称不能包含 < > : \" / \\ | ? * 和空格。", parent=dialog)
+                                 "名称不能包含 < > : \" / \\ | ? *。", parent=dialog)
             return
 
         target = preset_path(name)
@@ -322,8 +553,8 @@ class LauncherDialogs:
             if not name:
                 hint.set("给它起个名字。")
                 return
-            if re.search(ILLEGAL_CHARS, name):
-                hint.set("名字里不能有 < > : \" / \\ | ? * 和空格。")
+            if re.search(ILLEGAL_FILE_CHARS, name):
+                hint.set("名字里不能有 < > : \" / \\ | ? *。")
                 return
             target = preset_path(name)
             if os.path.exists(target):
@@ -392,9 +623,10 @@ class LauncherDialogs:
                       pady=(12, 0))
         tk.Label(perm_row, text="权限", bg=PAGE_BG, fg=MUTED,
                  font=font(10)).pack(side="left")
-        perm_combo = ttk.Combobox(
-            perm_row, state="readonly", width=30, font=font(10),
-            values=[permission_option(mode) for mode in PERMISSION_VALUES])
+        # 宽度交给 make_combo 量：最长那档「改文件不问，跑命令才问（acceptEdits）」
+        # 要 314 像素，写死 width=30 只给 300，末尾那个右括号正好被箭头切掉。
+        perm_combo = make_combo(
+            perm_row, [permission_option(mode) for mode in PERMISSION_VALUES])
         perm_combo.current(PERMISSION_VALUES.index(workspace_permission(item)))
         perm_combo.pack(side="left", padx=(10, 0))
         # 命令行参数和解释分两行：熟练用户认的是 --permission-mode 后面那串英文，
@@ -429,8 +661,8 @@ class LauncherDialogs:
         perm_combo.bind("<<ComboboxSelected>>", pick_permission)
         row_after += 3
 
-        tk.Label(body, text="没读过的目录就选「开新会话」。想回到上次那段对话就选"
-                            "「接着上次聊」——它接的是这个话题里最近的一次会话。",
+        tk.Label(body, text="第一次进这个目录，选「开新会话」。想接着上次那段聊，"
+                            "就选「接着上次聊」——它接的是这个话题里最近的那次会话。",
                  bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
                  wraplength=430,
                  ).grid(row=row_after, column=0, columnspan=2, sticky="w",
@@ -763,6 +995,12 @@ class LauncherDialogs:
             next((i for i, r in enumerate(routes) if r["ready"]), 0)))
         first_ready = next((i for i, r in enumerate(routes) if r["ready"]), None)
 
+        # 底下那几行说明折多宽：体检表里"本机 claude 在哪"那格能长到上千像素（本机
+        # 就是 1013），整幅对话框是被它撑宽的。说明只折到 460 的话，右边会空出一大
+        # 半，几句话挤在左边一窄条里。跟着表格量，短路径的机器上也不会留白。
+        table_width = max((measure(label, 9) + measure(value, 9) + 12
+                           for label, value, _ in table), default=460)
+
         row = head + 1
         # usable 只收前提满足的那几颗：跑的时候锁上、跑完放开的是它们。
         # 前提不满足的那几颗本来就是灰的，跑完不能顺手把它们也点亮——那等于
@@ -791,7 +1029,8 @@ class LauncherDialogs:
                 note = "{}　·　{}".format(note, route["note"])
             tk.Label(body, text=note, bg=PAGE_BG,
                      fg=MUTED if route["ready"] else WARN, font=font(9),
-                     anchor="w", justify="left", wraplength=460,
+                     anchor="w", justify="left",
+                     wraplength=max(460, table_width - 24),
                      ).grid(row=row + 1, column=0, columnspan=2, sticky="w",
                             padx=(22, 0))
             row += 2
