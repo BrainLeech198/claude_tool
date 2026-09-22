@@ -1,7 +1,10 @@
-"""模型预设：一个模型一个 json，以及那张"常用供应商"表。
+"""模型预设：一个模型一个 json。
 
 预设文件放 ~/.claude_tool/claude_settings/，由启动器接管；换模型就是往
 ~/.claude/settings.json 覆盖一份新内容。
+
+那张"常用供应商"表搬去 providers.py 了（它现在能配置、能被刷新），这里只留下
+按它来猜预设名的那一处。
 """
 import json
 import os
@@ -18,42 +21,14 @@ from claude_tool.paths import (
     PRESET_SUFFIX,
     SETTINGS_FILE,
 )
+from claude_tool.providers import load_providers
 
 
 # ── 常用供应商 ────────────────────────────────────────────────────────────
 # "添加模型"表单里那个下拉栏用的：选一个就把地址和模型名填好，用户只剩贴 key。
-# (下拉里的名字, 预设名, Base URL, 模型名)
-#
-# Base URL 全部实测过：拿假 key 打 <base>/v1/messages，回 401/403 说明端点存在，
-# 同时往同域名的假路径打一次确认它回 404——否则一个"什么都回 401"的网关会把
-# 不存在的路径也伪装成存在。下面这些是过了双重检查的。
-# （OpenAI 格式的 /v1/chat/completions 端点不算数，Claude Code 只认 Messages API。）
-#
-# 模型名是照各家公开文档填的，会过时；聚合平台的模型名还得照它们的目录填。
-# 填错了在表单里改一下，或者点「测试」看通不通——那个是真打请求。
-
-PROVIDERS = [
-    # 国内
-    ("DeepSeek", "DeepSeek", "https://api.deepseek.com/anthropic", "deepseek-chat"),
-    ("智谱 GLM", "智谱 GLM", "https://open.bigmodel.cn/api/anthropic", "glm-4.6"),
-    ("Kimi", "月之暗面 Kimi", "https://api.moonshot.cn/anthropic", "kimi-k2-turbo-preview"),
-    ("硅基流动", "硅基流动", "https://api.siliconflow.cn", "deepseek-ai/DeepSeek-V3"),
-    # 国外的聚合平台：一个 key 能用很多家的模型
-    ("OpenRouter", "OpenRouter", "https://openrouter.ai/api",
-     "anthropic/claude-sonnet-4.6"),
-    ("Vercel AI 网关", "Vercel AI 网关", "https://ai-gateway.vercel.sh",
-     "anthropic/claude-sonnet-4.6"),
-    ("Requesty", "Requesty", "https://router.requesty.ai",
-     "anthropic/claude-sonnet-4.6"),
-    ("Nano-GPT", "Nano-GPT", "https://nano-gpt.com/api", "claude-sonnet-4.6"),
-    # 国内厂商的海外站
-    ("MiniMax 国际", "MiniMax 国际", "https://api.minimax.io/anthropic", "MiniMax-M2"),
-    ("Moonshot 国际", "Moonshot 国际", "https://api.moonshot.ai/anthropic",
-     "kimi-k2-turbo-preview"),
-    # 官方
-    ("Anthropic 官方", "Anthropic 官方", "https://api.anthropic.com",
-     "claude-sonnet-4-6"),
-]
+# 那张表本身在 providers.py——内置一份打底，可以被 ~/.claude_tool/providers.json
+# 覆盖，也可以被 AI 查一遍刷新。**每次现读**，别在这儿存成模块级常量：存下来就
+# 意味着用户刷新完得重启才看得见。
 
 
 def host_of(base):
@@ -286,7 +261,7 @@ def suggest_preset_name(env):
     model = str(env.get("ANTHROPIC_MODEL") or "").strip()
     host = host_of(base) if base else ""
     if host:
-        for _short, label, known_base, _known_model in PROVIDERS:
-            if host_of(known_base) == host:
-                return label
+        for row in load_providers():
+            if host_of(row.base_url) == host:
+                return row.preset
     return model or host or None

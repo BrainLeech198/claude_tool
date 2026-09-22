@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 
 from claude_tool.presets import preset_path, read_env
+from claude_tool.providers import reply_text
 
 # 上下文只取最近这些字符。会话记录那个 jsonl 长起来能到几十兆，整个读进来纯属浪费，
 # 而且指挥模型要判断的是"眼下这一步"，远处那些轮次帮不上忙还稀释重点。
@@ -245,15 +246,4 @@ def ask(name, questions, transcript_path, timeout=DEFAULT_TIMEOUT):
             reply = json.loads(response.read().decode("utf-8", "replace"))
     except (urllib.error.URLError, OSError, ValueError):
         return None
-    return parse_reply(_reply_text(reply), questions)
-
-
-def _reply_text(reply):
-    """Messages API 那份回话里把文字抠出来。"""
-    if not isinstance(reply, dict):
-        return ""
-    parts = []
-    for block in reply.get("content") or []:
-        if isinstance(block, dict) and block.get("type") == "text":
-            parts.append(str(block.get("text") or ""))
-    return "\n".join(parts)
+    return parse_reply(reply_text(reply), questions)

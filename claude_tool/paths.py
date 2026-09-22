@@ -56,3 +56,10 @@ ICON_FILE = (
 
 PRESET_SUFFIX = ".json"
 ILLEGAL_CHARS = r'[<>:"/\\|?*\s]'
+
+# 预设名要落成 <名字>.json 这个文件，管的只是"文件名里不能出现什么"，所以空格是
+# 合法的：Windows 那条路给 --settings 拼命令行时会整个包引号（见 claude_command），
+# Linux 那边是一项一个元素的 argv，两边都不怕空格。
+# 原来这里跟 ILLEGAL_CHARS 共用一条规则、把空格也挡了，可内置供应商表里就有 6 家
+# 名字带空格（「智谱 GLM」这种），从下拉里挑一家就把一个存不下去的名字填进了表单。
+ILLEGAL_FILE_CHARS = r'[<>:"/\\|?*]'

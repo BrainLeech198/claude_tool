@@ -1,0 +1,72 @@
+{
+  "updated": "2026-09-22 00:00",
+  "source": "community",
+  "rows": [
+    {
+      "name": "DeepSeek",
+      "preset": "DeepSeek",
+      "base_url": "https://api.deepseek.com/anthropic",
+      "model": "deepseek-chat"
+    },
+    {
+      "name": "智谱 GLM",
+      "preset": "智谱 GLM",
+      "base_url": "https://open.bigmodel.cn/api/anthropic",
+      "model": "glm-4.6"
+    },
+    {
+      "name": "Kimi",
+      "preset": "月之暗面 Kimi",
+      "base_url": "https://api.moonshot.cn/anthropic",
+      "model": "kimi-k2-turbo-preview"
+    },
+    {
+      "name": "硅基流动",
+      "preset": "硅基流动",
+      "base_url": "https://api.siliconflow.cn",
+      "model": "deepseek-ai/DeepSeek-V3"
+    },
+    {
+      "name": "OpenRouter",
+      "preset": "OpenRouter",
+      "base_url": "https://openrouter.ai/api",
+      "model": "anthropic/claude-sonnet-4.6"
+    },
+    {
+      "name": "Vercel AI 网关",
+      "preset": "Vercel AI 网关",
+      "base_url": "https://ai-gateway.vercel.sh",
+      "model": "anthropic/claude-sonnet-4.6"
+    },
+    {
+      "name": "Requesty",
+      "preset": "Requesty",
+      "base_url": "https://router.requesty.ai",
+      "model": "anthropic/claude-sonnet-4.6"
+    },
+    {
+      "name": "Nano-GPT",
+      "preset": "Nano-GPT",
+      "base_url": "https://nano-gpt.com/api",
+      "model": "claude-sonnet-4.6"
+    },
+    {
+      "name": "MiniMax 国际",
+      "preset": "MiniMax 国际",
+      "base_url": "https://api.minimax.io/anthropic",
+      "model": "MiniMax-M2"
+    },
+    {
+      "name": "Moonshot 国际",
+      "preset": "Moonshot 国际",
+      "base_url": "https://api.moonshot.ai/anthropic",
+      "model": "kimi-k2-turbo-preview"
+    },
+    {
+      "name": "Anthropic 官方",
+      "preset": "Anthropic 官方",
+      "base_url": "https://api.anthropic.com",
+      "model": "claude-sonnet-4-6"
+    }
+  ]
+}
