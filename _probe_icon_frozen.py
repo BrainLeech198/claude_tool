@@ -1,14 +1,13 @@
-"""冻结版冒烟：跑 dist 里那个 exe，确认窗口起得来、底栏还是完整的一排。
+"""打包版的窗口图标：跑 dist 里的 exe，抓它标题栏看那只螃蟹在不在。
 
-冻结版最容易死在"某个模块没被打进去"上——claude_tool.selfupdate 是这版新加的，
-真漏了的话 launcher 顶上那句 import 就会炸，窗口根本不会出现。所以"窗口起来了"
-本身就等于"新模块打进去了、能被 import"。
+exe 是按 PID 找窗口的，不按标题——用户自己那份启动器标题一模一样。
 
-再抓一张主界面的图，人眼看一眼底栏：0.4 起「自动查启动器新版」那个勾已经去掉，
-底下应当只剩内嵌终端、自动继续、自动查 claude 新版三个勾，且版式没塌。
+抓图走 PrintWindow（离屏渲染），**不用** SetWindowPos(TOPMOST) +
+SetForegroundWindow + ImageGrab：那三样是"把窗口拽到屏幕最前、再抓整块屏幕"，
+窗口会直接怼到用户眼前。窗口位置也提前写到屏幕外（见 park_profile），
+全程不上屏——用户在电脑前也看不到任何东西弹出来。
 
-沙箱 USERPROFILE，不碰用户真实的 ~/.claude_tool；窗口位置也改成屏幕外（见
-park_profile），全程不上屏。
+沙箱 USERPROFILE，不碰用户真实的 ~/.claude_tool。
 """
 import ctypes
 import json
@@ -20,15 +19,15 @@ from ctypes import wintypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 EXE = os.path.join(ROOT, "dist", "claude_tool", "claude_tool.exe")
-PROFILE = "D:/Desktop/tmp/frz_selfup"
-OUT = os.path.join(ROOT, "_frozen_selfup.png")
-INSET = 8
+PROFILE = "D:/Desktop/tmp/icon_frz"
+OUT = os.path.join(ROOT, "_icon_frozen_zoom.png")
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 user32.SetProcessDPIAware()
 user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+user32.GetClassNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
 user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.RECT)]
 user32.GetWindowDC.restype = ctypes.c_void_p
 user32.GetWindowDC.argtypes = [ctypes.c_void_p]
@@ -63,6 +62,7 @@ class BITMAPINFO(ctypes.Structure):
 
 
 def capture(hwnd, width, height):
+    """离屏渲染整窗（含标题栏那块非客户区）成一张图。"""
     hdc = user32.GetWindowDC(hwnd)
     mem = gdi32.CreateCompatibleDC(hdc)
     bitmap = gdi32.CreateCompatibleBitmap(hdc, width, height)
@@ -99,7 +99,8 @@ def park_profile(profile):
             for k in ("x", "y", "w", "h")) and window["w"] >= 300 and window["h"] >= 300
 
     缺任何一个键就把**整份**丢掉、当没存过，窗口于是开在默认位置（屏幕正中）。
-    第一版就只写了 x/y，结果窗口照样开在 (32,32)——那趟冒烟等于没离屏。
+    只写 x/y 就是想当然——实测窗口照样开在 (32,32)，白忙一场。x/y 也别顶到
+    32767 以上，同样会被丢。
 
     **别把这段删了**：删掉之后窗口会按默认位置开在屏幕正中，虽然只闪一两秒就
     被 kill，那也算是"打扰用户"。
@@ -144,12 +145,14 @@ def main():
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value != proc.pid or not user32.IsWindowVisible(hwnd):
             return True
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, cls, 64)
         title = ctypes.create_unicode_buffer(256)
         user32.GetWindowTextW(hwnd, title, 256)
         r = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(r))
         if r.right - r.left > 200 and r.bottom - r.top > 200:
-            found.append((title.value, hwnd, r))
+            found.append((cls.value, title.value, hwnd, r))
         return True
 
     for _ in range(60):
@@ -161,28 +164,29 @@ def main():
 
     code = 0
     if not found:
-        print("FAIL 窗口没起来（exe returncode = {}）".format(proc.poll()))
+        print("FAIL 没找到窗口，exe 是不是起不来？returncode =", proc.poll())
         code = 1
     else:
-        title, hwnd, rect = found[0]
-        print("ok   窗口起来了:", repr(title), rect.right - rect.left,
-              "x", rect.bottom - rect.top,
-              "位置", rect.left, rect.top)
-        # 自证离屏：park_profile 要是被跳过（沙箱缺配置）或配置被判无效，窗口
-        # 就会开在屏幕里。这里把坐标报出来、落在屏幕内就吱一声——省得下次又
-        # 靠"尺寸看着差不多"去推断有没有上屏。
-        if not (rect.left >= 30000 or rect.top >= 30000):
-            print("     警告：窗口不在屏幕外（{} {}），这趟可能上了屏".format(
-                rect.left, rect.top))
+        cls, title, hwnd, rect = found[0]
+        print("ok   窗口类名:", cls, "标题:", repr(title))
+        print("     矩形:", rect.left, rect.top, rect.right, rect.bottom)
         time.sleep(0.8)
         image = capture(hwnd, rect.right - rect.left, rect.bottom - rect.top)
         if image is None:
             print("FAIL PrintWindow 没抓到")
             code = 1
         else:
-            image.crop((INSET, INSET, image.width - INSET,
-                        image.height - INSET)).save(OUT)
-            print("     图 ->", os.path.basename(OUT))
+            from PIL import Image
+            zoom = image.crop((0, 0, 150, 40)).resize((150 * 4, 40 * 4),
+                                                      Image.NEAREST)
+            zoom.save(OUT)
+            print("     存了", os.path.basename(OUT))
+            orange = sum(1 for p in zoom.getdata()
+                         if p[0] > 180 and p[1] < 160 and p[2] < 130)
+            print("ok   橙色像素数:", orange, "（螃蟹是橙的，>0 就说明图标画上去了）")
+            if orange <= 0:
+                print("FAIL 一个橙色像素都没数到，图标可能没打进去")
+                code = 1
     proc.kill()
     proc.wait()
     print("exe 已杀")
