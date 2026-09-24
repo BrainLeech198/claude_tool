@@ -36,6 +36,7 @@ from claude_tool.theme import (
     HOVER_BG,
     MUTED,
     PAGE_BG,
+    PAGE_GUTTER,
     PANEL_BG,
     SIDE_GAP,
     TEXT,
@@ -77,8 +78,10 @@ from claude_tool.ui.workspaces import WorkspacesMixin
 
 # 内嵌终端那一栏的宽度。它从右边长出来，窗口跟着变宽，左导航不动。
 TERMINAL_MIN_WIDTH = 900
-# 正文上下各留的空档。左栏和终端栏之间那个 SIDE_GAP 在 theme.py——内嵌终端和
-# 会话启动那两处也要用它，搁这儿它们 import 不到。
+# 左导航和右详情之间那道缝。**页面四条边那个统一空档是 theme.PAGE_GUTTER**，
+# 别拿这个去当页面边距（0.4 收尾前就是这么用的，结果正文比顶栏凸出去 6 像素）。
+# 左栏和终端栏之间那个 SIDE_GAP 也在 theme.py——内嵌终端和会话启动那两处也要
+# 用它，搁这儿它们 import 不到。
 PAGE_PAD = 16
 
 # 窗口下限按内容的自然尺寸算（见 _apply_min_size），这两条是它的兜底和冗余。
@@ -300,7 +303,15 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         """窗口下限按内容量出来，别写死。
 
         正文那两栏是新的基准：左导航定宽（NAV_WIDTH），右栏得摆得下【管理】那一
-        排六个按钮不换行（DETAIL_MIN_WIDTH）。两块相加就是窗口该有的最窄宽度。
+        排六个按钮不换行（DETAIL_MIN_WIDTH），中间一道 PAGE_PAD，正文两侧再各留
+        一道 PAGE_GUTTER。加起来的那个数就是窗口该有的最窄宽度：
+
+            240 + 16 + 460 + 2*20 = 756，再留 MIN_MARGIN 的余量 = 804
+
+        「正文两侧那道缝」必须跟 `_build_ui` 里 body 真正用的那个数一致，否则这
+        条式子就是算着好看：0.4 收尾前 body 用的是 SIDE_GAP(14) 而这条式子按
+        PAGE_PAD(16) 算，两边的差一直被 MIN_MARGIN 悄悄吃掉。现在两边都指
+        PAGE_GUTTER。
 
         0.4 之前量的不是这个——那时候最宽的是底栏那排勾（自然宽 552 像素，比左列
         还宽，所以下限归它管）。那排勾搬进设置窗之后，主窗就没有"按内容会变宽"
@@ -314,7 +325,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         高度就守 MIN_HEIGHT_FLOOR 这个可用底线。
         """
         content = NAV_WIDTH + PAGE_PAD + DETAIL_MIN_WIDTH
-        width = content + 2 * PAGE_PAD + MIN_MARGIN
+        width = content + 2 * PAGE_GUTTER + MIN_MARGIN
         if self._width_before_embed is not None:
             # 内嵌时右边那栏是外挂上去的，下限得跟着抬；不然用户往回一缩，
             # 先挨挤的还是上面那两栏。
@@ -400,10 +411,13 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         """
         # 顶栏：平时是条空线，只有查出新版时那两颗胶囊才往上挂（见 ui/update.py
         # 的 _show_update / _show_self_update，它们都 pack 进 self.top_line）。
+        #
+        # 这条线的左右空档就是全页的统一空档（PAGE_GUTTER），正文、状态行、告警
+        # 条都照它对齐——见 theme.py 那段说明。
         header = tk.Frame(self, bg=PANEL_BG)
         header.pack(fill="x")
         line = tk.Frame(header, bg=PANEL_BG)
-        line.pack(fill="x", padx=20, pady=10)
+        line.pack(fill="x", padx=PAGE_GUTTER, pady=10)
         self.top_line = line
         # "配置目录"四个字对没上手的人等于没解释，得补一句这是哪儿。挂悬停提示，
         # 鼠标停上去才出——顶栏只留一条线，塞不下一句话。
@@ -423,7 +437,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 两块都是先建好不摆出来，有活了才 pack（见 sessions.py 的 _render_running
         # / _show_task_area），没活的时候界面上看不出有这么一块。
         self.notice_area = tk.Frame(self, bg=PAGE_BG)
-        self.notice_area.pack(fill="x", padx=PAGE_PAD)
+        self.notice_area.pack(fill="x", padx=PAGE_GUTTER)
         self._build_running(self.notice_area)
         self._build_tasks(self.notice_area)
 
@@ -437,10 +451,10 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             value="左边点一本，右边按「新会话」；行首那个数字按住 Ctrl 就能直接开，"
                   "Ctrl+F 跳到筛选框。")
         tk.Label(footer, textvariable=self.feedback_var, bg=PAGE_BG, fg=MUTED,
-                 font=font(9), anchor="w").pack(fill="x", padx=20, pady=8)
+                 font=font(9), anchor="w").pack(fill="x", padx=PAGE_GUTTER, pady=8)
 
         body = tk.Frame(self, bg=PAGE_BG)
-        body.pack(fill="both", expand=True, padx=SIDE_GAP)
+        body.pack(fill="both", expand=True, padx=PAGE_GUTTER)
 
         # side 是那条定宽的左导航（名字沿用：内嵌终端量窗口宽度时拿它当"左边那
         # 部分"，_probe_embed 也认这个名字）。定宽不跟着窗口变：它是导航，省下来
@@ -482,7 +496,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 建的时候 body 还没 pack，所以这一 pack 就正好落在标题栏和正文之间
         banner.pack(fill="x")
         inner = tk.Frame(banner, bg=ALERT_BG)
-        inner.pack(fill="x", padx=20, pady=10)
+        inner.pack(fill="x", padx=PAGE_GUTTER, pady=10)
         tk.Label(inner, text="没找到 claude，装好才能启动。", bg=ALERT_BG,
                  fg=WARN, font=font(10, True)).pack(side="left")
         PillButton(inner, "重新检测", self._recheck_claude, bg=ALERT_BG,

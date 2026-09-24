@@ -76,13 +76,22 @@ class DetailMixin:
                  fg=MUTED, font=font(9), anchor="w").pack(fill="x", pady=(10, 0))
 
         # 日常动作。三个都建成实例属性，没选中那本时要能一起置灰。
+        #
+        # **这排必须自己占一个行框**，不能直接 pack 进 parent：parent 里别的东西
+        # 都是默认 side="top" 一路往下摞的，往里面塞三个 side="left" 的按钮，它们
+        # 会各去抢一条"剩余区域的左边缘"，而且没写 fill="y" 就纵向居中——结果这排
+        # 飘到整栏中间（实测 y=553），而后面那些 top 的框（分隔线、「管理」那排、
+        # 插件区）全被挤到右半栏、宽度只剩 339（本该是整栏 616）。0.4 收尾时
+        # `_probe_align.py` 量出来的。
+        self.detail_daily_row = tk.Frame(parent, bg=PAGE_BG)
+        self.detail_daily_row.pack(fill="x", pady=(14, 0))
         self._detail_daily = []
         for caption, command, primary in (
                 ("新会话", self._detail_new_session, True),
                 ("接着上次", self._detail_continue, False),
                 ("打开目录", self._detail_open_folder, False)):
-            button = PillButton(parent, caption, command, primary=primary,
-                                bg=PAGE_BG, height=30)
+            button = PillButton(self.detail_daily_row, caption, command,
+                                primary=primary, bg=PAGE_BG, height=30)
             self._detail_daily.append(button)
         self._pack_detail_daily()
 
@@ -93,6 +102,10 @@ class DetailMixin:
         self._detail_manage = []
         manage = tk.Frame(parent, bg=PAGE_BG)
         manage.pack(fill="x", pady=(10, 0))
+        # 留个引用：那排最宽状态（含「删交接文档」）要多少像素，是算窗口下限的
+        # 依据（见 _probe_size_state.py），量的时候得拿这个框、不能拿 detail_area
+        # ——后者里面还有个显示路径的 Label，会随数据飘。
+        self.detail_manage_row = manage
         tk.Label(manage, text="管理", bg=PAGE_BG, fg=MUTED,
                  font=font(9)).pack(side="left", padx=(0, 8))
         for caption, handler in (
@@ -115,6 +128,11 @@ class DetailMixin:
         self.detail_plugin_area.pack(fill="x", pady=(10, 0))
 
     def _pack_detail_daily(self):
+        """把三颗日常动作按钮摆进 `detail_daily_row`。
+
+        它们必须是同一个行框里的 side="left"，理由见那边那段注释——直接摆进
+        右栏本身会把整栏的纵向堆叠搅乱。
+        """
         for index, button in enumerate(self._detail_daily):
             button.pack(side="left", padx=(0 if index == 0 else 6, 0))
 

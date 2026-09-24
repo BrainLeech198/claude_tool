@@ -35,6 +35,18 @@ FONT_FAMILY = "Microsoft YaHei UI"
 # 常量，硬写就会绕成循环 import。
 SIDE_GAP = 14
 
+# 内容离窗口边那道统一空档。顶栏那条线、正文两栏、状态行文字、没装 claude 时那条
+# 告警，左边缘（右边缘同理）都得落在同一条竖线上。
+#
+# 这是 0.4 收尾时量出来的问题：那几处本来各用各的数——顶栏和状态行是 20、正文是
+# 14（图省事复用了上面那个 SIDE_GAP）、告警区又是 16。三套数并排一放，左导航那栏
+# 就比顶栏和状态行的字凸出去 6 像素，右栏内容又比顶栏那颗按钮凸出去 6 像素，一眼
+# 就看得出错位。所以单拎一个常数出来，五处都指它。`_probe_align.py` 盯着这件事。
+#
+# 跟 SIDE_GAP 的分工：那个是"两栏之间"的缝（还会被内嵌终端拿去算外挂宽度），
+# 这个是"内容离窗口边"的缝，两件事。
+PAGE_GUTTER = 20
+
 
 def font(size=11, bold=False):
     return (FONT_FAMILY, size, "bold") if bold else (FONT_FAMILY, size)
