@@ -38,6 +38,17 @@ MIGRATE_WAIT_TRIES = 75          # 200 毫秒 × 75 ≈ 15 秒
 
 class ModelsMixin:
     def refresh_models(self):
+        # 0.4 起「模型」这一区搬进了设置窗（见 ui/settings.py），窗口没开过时
+        # 这张列表还不存在。这儿**只是提前返回，不是整个跳过**：顶栏那颗模型
+        # 胶囊在主窗上一直摆着，它读的是 active_name，得照样更新——不然新装一份
+        # 预设、设置窗还没开，胶囊会一直写着上次那个名字。
+        if self.model_list is None:
+            presets = discover_presets()
+            self.active_name = active_preset(presets)
+            self._update_model_chip(
+                self.active_name or ("未设置" if not presets else "自定义 / 未知"),
+                bool(self.active_name))
+            return
         self.model_list.clear()
         self.model_rows = {}
         presets = discover_presets()

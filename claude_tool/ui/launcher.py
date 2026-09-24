@@ -60,24 +60,26 @@ from claude_tool.widgets import (
     make_entry,
 )
 
+from claude_tool.ui.detail import DETAIL_MIN_WIDTH, DetailMixin
 from claude_tool.ui.dialogs import LauncherDialogs
 from claude_tool.ui.models import ModelsMixin
+from claude_tool.ui.nav import NAV_WIDTH, NavMixin
 from claude_tool.ui.sessions import SessionsMixin
+from claude_tool.ui.settings import SettingsMixin
 from claude_tool.ui.terminal import TerminalMixin
 from claude_tool.ui.update import UpdateMixin
 from claude_tool.ui.workspaces import WorkspacesMixin
 
 
-MODEL_MAX, WORKSPACE_MAX = 300, 480
-# 内嵌终端那一栏的宽度。它从右边长出来，窗口跟着变宽，左列不动。
+# 内嵌终端那一栏的宽度。它从右边长出来，窗口跟着变宽，左导航不动。
 TERMINAL_MIN_WIDTH = 900
-# 正文上下各留的空档。左列和终端栏之间那个 SIDE_GAP 在 theme.py——内嵌终端和
+# 正文上下各留的空档。左栏和终端栏之间那个 SIDE_GAP 在 theme.py——内嵌终端和
 # 会话启动那两处也要用它，搁这儿它们 import 不到。
 PAGE_PAD = 16
 
 # 窗口下限按内容的自然尺寸算（见 _apply_min_size），这两条是它的兜底和冗余。
 # 冗余别省：字体在不同机器上宽窄有出入，贴着内容算迟早还会切掉一两个字。
-# 48 而不是 32：底下那行初始提示比那排开关还宽一点，它按设计不进下限计算
+# 48 而不是 32：状态行那行初始提示比正文还宽一点，它按设计不进下限计算
 # （会随反馈消息变长变短），这点余量留给它。
 MIN_MARGIN = 48
 MIN_HEIGHT_FLOOR = 660
@@ -99,8 +101,9 @@ def default_window_size(screen_w, screen_h):
     return min(900, screen_w - 20), min(950, screen_h - 100)
 
 
-class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
-               SessionsMixin, TerminalMixin, LauncherDialogs, tk.Tk):
+class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
+               WorkspacesMixin, SessionsMixin, TerminalMixin, LauncherDialogs,
+               tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Claude 启动器")
@@ -158,6 +161,17 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
         self._width_before_embed = None
         self.ws_filter = tk.StringVar()   # 工作区筛选框
         self.ws_view = []                 # 当前真正显示出来的工作区，快捷键按它算序号
+        # 左栏当前选中那一本（记路径不记名字：改名不影响选中）。真值在 config_data
+        # 里，这儿只是它的一份界面侧副本；对不上的时候由 nav._sync_selection 兜。
+        self.selected_path = None
+        # 「模型」那一区 0.4 起搬进了设置窗（见 ui/settings.py），窗口没开过时这个
+        # 列表还不存在。凡是用它的地方都得先认 None（refresh_models 头一行就是）。
+        self.model_list = None
+        # 设置窗只有一个，开过一次就留着（关是 withdraw 不是 destroy，见
+        # ui/settings.py 的说明）。这三个格子在 _build_settings_window 里填。
+        self._settings_win = None
+        self._settings_pages = {}
+        self._settings_page = None
         self.model_rows = {}              # 名称 -> 卡片，测试结果要回填到上面
         self._testing = False
         self._results = queue.Queue()
@@ -227,6 +241,29 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
                 merge_scanned(self.config_data)
             save_config(self.config_data)
 
+        # 底下那几个勾的变量在这儿建：它们现在长在设置窗的「行为开关」页上
+        # （见 ui/settings.py），但会话启动那几条路（launch_workspace 读
+        # embed_var / auto_continue_var）跟设置窗开没开没关系，所以变量本身
+        # 属于主窗，得先有。
+        #
+        # 内嵌终端只在 Windows 上有（见 host.EMBED_SUPPORTED）。别处这个勾一律
+        # 当没勾——配置文件是跟着用户走的，从 Windows 拷过来的 launcher.json
+        # 里很可能留着 embed=true。
+        self.embed_var = tk.BooleanVar(
+            value=EMBED_SUPPORTED and bool(self.config_data.get("embed")))
+        # 会花用户 token、会替用户拍板的功能，默认关；这几个勾只影响新开的会话，
+        # 不动已经跑着的
+        self.auto_continue_var = tk.BooleanVar(
+            value=bool(self.config_data.get("auto_continue")))
+        self.auto_version_var = tk.BooleanVar(
+            value=bool(self.config_data.get("auto_version_check")))
+
+        # 上次选的那本接着选中。记路径不记名字，改名不影响它。
+        # 目录要是已经没了（删了、改名了、整条被移除了），refresh_workspaces 里的
+        # nav._sync_selection 会退到第一条——那件事放在那儿，是因为工作区在运行
+        # 期间也会被移除，只在启动这一次算是不够的。
+        self.selected_path = self.config_data.get("selected_workspace")
+
         self._build_ui()
         self.refresh_models()
         self.refresh_workspaces()
@@ -254,27 +291,25 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
     def _apply_min_size(self):
         """窗口下限按内容量出来，别写死。
 
-        底下那排开关（内嵌终端、自动继续 Stop hook、自动查 claude 新版）是最宽的
-        一块，几段文字加上间距比左列那几块都宽；原先写死的下限 560（默认宽 640）
-        都装不下，末尾那个勾的标题会被切掉一截，字号再大点的机器切得更多。
+        正文那两栏是新的基准：左导航定宽（NAV_WIDTH），右栏得摆得下【管理】那一
+        排六个按钮不换行（DETAIL_MIN_WIDTH）。两块相加就是窗口该有的最窄宽度。
 
-        量的只有那排开关和左列这两块**定死**的东西，不去拿整窗的 reqwidth：顶栏
-        的模型名、底下那行反馈都是会变长的字符串，它们一长整窗的自然宽度就跟着
-        跳，下限跟着跳，用户就会看到窗口自己忽大忽小。
+        0.4 之前量的不是这个——那时候最宽的是底栏那排勾（自然宽 552 像素，比左列
+        还宽，所以下限归它管）。那排勾搬进设置窗之后，主窗就没有"按内容会变宽"
+        的一块了：两栏的宽度都是定数，下限也就跟着定下来，不用再 update_idletasks
+        等布局算完。留着那一句是因为内嵌终端的宽度分支还要用真实尺寸。
 
-        高度**不**跟着算：中间那两块列表是可滚动的，它们的自然高度不该拿来当下限
-        ——而且这个数还跟问的时机有关，在 _build_ui() 刚建完时问是 823，等列表
-        fit() 完再问是 410，差一倍。高度就守 MIN_HEIGHT_FLOOR 这个可用底线。
+        **设置窗的下限跟这个没关系**：那是另一个窗，尺寸在 ui/settings.py 里定死。
 
-        得等界面整个建完、列表也填过之后再调，量的才是最终布局。
+        高度**不**跟着算：左栏列表是可滚动的，它的自然高度不该拿来当下限——而且
+        这个数还跟问的时机有关（列表 fit() 前是 823、fit() 完是 410，差一倍）。
+        高度就守 MIN_HEIGHT_FLOOR 这个可用底线。
         """
-        self.update_idletasks()
-        content = max(self.switches.winfo_reqwidth(),
-                      self.side.winfo_reqwidth())
+        content = NAV_WIDTH + PAGE_PAD + DETAIL_MIN_WIDTH
         width = content + 2 * PAGE_PAD + MIN_MARGIN
         if self._width_before_embed is not None:
             # 内嵌时右边那栏是外挂上去的，下限得跟着抬；不然用户往回一缩，
-            # 先挨挤的还是左边那半张脸——这一版改动要避免的正是这个。
+            # 先挨挤的还是上面那两栏。
             width = max(width, self._width_before_embed + SIDE_GAP
                         + TERMINAL_MIN_WIDTH)
         self.minsize(width, MIN_HEIGHT_FLOOR)
@@ -341,145 +376,83 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
     # ── 布局 ──
 
     def _build_ui(self):
-        # 顶上是条状态条：当前模型、claude 装的是哪版、以及去配置目录的入口。
-        # 这里不再写一遍"Claude 启动器"——窗口标题栏上已经有那个名字了，
-        # 正文再来一遍纯属占地方。
+        """左导航 + 右详情。
+
+        0.4 之前这四件事是平铺在一屏里的：顶栏（模型 + 版本 + 查更新 + 配置目录）、
+        「模型」区、「工作区」区、底栏那排勾。编辑类操作和日常操作混在一起，两块
+        列表上下摞着，窗口又高又杂——而它日常只需要干一件事：选一个目录，开 claude。
+
+        所以现在按"选"和"看"分左右两栏，三块平铺的东西各有归处：
+          - 「模型」区、「AI 托管」「默认工作区」、那三个勾 → 设置窗（ui/settings.py）
+          - 工作区列表 → 左栏导航（ui/nav.py），行上的管理动作 → 右栏（ui/detail.py）
+          - 模型名和版本号 → 右栏详情（它们是"看着某一本时"才知道的）
+        顶栏只留"需要立刻知道"的那两颗更新胶囊（有新版才建），状态行照旧。
+
+        不写一遍"Claude 启动器"——窗口标题栏上已经有那个名字了。
+        """
+        # 顶栏：平时是条空线，只有查出新版时那两颗胶囊才往上挂（见 ui/update.py
+        # 的 _show_update / _show_self_update，它们都 pack 进 self.top_line）。
         header = tk.Frame(self, bg=PANEL_BG)
         header.pack(fill="x")
         line = tk.Frame(header, bg=PANEL_BG)
-        line.pack(fill="x", padx=20, pady=12)
-        # "配置目录"四个字对没上手的人等于没解释，得补一句这是哪儿。但顶栏就
-        # 一条，左边还摆着模型名和版本号——塞一句话进去版本号立刻被截掉半截。
-        # 所以挂悬停提示，鼠标停上去才出。
+        line.pack(fill="x", padx=20, pady=10)
+        self.top_line = line
+        # "配置目录"四个字对没上手的人等于没解释，得补一句这是哪儿。挂悬停提示，
+        # 鼠标停上去才出——顶栏只留一条线，塞不下一句话。
         tool_dir = PillButton(line, "打开配置目录", self._open_tool_dir, bg=PANEL_BG)
         tool_dir.pack(side="right")
         Tip(tool_dir, "模型预设和工作区都记在这儿，想手改文件就从这儿进去")
-
-        tk.Label(line, text="当前模型", bg=PANEL_BG, fg=MUTED,
-                 font=font(9)).pack(side="left", padx=(0, 8))
-        self.status_var = tk.StringVar(value="未设置")
-        # 模型名做成个小胶囊。有模型时用强调色，没设的时候是中性灰——
-        # 空状态不该长得像报错或者链接。
-        self.model_chip = tk.Label(line, textvariable=self.status_var, bg=HOVER_BG,
-                                   fg=MUTED, font=font(10, True), padx=10, pady=2)
-        self.model_chip.pack(side="left")
-
-        self.version_var = tk.StringVar(value="正在查 claude 版本…")
-        tk.Label(line, textvariable=self.version_var, bg=PANEL_BG, fg=MUTED,
-                 font=font(9)).pack(side="left", padx=(16, 0))
-        # 手动问一次。底下那个勾管的是"开启动器时自动问一次"，这个按钮管的是
-        # "我现在就想知道"，不受那个勾影响。
-        check = PillButton(line, "查更新", self.check_claude_update, bg=PANEL_BG)
-        check.pack(side="left", padx=(10, 0))
-        Tip(check, "问一次网上 claude 出到哪一版了，跟本机这个比一比")
-        # 查出本机落后了才摆出来的胶囊，平时不占地方：顶栏就一条，多挂一个常驻
-        # 控件就会把版本号挤掉（早先往里塞字就是这么把版本号截了半截的）。
-        self.top_line = line
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # 没装 claude 才挂出来的告警条，装好了整条不占地方
         self.banner = tk.Frame(self, bg=ALERT_BG)
         self._build_claude_banner()
 
+        # 「正在跑」和交接进度整条横跨窗口，摆在正文上面。它们说的是"现在有什么
+        # 在动"——跟左栏选中哪一本没关系，所以不塞进任何一栏（塞进 240 宽的左栏
+        # 只会把路径和那排按钮挤没）。
+        #
+        # 两块都是先建好不摆出来，有活了才 pack（见 sessions.py 的 _render_running
+        # / _show_task_area），没活的时候界面上看不出有这么一块。
+        self.notice_area = tk.Frame(self, bg=PAGE_BG)
+        self.notice_area.pack(fill="x", padx=PAGE_PAD)
+        self._build_running(self.notice_area)
+        self._build_tasks(self.notice_area)
+
+        # 状态行必须先摆（side="bottom"）：pack 是按调用顺序抢位置的，先摆这条，
+        # 后面 expand 的正文才会把剩下的空间全吃掉而不压到它。窗口被拉矮时该挤的
+        # 是正文那两栏，不是这行提示——它是反馈的唯一出口。
         footer = tk.Frame(self, bg=PAGE_BG)
         footer.pack(fill="x", side="bottom")
         tk.Frame(footer, bg=BORDER, height=1).pack(fill="x")
-        # 存下来是给 _apply_min_size 量的：这排开关是窗口该有多宽的那个基准。
-        self.switches = switches = tk.Frame(footer, bg=PAGE_BG)
-        switches.pack(fill="x", padx=PAGE_PAD, pady=(8, 0))
-        # 内嵌终端只在 Windows 上有（见 host.EMBED_SUPPORTED）。别处这个勾一律
-        # 当没勾——配置文件是跟着用户走的，从 Windows 拷过来的 launcher.json
-        # 里很可能留着 embed=true。
-        self.embed_var = tk.BooleanVar(
-            value=EMBED_SUPPORTED and bool(self.config_data.get("embed")))
-        # 会花用户 token、会替用户拍板的功能，默认关；这几个勾只影响新开的会话，
-        # 不动已经跑着的
-        self.auto_continue_var = tk.BooleanVar(
-            value=bool(self.config_data.get("auto_continue")))
-        self.auto_version_var = tk.BooleanVar(
-            value=bool(self.config_data.get("auto_version_check")))
-        # 启动器自己的新版 0.4 起不在这儿摆勾了：启动即查，见 __init__ 里那句
-        # _start_self_check()。配置里的 auto_self_update 键留着读旧配置用，见
-        # config.default_config 的注释。
-        # 括号里写的是各自的真名：内嵌那条走的是 conhost（不是默认的 Windows
-        # Terminal，字形回退差些），另一条挂的是 Claude Code 的 Stop hook。
-        # 熟练用户要的是这几个词，好去翻文档、翻配置文件；只写大白话他就得猜。
-        #
-        # 拆几行摆，不挤一行：窗口下限是按这排开关的自然宽度量的（见
-        # _apply_min_size），挤成一行会把下限顶宽一大截。行按功能分——上排是终端
-        # 怎么开，中排是挂 Stop hook 那个行为，最后一行是查 claude 新版。
-        #
-        # 每行都从第 0 列起头，几个勾的左边缘对齐。这里本来还有第 1 列（"自动查
-        # 启动器新版"跟上面那条"联网"并排），0.4 把那个勾去掉了，现在整排都是
-        # 第 0 列。
-        #
-        # 内嵌那个勾只在 Windows 上摆，摆上了它独占第 0 行。别的平台上这行是空
-        # 的，于是下面那几行就落到第 0、1 行——行号得跟着挪，不然中间空出一行。
-        base = 1 if EMBED_SUPPORTED else 0
-        rows = []
-        if EMBED_SUPPORTED:
-            rows.append((self.embed_var,
-                         "内嵌终端 conhost（不勾就在新窗口里开）",
-                         self._on_embed_toggle, 0, 0))
-        rows += [
-            (self.auto_continue_var, "自动继续 Stop hook（替用户拍板）",
-             self._on_auto_continue_toggle, base, 0),
-            (self.auto_version_var, "自动查 claude 新版（联网）",
-             self._on_version_check_toggle, base + 1, 0),
-        ]
-        for var, text, command, row, col in rows:
-            tk.Checkbutton(switches, text=text, variable=var, command=command,
-                           bg=PAGE_BG, fg=TEXT, font=font(9), activebackground=PAGE_BG,
-                           selectcolor=PANEL_BG, highlightthickness=0, bd=0,
-                           ).grid(row=row, column=col, sticky="w",
-                                  padx=(0, 18), pady=(0, 2))
-        # 上面那行括号里说的是"勾上会怎么样"，可 conhost、Stop hook 这两个词本身
-        # 还是黑话。一行注解把词解释掉，术语照留——熟手认词，新手读注解。
-        # 单独一行摆（不塞进勾的标题里）：窗口下限量的是 switches 那块的自然宽度
-        # （见 _apply_min_size），注解放进去会把下限再顶宽一截。
-        #
-        # conhost 那句只在 Windows 上留着：别处没有那个勾，解释了也无处可指。
-        note = "Stop hook 是 claude 干完活停下来时触发的动作。"
-        if EMBED_SUPPORTED:
-            note = "conhost 是 Claude Code 自带的终端窗口；" + note
-        tk.Label(footer, text=note, bg=PAGE_BG, fg=MUTED, font=font(9),
-                 anchor="w").pack(fill="x", padx=20, pady=(4, 0))
         self.feedback_var = tk.StringVar(
-            value="点工作区选「新会话」或「接着上次聊」；行首那个数字按住 Ctrl 就能直接开，"
+            value="左边点一本，右边按「新会话」；行首那个数字按住 Ctrl 就能直接开，"
                   "Ctrl+F 跳到筛选框。")
         tk.Label(footer, textvariable=self.feedback_var, bg=PAGE_BG, fg=MUTED,
-                 font=font(9), anchor="w").pack(fill="x", padx=20, pady=(2, 8))
+                 font=font(9), anchor="w").pack(fill="x", padx=20, pady=8)
 
-        # footer 先 pack 是为了让它先把自己的高度要走——窗口被拉矮时该挤的是
-        # 中间那块列表，不是这行提示。
         body = tk.Frame(self, bg=PAGE_BG)
         body.pack(fill="both", expand=True, padx=SIDE_GAP)
 
-        # side 是常年都在的左列；panel 是内嵌终端，平时不摆出来。
-        # 两者都 side="left"，终端一出现就从右侧长出来，窗口跟着变宽。
-        self.side = tk.Frame(body, bg=PAGE_BG)
-        self.side.pack(side="left", fill="both", expand=True)
-        # 非 Windows 上干脆不建：那一栏从头到尾没有会摆出来的时候。
+        # side 是那条定宽的左导航（名字沿用：内嵌终端量窗口宽度时拿它当"左边那
+        # 部分"，_probe_embed 也认这个名字）。定宽不跟着窗口变：它是导航，省下来
+        # 的横向空间全给右栏的详情。
+        #
+        # panel 是内嵌终端，平时不摆出来。两者都 side="left"，终端一出现就从右侧
+        # 长出来，窗口跟着变宽。非 Windows 上干脆不建——那一栏从头到尾没有会摆
+        # 出来的时候。
+        self.side = tk.Frame(body, bg=PAGE_BG, width=NAV_WIDTH)
+        self.side.pack(side="left", fill="y")
+        # propagate 关掉，configure 的宽度才算数；不然里面那块列表一宽就把导航
+        # 栏顶宽了。
+        self.side.pack_propagate(False)
+        self._build_nav(self.side)
         self.panel = None
 
-        # 先建好但不 pack——没会话在跑的时候，界面上不该看出有这么一块。
-        # 一有活的会话，_render_running() 就把它插到模型区上面。
-        self._build_running(self.side)
-        # 交接进度那块也先建好不摆出来，有活的时候插到「正在跑」上面
-        self._build_tasks(self.side)
-
-        self.model_list = self._build_section(
-            self.side, "模型", max_height=MODEL_MAX,
-            actions=[("＋ 添加", self._open_model_dialog),
-                     ("导入当前", self._import_current),
-                     ("测试", self.test_all_models),
-                     ("刷新", self.refresh_models)])
-
-        self.ws_list = self._build_section(
-            self.side, "工作区", max_height=WORKSPACE_MAX, expand=True,
-            actions=[("＋ 添加工作区", self._open_add_workspace_picker),
-                     ("重新扫描", self.rescan)],
-            search=self.ws_filter, top=self._build_workspace_rows)
+        detail = tk.Frame(body, bg=PAGE_BG)
+        detail.pack(side="left", fill="both", expand=True, padx=(PAGE_PAD, 0))
+        self.detail_area = detail
+        self._build_detail(detail)
 
         if EMBED_SUPPORTED:
             self.panel = tk.Frame(body, bg=PAGE_BG)
@@ -587,14 +560,17 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
         return area
 
     def _build_workspace_rows(self, parent):
-        """「工作区」标题底下那两行：托管入口，和默认工作区在哪儿。
+        """「工作区」设置页顶上那两行：托管入口，和默认工作区在哪儿。
+
+        0.4 之前它们长在主窗「工作区」标题底下，现在整块搬进设置窗（见
+        ui/settings.py 的「工作区」页）。
 
         托管摆在这儿而不是顶栏，是因为托管要挑的就是一个工作区——「托管哪个目录、
         用哪一档」跟在哪儿挑工作区是同一件事，凑在一起看才顺。
 
-        默认工作区那行同理：它管的就是底下这张列表里的东西从哪儿冒出来的（新建
-        文件夹建在哪儿、扫描扫哪儿）。这行早先撤过一版，结果这个设置只剩「新建
-        文件夹」对话框里一条路能改，而且改完不点「创建」还会白改——所以请回来了，
+        默认工作区那行同理：它管的就是列表里那些东西从哪儿冒出来的（新建文件夹
+        建在哪儿、扫描扫哪儿）。这行早先撤过一版，结果这个设置只剩「新建文件夹」
+        对话框里一条路能改，而且改完不点「创建」还会白改——所以请回来了，
         让它跟它管的那张列表挨着。
         """
         line = tk.Frame(parent, bg=PAGE_BG)
@@ -624,7 +600,12 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
         widget = self.winfo_containing(event.x_root, event.y_root)
         if widget is None:
             return
-        for target in (self.model_list, self.ws_list):
+        # 绑的是 bind_all，所以滚轮事件是整进程的——在设置窗里滚也走这儿。
+        # 模型列表要看设置窗开没开过；没开过它还不存在，跳过。工作区那张在
+        # 左栏，一直在。
+        targets = [target for target in (self.model_list, self.ws_list)
+                   if target is not None]
+        for target in targets:
             if target.contains(widget):
                 target.scroll(-int(event.delta / 120))
                 return
