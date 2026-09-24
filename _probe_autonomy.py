@@ -1,5 +1,9 @@
 """验「AI 托管」这个入口，以及顺手把工作区那一块理干净的那几处改动。
 
+0.4 把「AI 托管」和「默认工作区」从主窗搬进了设置窗的「工作区」页（见
+ui/settings.py），列表级那两个动作（加一本、重扫）也挪到了左导航底部。所以下面
+第 1、2、5 节找控件的地方跟着换了——断言的意思没变，找的地方变了。
+
 会真开窗口、真写配置，所以沙箱在脚本里自己设（不靠调用方记得带环境变量——
 漏一次就把用户真实那份 ~/.claude_tool/launcher.json 和 hooks/hook.json 写脏，
 写脏过一次）。里面把 claude_tool 真正拉 claude 的那一下换成了假的：只记参数、
@@ -77,12 +81,19 @@ def pillows(parent):
     return [w for w in walk(parent) if isinstance(w, L.PillButton)]
 
 
-def click(parent, caption):
+def find_pill(parent, caption):
     for button in pillows(parent):
         if button._text == caption:
-            button._command()
-            return True
-    return False
+            return button
+    return None
+
+
+def click(parent, caption):
+    button = find_pill(parent, caption)
+    if button is None:
+        return False
+    button._command()
+    return True
 
 
 # ── 沙箱 ──────────────────────────────────────────────────────────────────
@@ -117,34 +128,43 @@ app.track_running = lambda *a, **k: None
 app._watch_terminal = lambda *a, **k: None
 
 
-print("== 1. 「AI 托管」按钮摆在主窗口上、工作区列表上面 ==")
-buttons = pillows(app)
-托管 = next((b for b in buttons if b._text == "AI 托管"), None)
-check("主窗口上有「AI 托管」按钮", 托管 is not None)
+print("== 1. 「AI 托管」按钮在设置窗「工作区」页上 ==")
+# 0.4 起这一块整个搬进了设置窗（见 ui/settings.py 的「工作区」页）：主窗只剩
+# 「挑一本、开」，托管这种配置项不再平铺在主窗上。所以得先把设置窗开出来。
+app.open_settings("工作区")
+app.update()
+page = app._settings_pages["工作区"]
+托管 = next((b for b in pillows(page) if b._text == "AI 托管"), None)
+check("设置窗工作区页上有「AI 托管」按钮", 托管 is not None)
+check("主窗左栏不再重复挂一颗（入口唯一）",
+      not any(b._text == "AI 托管" for b in pillows(app.side)))
 if 托管 is not None:
     holder = 托管.master          # 那行 Frame
-    check("它挂在工作区那一列里（不是藏在哪个对话框里）",
-          holder.master is app.side)
-    check("它排在「工作区」标题下面",
-          holder.winfo_rooty() >= app.ws_list.head.winfo_rooty(),
-          (holder.winfo_rooty(), app.ws_list.head.winfo_rooty()))
-    check("它排在筛选框上面",
-          holder.winfo_rooty() + holder.winfo_height()
-          <= app.filter_entry.winfo_rooty() + 4,
-          (holder.winfo_rooty() + holder.winfo_height(),
-           app.filter_entry.winfo_rooty()))
+    check("它确实在设置窗这一页里",
+          any(node is holder for node in walk(page)))
+    add = find_pill(page, "＋ 添加工作区")
+    check("这一页里「＋ 添加工作区」也在（好比对前后）", add is not None)
+    if add is not None:
+        check("它排在「＋ 添加工作区」上面",
+              托管.winfo_rooty() < add.winfo_rooty(),
+              (托管.winfo_rooty(), add.winfo_rooty()))
     hints = [texts(w) for w in holder.winfo_children()]
     check("旁边带着一句说明", any("交给它自己跑" in t for t in hints), hints)
 
 print()
-print("== 2. 工作区标题那排按钮 ==")
-head = app.ws_list.head
-labels = [texts(w) for w in walk(head) if isinstance(w, L.PillButton)]
+print("== 2. 列表级那两个动作现在挂在左栏底部 ==")
+# 工作区列表搬到左导航之后，加一本、重扫这两个动作跟着挪到栏底的 rail_footer；
+# 列表标题那排（ws_list.head）不再挂按钮——240 宽塞不下。
+head_labels = [texts(w) for w in walk(app.ws_list.head)
+               if isinstance(w, L.PillButton)]
+check("列表标题那排不再挂按钮", head_labels == [], head_labels)
+labels = [texts(w) for w in walk(app.rail_footer)
+          if isinstance(w, L.PillButton)]
 check("并成了「＋ 添加工作区」", "＋ 添加工作区" in labels, labels)
 check("不再有「＋ 新建文件夹」", "＋ 新建文件夹" not in labels)
 check("不再有「＋ 选已有目录」", "＋ 选已有目录" not in labels)
 check("「重新扫描」还在", "重新扫描" in labels, labels)
-check("那排只剩两个按钮", len(labels) == 2, labels)
+check("栏底那排一共三颗（加一本、重扫、设置）", len(labels) == 3, labels)
 
 print()
 print("== 3. 那行重复的「新建文件夹建在 … [更改目录]」撤掉了 ==")
@@ -163,7 +183,7 @@ check("minsize 宽度还是老样子（<= 760）", app.minsize()[0] <= 760,
 
 print()
 print("== 5. 「＋ 添加工作区」先问一句 ==")
-click(head, "＋ 添加工作区")
+check("那颗按钮在左栏底部点得着", click(app.rail_footer, "＋ 添加工作区"))
 app.update()
 picker = find_toplevel("添加工作区")
 check("弹出的是「添加工作区」", picker is not None)

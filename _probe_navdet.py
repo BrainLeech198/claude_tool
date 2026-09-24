@@ -1,4 +1,4 @@
-"""左导航 + 右详情的版式验收（0.4 Task 6）。
+"""左导航 + 右详情的版式验收（0.4 Task 6–7）。
 
 这个版式的问题不是"崩没崩"，而是"摆得对不对"：左栏有没有真拿到它那份宽度、
 右栏那两排按钮有没有被挤到换行、只有选中那一本才高亮。这些**量得出来**，而且
@@ -7,6 +7,9 @@
 
 所以这里一律量 winfo_*：位置（winfo_x/y）、尺寸、映射状态、以及 Row.active。
 图只是附带的记录，不作为判据。
+
+Task 7 补上设置窗「关于」页那几条：四个分页都在、版本号与官网地址摆出来了、
+手动查新版的结果确实回写到设置窗那一行（不是只写主窗底栏）。
 
     python _probe_navdet.py            # 走 _probe_run.py 后台跑
 
@@ -25,10 +28,12 @@ os.environ["HOME"] = PROFILE
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
-from claude_tool.handoff import HANDOFF_FILE                # noqa: E402
-from claude_tool.ui.launcher import Launcher                # noqa: E402
-from claude_tool.ui.nav import NAV_WIDTH                    # noqa: E402
-from claude_tool.ui.settings import PAGES                   # noqa: E402
+from claude_tool import __version__                          # noqa: E402
+from claude_tool import versions                              # noqa: E402
+from claude_tool.handoff import HANDOFF_FILE                 # noqa: E402
+from claude_tool.ui.launcher import Launcher                 # noqa: E402
+from claude_tool.ui.nav import NAV_WIDTH                     # noqa: E402
+from claude_tool.ui.settings import PAGES                    # noqa: E402
 
 FAILED = []
 
@@ -212,8 +217,16 @@ def main():
         soak(app, 0.8)
         win = app._settings_win
         check("设置窗开出来了", win is not None and win.winfo_exists(), True)
-        check("三个分页都在", [name for name in PAGES],
-              ["模型", "工作区", "行为开关"])
+        check("四个分页都在", [name for name in PAGES],
+              ["模型", "工作区", "行为开关", "关于"])
+        # 栏宽是按最宽那个分页名算的，四个都得摆得下、别被窗口裁掉。
+        rail_pills = ours(app._settings_rail, "PillButton")
+        check("分页栏里就那四颗、顺序对",
+              [p._text for p in rail_pills], list(PAGES))
+        win_right = win.winfo_rootx() + win.winfo_width()
+        check("分页名没顶出窗口",
+              all(p.winfo_rootx() + p.winfo_width() <= win_right
+                  for p in rail_pills), True)
         check("默认停在模型页", app._settings_page, "模型")
         check("模型页有模型列表", app.model_list is not None, True)
         app.open_settings("工作区")
@@ -229,6 +242,36 @@ def main():
         check("行为开关页那几个勾还在（少一个自更新）", len(boxes), 3)
         check("那排勾的左边缘对齐",
               len({b.winfo_x() for b in boxes}), 1)
+
+        app.open_settings("关于")
+        soak(app, 0.4)
+        about = app._settings_pages["关于"]
+        words = [str(w.cget("text")) for w in ours(about, "Label")]
+        check("关于页写着版本号",
+              any(__version__ in word for word in words), True)
+        check("关于页摆着官网地址",
+              any(versions.SITE in word for word in words), True)
+        check("关于页有「打开官网」",
+              pill(about, "打开官网") is not None, True)
+        check("关于页有「查启动器新版」",
+              pill(about, "查启动器新版") is not None, True)
+        # 查的结果得回写到设置窗那一行——只写主窗底栏的话，设置窗盖在上面时
+        # 用户点完什么都看不到。这条直接问那一行变量，不真去联网。
+        app._say_self_check("探针塞的一句")
+        soak(app, 0.2)
+        check("结果回写到设置窗那一行",
+              (app.self_check_note_var.get(), app.feedback_var.get()),
+              ("探针塞的一句", "探针塞的一句"))
+        app._say_self_check("")          # 把这句假消息擦掉再往下走
+        # 「关于」页那一行是三样东西并排（两颗按钮 + 官网地址原文）。挤不下的时候
+        # Tk 不会报错，只会把最后那颗裁掉——所以量一遍右边界。
+        page_right = about.winfo_rootx() + about.winfo_width()
+        spilled = [p._text for p in ours(about, "PillButton")
+                   if p.winfo_rootx() + p.winfo_width() > page_right]
+        check("关于页的按钮没顶出右边界", spilled, [])
+        edge = max((w.winfo_rootx() + w.winfo_width()
+                    for w in ours(about, "Label")), default=0)
+        check("关于页的字也没顶出去", edge <= page_right, True)
 
         # 关设置窗是收起来（不是销毁）：模型那页的测试还在跑时要能回填
         app._close_settings()
