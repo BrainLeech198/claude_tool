@@ -21,10 +21,17 @@ from claude_tool.widgets import PillButton, Tip
 
 # 右栏该有多宽。它不是"右栏就直接摆这么宽"——右栏是 fill="both" + expand，多宽
 # 由布局给。这个数只有一个用处：算窗口下限（见 launcher._apply_min_size），保证
-# 缩到最窄时【管理】那一排六个按钮还在同一行上。量出来是 374（改名 56 + 搬迁 56
-# + ↑ 40 + ↓ 40 + 移除 56 + 删交接文档 96，加五道 6 像素的缝），留点余量给字体
-# 差异，取 390。
-DETAIL_MIN_WIDTH = 390
+# 缩到最窄时【管理】那一排**六个**按钮还在同一行上。
+#
+# 实测（Task 8 量的，`_probe_size_state.py` 现在把这几条钉住了）：不含
+# 「删交接文档」时那排要 324 像素；含它（也就是最宽状态）要 **441**。Task 6 那版
+# 按估的按钮宽度写的是 390，实测下来最窄窗口里右栏只分到 442——比 441 多 1 像素，
+# 实质上是在赌字体。现在按实测取 460（441 + 19 余量）。
+#
+# 另外注意别拿 `detail_area.winfo_reqwidth()` 当依据：右栏里有个显示工作区路径的
+# Label，路径长一点那个数就飘（实测能到 601）。下限要的是这排按钮的宽度，那是个
+# 不随数据变的数。
+DETAIL_MIN_WIDTH = 460
 
 
 class DetailMixin:
@@ -131,7 +138,7 @@ class DetailMixin:
     def _detail_set_enabled(self, flag):
         for button in self._detail_daily + self._detail_manage:
             button.set_enabled(flag)
-        if self._handoff_btn.winfo_ismapped():
+        if self._handoff_btn.winfo_manager() == "pack":
             self._handoff_btn.set_enabled(flag)
 
     def _detail_note(self, item):
@@ -160,8 +167,15 @@ class DetailMixin:
         return " · ".join(parts)
 
     def _sync_handoff_button(self, has_handoff):
-        mapped = bool(self._handoff_btn.winfo_ismapped())
-        if has_handoff == mapped:
+        """按这份交接文档有没有，摆上/撤掉那颗按钮。
+
+        判断"现在摆没摆"用 `winfo_manager()`，**不是** `winfo_ismapped()`。后者问的
+        是"此刻在屏幕上可见吗"，它受窗口 map 时机影响：离屏跑（探针把窗口摆到
+        +30000+30000）时一个明明 pack 着的按钮也报 0，于是这里会走进"已经摆上了"
+        的错误分支——按钮撤不下去，切到没交接文档的那本还挂着它。
+        """
+        packed = self._handoff_btn.winfo_manager() == "pack"
+        if has_handoff == packed:
             return
         if has_handoff:
             self._handoff_btn.pack(side="left", padx=(0, 6))
