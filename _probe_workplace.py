@@ -1,8 +1,12 @@
-"""主界面「默认工作区」那行：看得见吗、改得动吗、改了算数吗。
+"""『默认工作区』那行：看得见吗、改得动吗、改了算数吗。
+
+0.4 起这一行搬进了设置窗「工作区」页（原来长在主窗「工作区」标题底下）。要读到
+`workplace_var` 和那两颗按钮，得先把设置窗开起来切到那一页——页面是懒建的，
+不开窗这些控件压根不存在（Task 8 那轮就是 AttributeError 红在这儿的）。
 
 四件事：
 1. 那行显示的就是配置里的 workplace，两个按钮没被长路径顶出框外。
-2. 主界面点「更改目录」选完就当场落盘（workplace 和 roots 一起动），标签跟着变。
+2. 点「更改目录」选完就当场落盘（workplace 和 roots 一起动），标签跟着变。
 3. 新建文件夹对话框里点「更改目录」也当场落盘；而且**接着点取消，改动仍然在**
    ——原先这条路上点取消是会把改动一起吞掉的，这次要验的就是它不再吞。
 4. 建文件夹那条路仍然建在 workplace 底下。
@@ -71,6 +75,16 @@ def all_of(root, kind):
     return [w for w in walk(root, []) if isinstance(w, kind)]
 
 
+def dialogs(app):
+    """现在开着的对话框。
+
+    得把设置窗摘出去：0.4 起它是个常驻的 Toplevel（关窗只是 withdraw，不销毁），
+    第 3、4 节比的"对话框开没开、关没关"不能被它算进来。
+    """
+    return [w for w in app.winfo_children()
+            if isinstance(w, tk.Toplevel) and w is not app._settings_win]
+
+
 def disk_cfg():
     with open(os.path.join(SANDBOX, ".claude_tool", "launcher.json"),
               encoding="utf-8") as f:
@@ -86,10 +100,16 @@ rebind("filedialog", picker)
 app = L.Launcher()
 app.update()
 
+# 0.4：这一行在设置窗「工作区」页里，先开窗切页。往后几节里 `app.workplace_var`
+# 和那两颗按钮都靠着这一次开窗。
+app.open_settings("工作区")
+app.update()
+page = app._settings_pages["工作区"]
+
 print("== 1. 那行显示的是哪儿的路径 ==")
 wanted = app.config_data["workplace"]
 check("标签拿的是 workplace_var", app.workplace_var.get() == wanted, wanted)
-rows = [w for w in walk(app.side, []) if isinstance(w, tk.Label)
+rows = [w for w in walk(page, []) if isinstance(w, tk.Label)
         and w.cget("text") == "默认工作区"]
 check("「默认工作区」这个标题在", len(rows) == 1, len(rows))
 row = rows[0].master
@@ -104,7 +124,7 @@ for text in ("更改目录", "打开"):
                                      row.winfo_width()))
 
 print()
-print("== 2. 主界面改目录：选完就落盘 ==")
+print("== 2. 设置窗里改目录：选完就落盘 ==")
 newbase = os.path.join(SANDBOX, "新工作区")
 os.makedirs(newbase)
 picker.answer = newbase
@@ -129,7 +149,7 @@ os.makedirs(otherbase)
 picker.answer = otherbase
 app._open_quick_workspace_dialog()
 app.update()
-dialog = [w for w in app.winfo_children() if isinstance(w, tk.Toplevel)][-1]
+dialog = dialogs(app)[-1]
 btn = find(dialog, L.PillButton, "更改目录")
 check("对话框里那个「更改目录」按钮在", btn is not None)
 btn._command()
@@ -155,7 +175,7 @@ print("== 4. 建文件夹还是建在 workplace 底下 ==")
 picker.answer = otherbase
 app._open_quick_workspace_dialog()
 app.update()
-dialog = [w for w in app.winfo_children() if isinstance(w, tk.Toplevel)][-1]
+dialog = dialogs(app)[-1]
 entries = all_of(dialog, tk.Entry)
 check("对话框里两个输入框都在", len(entries) >= 2, len(entries))
 entries[0].insert(0, "探针子目录")
@@ -166,8 +186,7 @@ check("文件夹建在了 workplace 底下", os.path.isdir(target), target)
 check("顺手加进了工作区列表",
       any(w["path"] == target for w in app.config_data["workspaces"]),
       [w["path"] for w in app.config_data["workspaces"]])
-check("建完对话框自己关了",
-      not [w for w in app.winfo_children() if isinstance(w, tk.Toplevel)])
+check("建完对话框自己关了", not dialogs(app), dialogs(app))
 
 app.destroy()
 shutil.rmtree(SANDBOX, ignore_errors=True)

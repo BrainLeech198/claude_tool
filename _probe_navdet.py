@@ -171,22 +171,29 @@ def main():
             check("管理动作在同一行且从左到右", (lines, ordered), (1, True))
 
         # 有交接文档才摆「删交接文档」
+        #
+        # 判"摆没摆"一律用 winfo_manager()，**不用** winfo_ismapped()：后者问的是
+        # "此刻在屏幕上可见吗"，离屏跑的时候一个明明 pack 着的按钮也可能报 0
+        # （Task 8 量的：按钮报 0，可它的宽度确实算进了父 Frame 的 reqwidth）。
+        # manager 是几何管理器状态，跟窗口 map 时机无关。
+        def packed(w):
+            return w is not None and w.winfo_manager() == "pack"
+
         handoff = pill(app.detail_area, "删交接文档")
-        check("有交接文档时摆出「删交接文档」",
-              handoff is not None and handoff.winfo_ismapped(), True)
-        if handoff is not None and handoff.winfo_ismapped():
+        check("有交接文档时摆出「删交接文档」", packed(handoff), True)
+        if packed(handoff):
             check("它排在管理那一排最右边",
                   handoff.winfo_rootx() > max(b.winfo_rootx() for b in manage
                                               if b is not None), True)
-        if all(b is not None for b in manage) and handoff is not None \
-                and handoff.winfo_ismapped():
+        if all(b is not None for b in manage) and packed(handoff):
             lines, ordered = same_row(manage + [handoff])
             check("六个管理动作挤在一行（没换行）", (lines, ordered), (1, True))
 
         # 换到没有交接文档那本：那颗按钮该收回去
         app.select_workspace(home_b)
         soak(app, 0.3)
-        check("没交接文档就不摆它", app._handoff_btn.winfo_ismapped(), False)
+        check("没交接文档就不摆它",
+              app._handoff_btn.winfo_manager() == "pack", False)
 
         # ── 窄屏：缩到下限，两排按钮还不换行 ──
         app.geometry("{}x{}".format(app.minsize()[0], app.minsize()[1]))
@@ -205,9 +212,17 @@ def main():
             lines, ordered = same_row(daily)
             check("窄屏下日常动作还在一行", (lines, ordered), (1, True))
             group = manage + ([handoff] if handoff is not None
-                              and handoff.winfo_ismapped() else [])
+                              and handoff.winfo_manager() == "pack" else [])
             lines, ordered = same_row(group)
             check("窄屏下管理动作还在一行", (lines, ordered), (1, True))
+            # 光"没换行"还不够——要它离换行还有余量。Task 8 查出来的：上一版
+            # DETAIL_MIN_WIDTH=390 时右栏只分到 442，而这排最宽状态（含删交接
+            # 文档）要 441，余 1 像素；换个字体就换了。这条盯的就是那个余量。
+            row_worst = manage[0].master.winfo_reqwidth()
+            margin = app.detail_area.winfo_width() - row_worst
+            check("窄屏下那排离换行还有余量（右栏 {} - 那排 {} = {}）".format(
+                app.detail_area.winfo_width(), row_worst, margin),
+                margin >= 20, True)
         check("窄屏下左栏没被挤扁", app.side.winfo_width(), NAV_WIDTH)
         check("窄屏下右栏还有地儿",
               app.detail_area.winfo_width() >= 300, True)

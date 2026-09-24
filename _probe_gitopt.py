@@ -276,7 +276,13 @@ def main():
     app.update()
     check("点了开始才起进程", spy.get("argv") is not None, True)
     check("没勾就还是不说 git 的事", GITIGNORE_PROMPT in prompt(), False)
-    check("没勾就没往配置里写", saved_flag(), None)
+    # 0.4 起不能再要求"配置文件原封不动"了：启动路径上 `_sync_selection` 会把
+    # 「当前工作区」写进配置（nav.py:119 那次 save_config），顺带把
+    # handoff_ignore_git 归一化成 False 一起落盘。所以这一格现在读出来是 False
+    # 而不是 None——不是"写进去了"，是"键被补全了"。要盯的是：没勾就没记成 True。
+    # 用 bool() 兜一下，None / False 都算过，只有 True（或者"找不到这个工作区"
+    # 那个字符串）才判红。
+    check("没勾就没勾上", bool(saved_flag()), False)
     app._poll_handoff()
 
     # ── 3. git 目录 + 勾上：带上那段，勾选记回工作区 ──

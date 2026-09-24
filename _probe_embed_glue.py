@@ -27,6 +27,18 @@ _reconfigure()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _probe_common import rebind                       # noqa: E402
 
+# 沙箱必须在**任何** `claude_tool.*` 之前设好。
+# `paths.py` 是在它自己 import 那一下把 `~` expanduser 成模块级常量的
+# （TOOL_DIR / CONFIG_FILE），一旦它被提前拉进来，之后再把 USERPROFILE 指到
+# 沙箱也没用——常量已经定了。任务 8 那轮就是这么踩的：这个探针原来把
+# `import claude_tool.*` 写在沙箱前面，于是 `L.Launcher()` 全程读写用户的真
+# `~/.claude_tool/launcher.json`，跑一趟把人家存的窗口位置给改了。
+# （顺序问题 `_probe_run.py` 的文件头也写过，同一件事。）
+SANDBOX = tempfile.mkdtemp(prefix="embedglue_")
+print("沙箱：", SANDBOX, flush=True)
+os.environ["USERPROFILE"] = SANDBOX
+os.environ["HOME"] = SANDBOX
+
 from claude_tool import claude as C  # noqa: E402
 from claude_tool import winhost as W  # noqa: E402
 from claude_tool.ui import launcher as L  # noqa: E402
@@ -106,17 +118,6 @@ def sweep_fakes():
     return n
 
 
-n = sweep_fakes()
-if n:
-    print("（先收掉上一趟留下的 {} 个假控制台）".format(n), flush=True)
-    time.sleep(1.5)
-
-SANDBOX = tempfile.mkdtemp(prefix="embedglue_")
-print("沙箱：", SANDBOX, flush=True)
-os.environ["USERPROFILE"] = SANDBOX
-os.environ["HOME"] = SANDBOX
-
-
 def fake_spawn(workdir, cont=False, prompt=None, settings=None, permission=None):
     known = {hwnd for hwnd, _ in W.console_windows()}
     cmd = "title {} & echo fakeprocess & ping -n 600 127.0.0.1 > nul".format(
@@ -125,6 +126,13 @@ def fake_spawn(workdir, cont=False, prompt=None, settings=None, permission=None)
                             creationflags=C.CREATE_NEW_CONSOLE)
     return proc, known
 
+
+# 收拾上一趟的假窗口要排在开窗之前（原来在沙箱那段前面，现在沙箱挪上去了，
+# 这里跟着挪下来——它只用到 W，不依赖沙箱，位置随需要走）。
+n = sweep_fakes()
+if n:
+    print("（先收掉上一趟留下的 {} 个假控制台）".format(n), flush=True)
+    time.sleep(1.5)
 
 rebind("spawn_console", fake_spawn)
 app = L.Launcher()

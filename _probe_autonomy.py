@@ -178,8 +178,17 @@ check("_open_workplace_dialog 没了", not hasattr(app, "_open_workplace_dialog"
 print()
 print("== 4. 窗口下限没被这一行顶上去 ==")
 app.update_idletasks()
-check("minsize 宽度还是老样子（<= 760）", app.minsize()[0] <= 760,
-      app.minsize())
+# 0.4：这一行搬进设置窗了，那是另一个 Toplevel，管不到主窗下限。所以下限现在
+# 应该**正好**等于 _apply_min_size 按两栏常数算出来的那个数——多一点就说明有
+# 别的东西在往上顶。
+# 别再把上界写死成一个数：下限这一路已经动过三次（去掉自更新的勾时没动、
+# 主窗重做后是 726、Task 8 把右栏量准之后是 796），每动一次都得回来改一遍
+# 那种写死值。这里改成"跟算式对"。
+expected = (L.NAV_WIDTH + L.PAGE_PAD + L.DETAIL_MIN_WIDTH + 2 * L.PAGE_PAD
+            + L.MIN_MARGIN)
+check("下限正好是两栏常数算出来的那个数",
+      app.minsize()[0] == expected,
+      "{} vs 算出来 {}".format(app.minsize()[0], expected))
 
 print()
 print("== 5. 「＋ 添加工作区」先问一句 ==")

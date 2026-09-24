@@ -114,6 +114,22 @@ def check(label, ok, detail=""):
         bad.append(label)
 
 
+def detail_actions(app):
+    """右栏那两排按钮的字。
+
+    0.4 起「改名/搬迁/↑↓/移除」不在工作区行上了，搬到右栏（见 ui/detail.py）：
+    上排日常（新会话/接着上次/打开目录）、下排管理（改名/搬迁/↑/↓/移除）。
+    第 6 节原来数的是行上的动作，现在改数右栏的——要盯的事没变。
+
+    判"摆没摆"用 winfo_manager()：离屏跑的时候 winfo_ismapped() 对一个明明
+    pack 着的按钮也会报 0（Task 8 实测），当判据会得出反的结论。
+    """
+    labels = [b._text for b in app._detail_daily + app._detail_manage]
+    if app._handoff_btn.winfo_manager() == "pack":
+        labels.append("删交接文档")
+    return labels
+
+
 def bin_entries():
     """各盘的回收站里都有哪些条目，返回 {(盘符, 名字)}；一个都读不到就是 None。
 
@@ -430,11 +446,11 @@ def dialog(app, drive):
     before = len(app.ws_list.inner.winfo_children())
     rows = [w for w in app.ws_list.inner.winfo_children()]
     check("工作区那行摆出来了", rows, "{} 个子控件".format(before))
-    row = rows[0]
-    labels = [glyph for glyph, _cb in row.actions]
-    check("行上有「搬迁」", "搬迁" in labels, labels)
+    app.update()
+    labels = detail_actions(app)
+    check("右栏有「搬迁」", "搬迁" in labels, labels)
     check("原有那几个动作都还在",
-          {"移除", "改名", "↓", "↑", "开目录"} <= set(labels), labels)
+          {"移除", "改名", "↓", "↑", "打开目录"} <= set(labels), labels)
 
     app.open_move_dialog(item)
     drive.pump(0.6)

@@ -106,13 +106,27 @@ def check(label, passed, detail=""):
 
 
 def rows(app):
-    """工作区那几行（Row 是 Canvas，动作字在 .actions 上，标题在 .title 上）。"""
+    """工作区那几行（Row 是 Canvas，标题在 .title 上）。"""
     return [w for w in app.ws_list.inner.winfo_children()
             if isinstance(w, Row)]
 
 
-def actions_of(row):
-    return [glyph for glyph, _ in row.actions]
+# 0.4 起「改名/搬迁/↑↓/移除」不在行上了，搬到右栏那两排（见 ui/detail.py）：
+# 上排日常（新会话/接着上次/打开目录）、下排管理（改名/搬迁/↑/↓/移除）。
+# 所以这个探针盯的对象从"行上的动作"换成"右栏的动作"——要盯的事没变。
+#
+# 判"摆没摆"用 winfo_manager()，不用 winfo_ismapped()：离屏跑的时候后者对一个
+# 明明 pack 着的按钮也会报 0（Task 8 实测），拿它当判据会得出反的结论。
+def detail_actions(app):
+    labels = [b._text for b in app._detail_daily + app._detail_manage]
+    if app._handoff_btn.winfo_manager() == "pack":
+        labels.append("删交接文档")
+    return labels
+
+
+def detail_meta(app):
+    """右栏 meta 那行。原来这行字挂在行右侧（row.warn），0.4 挪右栏了。"""
+    return app.detail_meta_var.get()
 
 
 def bin_count():
@@ -172,13 +186,14 @@ def main():
     print("--- 目录里没有 handoff.md ---")
     row = rows(app)[0]
     check("行摆出来了", row is not None)
-    check("没摆「删交接文档」", "删交接文档" not in actions_of(row),
-          "{}".format(actions_of(row)))
+    check("没摆「删交接文档」", "删交接文档" not in detail_actions(app),
+          "{}".format(detail_actions(app)))
     check("旁边那几颗照旧都在",
-          set(["移除", "改名", "↑", "↓", "开目录", "搬迁"]) <= set(actions_of(row)),
-          "{}".format(actions_of(row)))
-    check("右边那格没写「有交接文档」", "有交接文档" not in (row.warn or ""),
-          row.warn)
+          set(["移除", "改名", "↑", "↓", "打开目录", "搬迁"])
+          <= set(detail_actions(app)),
+          "{}".format(detail_actions(app)))
+    check("右边那格没写「有交接文档」", "有交接文档" not in detail_meta(app),
+          detail_meta(app))
     if OUT:
         grab(app, OUT)
 
@@ -197,11 +212,13 @@ def main():
     app.refresh_workspaces()
     app.update()
     row = rows(app)[0]
-    check("摆出了「删交接文档」", "删交接文档" in actions_of(row),
-          "{}".format(actions_of(row)))
-    check("它挂在这一串的最左边（别的按钮一个没挪窝）",
-          actions_of(row)[-1] == "删交接文档", "{}".format(actions_of(row)))
-    check("右边那格写了「有交接文档」", "有交接文档" in (row.warn or ""), row.warn)
+    check("摆出了「删交接文档」", "删交接文档" in detail_actions(app),
+          "{}".format(detail_actions(app)))
+    check("它挂在这一串的最后（别的按钮一个没挪窝）",
+          detail_actions(app)[-1] == "删交接文档",
+          "{}".format(detail_actions(app)))
+    check("右边那格写了「有交接文档」", "有交接文档" in detail_meta(app),
+          detail_meta(app))
     if OUT:
         grab(app, OUT)
 
@@ -224,9 +241,10 @@ def main():
     print("--- 删完之后 ---")
     app.update()
     row = rows(app)[0]
-    check("「删交接文档」收回去了", "删交接文档" not in actions_of(row),
-          "{}".format(actions_of(row)))
-    check("右边那格不提交接文档了", "有交接文档" not in (row.warn or ""), row.warn)
+    check("「删交接文档」收回去了", "删交接文档" not in detail_actions(app),
+          "{}".format(detail_actions(app)))
+    check("右边那格不提交接文档了", "有交接文档" not in detail_meta(app),
+          detail_meta(app))
     check("反馈行说了结果", "回收站" in app.feedback_var.get(),
           app.feedback_var.get())
     check("工作区本身没被挪走", os.path.isdir(WORKSPACE))
@@ -241,8 +259,8 @@ def main():
     del asked[:]
     app.remove_handoff(item)
     check("文件还在", os.path.isfile(handoff))
-    check("行上还摆着那颗按钮", "删交接文档" in actions_of(rows(app)[0]),
-          "{}".format(actions_of(rows(app)[0])))
+    check("右栏还摆着那颗按钮", "删交接文档" in detail_actions(app),
+          "{}".format(detail_actions(app)))
 
     app.destroy()
     print()

@@ -261,9 +261,13 @@ def scenario(app, drive, embed, preset, tag):
           app.task_head_var.get())
     check("带上了第几个", app.task_count_var.get() == "第 1/1 个",
           app.task_count_var.get())
-    check("进度区在模型区上面", app.task_frame.winfo_y() < app.model_list.head.winfo_y(),
-          "task y={} 模型 y={}".format(app.task_frame.winfo_y(),
-                                       app.model_list.head.winfo_y()))
+    # 0.4：原来是跟「模型区」比高低的，可模型区搬进了设置窗——那是另一个 Toplevel，
+    # 两边没法比。改成跟正文那栏比：进度区在正文上面，这条要盯的事没变。
+    # 用 winfo_rooty 而不是 winfo_y：两者现在挂在不同父控件下，y 的基准不一样。
+    check("进度区在正文上面",
+          app.task_frame.winfo_rooty() < app.detail_area.winfo_rooty(),
+          "task y={} 正文 y={}".format(app.task_frame.winfo_rooty(),
+                                       app.detail_area.winfo_rooty()))
 
     # 流水线跑着的时候，手动点「整理交接文档」得被打回去：两边会抢同一块进度区。
     app.write_handoff(old)

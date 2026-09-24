@@ -1,4 +1,4 @@
-"""量底部那排勾选框摆得齐不齐。
+"""量那排勾选框摆得齐不齐。
 
 用户报的是"四个勾选框没有对齐"。原因是「自动继续 Stop hook」被 grid 到了第 1 列，
 第 0 列空着——grid 里这一行就跟着第 0 列（别的行那条最长的标题）的宽度往后缩，
@@ -8,11 +8,17 @@
 EXPECTED 那句。第 1 列已经没人占，但那条断言留着——防的是以后有人再往第 1 列
 塞东西却不给第 0 列填。）
 
+**0.4 起这排勾搬进了设置窗「行为开关」页**（原来平铺在主窗底栏）。要量它得先把
+设置窗开起来、切到那一页——页面是懒建的，不开窗 `app.switches` 这个属性根本
+不存在（Task 8 那轮就是 AttributeError 红在这儿的）。量的对象换了地方，但"左边缘
+齐不齐、有没有左边空一格的行"这两条要盯的事一条没变。
+
 要钉住两条：
   1. 第 0 列的勾左边缘全在同一个 x（都贴着左边缘）。
   2. 哪一行占了第 1 列，那一行的第 0 列就得有东西——不许留那种"左边空一格"的行。
 
-沙箱 USERPROFILE，绝不碰用户真实的 ~/.claude_tool。
+沙箱 USERPROFILE，绝不碰用户真实的 ~/.claude_tool（0.4 启动路径会落一次盘，
+不沙箱就会把用户的 launcher.json 改掉）。
 """
 import os
 import shutil
@@ -46,6 +52,11 @@ def main():
     os.makedirs(PROFILE, exist_ok=True)
 
     app = Launcher()
+    app.update_idletasks()
+    app.update()
+
+    # 0.4：那排勾在设置窗里，先开窗再切页。
+    app.open_settings("行为开关")
     app.update_idletasks()
     app.update()
 
