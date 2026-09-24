@@ -232,10 +232,10 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
         self.refresh_workspaces()
         self._apply_min_size()
         self._probe_claude_version()
-        # 勾着才问官网。这条不依赖本机 claude 的版本号（问的是我们自己），所以
-        # 不跟 claude 那条一起挂在 version_queue 上，直接起。
-        if self.auto_self_var.get():
-            self._start_self_check()
+        # 启动器自己有没有新版：0.4 起每次都查，不再由用户开关。查的是我们自己
+        # 的官网，不是 npm，量很小。这条不依赖本机 claude 的版本号（问的是我们
+        # 自己），所以不跟 claude 那条一起挂在 version_queue 上，直接起。
+        self._start_self_check()
         self.after(1000, self._poll_running)
         self.ws_filter.trace_add("write", lambda *_: self.refresh_workspaces())
         self.bind_all("<MouseWheel>", self._on_wheel)
@@ -254,10 +254,9 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
     def _apply_min_size(self):
         """窗口下限按内容量出来，别写死。
 
-        底下那排开关（内嵌终端 + 两个挂 Stop hook 的行为 + 自动查新版，分三行摆）
-        是最宽的一块，几段文字加上间距比左列那几块都宽；原先写死的下限 560
-        （默认宽 640）都装不下，右边那个勾的标题会被切掉一截，字号再大点的机器
-        切得更多。
+        底下那排开关（内嵌终端、自动继续 Stop hook、自动查 claude 新版）是最宽的
+        一块，几段文字加上间距比左列那几块都宽；原先写死的下限 560（默认宽 640）
+        都装不下，末尾那个勾的标题会被切掉一截，字号再大点的机器切得更多。
 
         量的只有那排开关和左列这两块**定死**的东西，不去拿整窗的 reqwidth：顶栏
         的模型名、底下那行反馈都是会变长的字符串，它们一长整窗的自然宽度就跟着
@@ -399,20 +398,20 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
             value=bool(self.config_data.get("auto_continue")))
         self.auto_version_var = tk.BooleanVar(
             value=bool(self.config_data.get("auto_version_check")))
-        # 查的是启动器自己。跟旁边那条一样默认关：都联网。
-        self.auto_self_var = tk.BooleanVar(
-            value=bool(self.config_data.get("auto_self_update")))
+        # 启动器自己的新版 0.4 起不在这儿摆勾了：启动即查，见 __init__ 里那句
+        # _start_self_check()。配置里的 auto_self_update 键留着读旧配置用，见
+        # config.default_config 的注释。
         # 括号里写的是各自的真名：内嵌那条走的是 conhost（不是默认的 Windows
         # Terminal，字形回退差些），另一条挂的是 Claude Code 的 Stop hook。
         # 熟练用户要的是这几个词，好去翻文档、翻配置文件；只写大白话他就得猜。
         #
         # 拆几行摆，不挤一行：窗口下限是按这排开关的自然宽度量的（见
         # _apply_min_size），挤成一行会把下限顶宽一大截。行按功能分——上排是终端
-        # 怎么开，中排是挂 Stop hook 那个行为，最后一行是联网那件事。
+        # 怎么开，中排是挂 Stop hook 那个行为，最后一行是查 claude 新版。
         #
-        # 每行都从第 0 列起头。第 0 列空着、第 1 列有东西的那种摆法（"自动继续"
-        # 先前就落在 base 行第 1 列）看着像缩进了一格，四个勾的左边缘参差不齐——
-        # 只有最后一行那两个"联网"是特意并排的，第 1 列才该有东西。
+        # 每行都从第 0 列起头，几个勾的左边缘对齐。这里本来还有第 1 列（"自动查
+        # 启动器新版"跟上面那条"联网"并排），0.4 把那个勾去掉了，现在整排都是
+        # 第 0 列。
         #
         # 内嵌那个勾只在 Windows 上摆，摆上了它独占第 0 行。别的平台上这行是空
         # 的，于是下面那几行就落到第 0、1 行——行号得跟着挪，不然中间空出一行。
@@ -427,8 +426,6 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
              self._on_auto_continue_toggle, base, 0),
             (self.auto_version_var, "自动查 claude 新版（联网）",
              self._on_version_check_toggle, base + 1, 0),
-            (self.auto_self_var, "自动查启动器新版（联网）",
-             self._on_self_check_toggle, base + 1, 1),
         ]
         for var, text, command, row, col in rows:
             tk.Checkbutton(switches, text=text, variable=var, command=command,
