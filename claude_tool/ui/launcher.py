@@ -1,14 +1,19 @@
 """主窗口。
 
-左右两栏：左边模型，右边工作区；底下一排开关，中间一条"正在跑"。
-对话框（加模型、加工作区、点工作区那次询问）在 ui/dialogs.py，以 mixin
-的形式挂在这个类上——它们跟主窗口共享 config_data / feedback_var 那些状态。
+左列模型、右列工作区，底下一排开关，中间一条"正在跑"——这是骨架：窗口怎么起、
+底部那排开关怎么摆、两栏的装配顺序，以及不属于任何一域的那几个小方法。
+
+各个域按 mixin 拆在 ui/ 底下（见 设计说明-0.4.md 第三节）：
+  dialogs.py     加模型、加工作区、点工作区那次询问
+  update.py      顶栏版本检查 + 启动器自更新
+  models.py      模型列表、测试、换模型那条流水线
+  workspaces.py  工作区列表、搬迁改名、默认目录
+  sessions.py    开出去的会话、「正在跑」、交接文档
+  terminal.py    内嵌终端（只在 Windows 上有）
+它们跟主窗口共享 config_data / feedback_var 那些状态，全部留在本文件的 __init__ 里。
 """
 import os
 import queue
-import subprocess
-import tempfile
-import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -19,7 +24,6 @@ from claude_tool.paths import (
     TOOL_DIR,
 )
 from claude_tool import install
-from claude_tool import versions
 from claude_tool.theme import (
     ACCENT,
     ACCENT_SOFT,
@@ -29,14 +33,10 @@ from claude_tool.theme import (
     MUTED,
     PAGE_BG,
     PANEL_BG,
+    SIDE_GAP,
     TEXT,
     WARN,
-    ellipsize,
     font,
-)
-from claude_tool.permissions import (
-    permission_option,
-    workspace_permission,
 )
 from claude_tool.presets import migrate_presets
 from claude_tool.config import (
@@ -45,39 +45,12 @@ from claude_tool.config import (
     merge_scanned,
     save_config,
 )
-from claude_tool.claude import (
-    CREATE_NO_WINDOW,
-    claude_exe,
-    find_claude,
-)
-from claude_tool.handoff import (
-    AUTO_CONTINUE_MAX,
-    AUTO_CONTINUE_RESET,
-    HANDOFF_FILE,
-    HANDOFF_TOOLS,
-    autonomy_caption,
-    ensure_hook_settings,
-    handoff_prompt,
-    is_git_repo,
-    tier_flags,
-)
+from claude_tool.claude import find_claude
 from claude_tool.host import (
     EMBED_SUPPORTED,
-    WINDOW_CONTROL,
-    EmbeddedConsole,
-    bring_next_to,
-    close_window,
-    fresh_console,
-    fresh_terminal,
     open_path,
     open_url,
     place_window,
-    screen_bounds,
-    spawn_console,
-    spawn_terminal,
-    terminal_windows,
-    toggle_topmost,
-    window_alive,
     window_position,
 )
 from claude_tool.widgets import (
@@ -89,6 +62,8 @@ from claude_tool.widgets import (
 
 from claude_tool.ui.dialogs import LauncherDialogs
 from claude_tool.ui.models import ModelsMixin
+from claude_tool.ui.sessions import SessionsMixin
+from claude_tool.ui.terminal import TerminalMixin
 from claude_tool.ui.update import UpdateMixin
 from claude_tool.ui.workspaces import WorkspacesMixin
 
@@ -96,8 +71,8 @@ from claude_tool.ui.workspaces import WorkspacesMixin
 MODEL_MAX, WORKSPACE_MAX = 300, 480
 # 内嵌终端那一栏的宽度。它从右边长出来，窗口跟着变宽，左列不动。
 TERMINAL_MIN_WIDTH = 900
-# 左列和终端栏之间、以及正文左右各留的空档。
-SIDE_GAP = 14
+# 正文上下各留的空档。左列和终端栏之间那个 SIDE_GAP 在 theme.py——内嵌终端和
+# 会话启动那两处也要用它，搁这儿它们 import 不到。
 PAGE_PAD = 16
 
 # 窗口下限按内容的自然尺寸算（见 _apply_min_size），这两条是它的兜底和冗余。
@@ -125,7 +100,7 @@ def default_window_size(screen_w, screen_h):
 
 
 class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
-               LauncherDialogs, tk.Tk):
+               SessionsMixin, TerminalMixin, LauncherDialogs, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Claude 启动器")
@@ -657,565 +632,6 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
                 target.scroll(-int(event.delta / 120))
                 return
 
-    # ── 正在跑的会话 ──
-
-    def _build_running(self, parent):
-        """「正在跑」那块。建好先不 pack，等真有会话了再插进去。
-
-        只管从这个启动器开出去的窗口——记的是 Popen 句柄，poll() 一下就知道
-        那个控制台还开没开着。别的终端里自己敲的 claude 它看不见，也没打算看见。
-        """
-        self.running_frame = tk.Frame(parent, bg=PAGE_BG)
-        head = tk.Frame(self.running_frame, bg=PAGE_BG)
-        head.pack(fill="x", pady=(16, 6))
-        tk.Label(head, text="正在跑", bg=PAGE_BG, fg=TEXT,
-                 font=font(11, True)).pack(side="left")
-        tk.Label(head, text="（从这个启动器开出去的窗口）", bg=PAGE_BG, fg=MUTED,
-                 font=font(9)).pack(side="left", padx=(8, 0))
-        self.running_rows = tk.Frame(self.running_frame, bg=PAGE_BG)
-        self.running_rows.pack(fill="x")
-
-    def _render_running(self):
-        """照 self.running 重画那几行。空了就整块收起来。"""
-        for child in self.running_rows.winfo_children():
-            child.destroy()
-        if not self.running:
-            self.running_frame.pack_forget()
-            self._running_shown = False
-            self.model_list.fit()
-            self.ws_list.fit()
-            return
-        for item in self.running:
-            line = tk.Frame(self.running_rows, bg=PANEL_BG,
-                            highlightbackground=BORDER, highlightthickness=1)
-            line.pack(fill="x", pady=3)
-            tk.Label(line, text="●", bg=PANEL_BG, fg=ACCENT,
-                     font=font(10)).pack(side="left", padx=(12, 8), pady=8)
-            text = tk.Frame(line, bg=PANEL_BG)
-            text.pack(side="left", fill="x", expand=True)
-            tk.Label(text, text=item["name"], bg=PANEL_BG, fg=TEXT, font=font(10),
-                     anchor="w").pack(fill="x")
-            tk.Label(text, text=ellipsize(item["path"], 320, 9), bg=PANEL_BG,
-                     fg=MUTED, font=font(9), anchor="w").pack(fill="x")
-            # 操作按屏幕从左到右念：移过来 置顶 关掉，最后是整理交接文档。
-            # side="right" 是先摆的在最右边，所以得倒着 pack。
-            ops = []
-            if item.get("hwnd"):
-                # 这几样只有独立窗口有——内嵌那个本来就长在本窗口里，挪位置和
-                # 压顶层对它没意义（那一栏自己还有「放到独立窗口」「关掉」）。
-                #
-                # 挪位置、压顶层要能指挥别人的窗口，非 Windows 上没这回事（见
-                # host.WINDOW_CONTROL），那两个按钮就不摆；「关掉」那边做得到
-                # ——按进程树发 SIGTERM，所以照摆。
-                if WINDOW_CONTROL:
-                    ops += [("移过来", lambda it=item: self.bring_running(it)),
-                            ("置顶", lambda it=item: self.top_running(it))]
-                ops.append(("关掉", lambda it=item: self.close_running(it)))
-            # 现在就让它写，读的是硬盘上已经存下来的那份会话记录——所以哪怕
-            # 里面那份 claude 还开着也照写不误，只是会 fork 出一份副本。
-            ops.append(("整理交接文档", lambda it=item: self.write_handoff(it)))
-            holder = tk.Frame(line, bg=PANEL_BG)
-            holder.pack(side="right", padx=(8, 10), pady=8)
-            for caption, command in reversed(ops):
-                PillButton(holder, caption, command,
-                           bg=PANEL_BG).pack(side="right", padx=(6, 0))
-        self.running_frame.pack(fill="x", before=self.model_list.head)
-        self._running_shown = True
-        self.model_list.fit()
-        self.ws_list.fit()
-
-    # ── 交接进度 ──
-
-    def _build_tasks(self, parent):
-        """「有活在跑」这块区域，建好不摆出来，有活才插到最上面。
-
-        现在装的是启动器自己起的活：换模型那条流水线、手动点出来的「整理交接
-        文档」。都是"跑好几秒往上"的事。不摆个一直在动的东西，用户会以为窗口
-        卡死了、把正写到一半的 claude 关掉。
-        """
-        self.jobs_frame = tk.Frame(parent, bg=PAGE_BG)
-        self.task_frame = tk.Frame(self.jobs_frame, bg=PANEL_BG,
-                                   highlightbackground=BORDER,
-                                   highlightthickness=1)
-        inner = tk.Frame(self.task_frame, bg=PANEL_BG)
-        inner.pack(fill="x", padx=12, pady=10)
-        head = tk.Frame(inner, bg=PANEL_BG)
-        head.pack(fill="x")
-        self.task_head_var = tk.StringVar(value="正在换模型")
-        tk.Label(head, textvariable=self.task_head_var, bg=PANEL_BG, fg=TEXT,
-                 font=font(10, True)).pack(side="left")
-        self.task_count_var = tk.StringVar()
-        tk.Label(head, textvariable=self.task_count_var, bg=PANEL_BG, fg=MUTED,
-                 font=font(9)).pack(side="left", padx=(8, 0))
-        self.task_name_var = tk.StringVar()
-        tk.Label(head, textvariable=self.task_name_var, bg=PANEL_BG, fg=ACCENT,
-                 font=font(10)).pack(side="right")
-
-        # 走马灯式：真进度算不出来（那一份文档写多久全看那边），能表示的只有
-        # "还在动"，所以不假装有百分比。
-        self.task_bar = ttk.Progressbar(inner, mode="indeterminate",
-                                        style="Task.Horizontal.TProgressbar")
-        self.task_bar.pack(fill="x", pady=(8, 6))
-        self.task_step_var = tk.StringVar()
-        tk.Label(inner, textvariable=self.task_step_var, bg=PANEL_BG, fg=MUTED,
-                 font=font(9), anchor="w", justify="left",
-                 ).pack(fill="x")
-
-    def _show_task_area(self):
-        """把进度区插到「正在跑」上面（没有「正在跑」就插到模型区上面）。
-
-        已经在摆着就什么都不做——流水线里每一步都会叫它一次，进来一次就重置
-        一次秒表的话，那个"已用多久"就永远停在几秒，看着更像卡死了。
-        """
-        if self._task_visible:
-            return
-        self._task_visible = True
-        self._layout_jobs()
-        self.task_bar.start(12)
-        self._task_started = time.time()
-        self._task_tick()
-
-    def _hide_task_area(self):
-        self._task_visible = False
-        if self._task_timer is not None:
-            self.after_cancel(self._task_timer)
-            self._task_timer = None
-        self.task_bar.stop()
-        self._task_text = None
-        self._layout_jobs()
-
-    def _layout_jobs(self):
-        """进度那一块摆不摆，以及容器该不该跟着出现。"""
-        self.task_frame.pack_forget()
-        if self._task_visible:
-            self.task_frame.pack(fill="x")
-
-        showing = self._task_visible
-        if showing == self._jobs_shown:
-            return
-        self._jobs_shown = showing
-        if showing:
-            # 锚在「正在跑」上面；「正在跑」自己永远锚在模型区上面，所以后摆的
-            # 那个反而排在下面——这里得赶在它之前摆，出来的顺序才是活在上。
-            anchor = (self.running_frame if self._running_shown
-                      else self.model_list.head)
-            self.jobs_frame.pack(fill="x", pady=(16, 0), before=anchor)
-        else:
-            self.jobs_frame.pack_forget()
-        self.model_list.fit()
-        self.ws_list.fit()
-
-    def _task_step(self, text):
-        """换掉进度条底下那行说明。秒数自己会往上加，表示它没死。"""
-        self._task_text = text
-        self._task_render()
-
-    def _task_render(self):
-        if self._task_text is None:
-            return
-        self.task_step_var.set("{} · 已用 {} 秒".format(
-            self._task_text, int(time.time() - self._task_started)))
-
-    def _task_tick(self):
-        self._task_timer = None
-        if not self._task_visible:
-            return
-        self._task_render()
-        self._task_timer = self.after(1000, self._task_tick)
-
-    def _poll_running(self):
-        """每秒一趟：窗口还开着没、版本号回来了没。
-
-        都走这条心跳是因为它是现成的、启动时就起来的定时器；再造几个不值当。
-        """
-        try:
-            while True:
-                text = self.version_queue.get_nowait()
-                self.version_var.set(text)
-                self._local_version = text
-                # 勾着"自动查新版"才联网问一次；不勾就只把版本号贴上顶栏。没读到
-                # 版本号（没装 claude）就别去联那次网了，比不出什么来。刚在安装
-                # 面板里升成功的（_force_version_check）是个例外：用户自己点的
-                # 升级，顶上这几处总得跟着变。
-                if versions.parse(text) and (self.auto_version_var.get()
-                                             or self._force_version_check):
-                    self._force_version_check = False
-                    self._start_version_check()
-        except queue.Empty:
-            pass
-        self._poll_version_check()
-        self._poll_self_update()
-
-        live = [item for item in self.running if item["proc"].poll() is None]
-        if len(live) != len(self.running):
-            gone = len(self.running) - len(live)
-            self.running = live
-            self._render_running()
-            if gone:
-                self.feedback_var.set("有会话关掉了，正在跑的那块已经跟着更新。")
-        if self.embedded is not None and self.embedded.process.poll() is not None:
-            # 里面那个 claude 自己退了（敲了 /exit，或者刚被「关掉」掐掉），那
-            # 右边就只剩一块黑着的死终端占地方，收回去。
-            self.embedded = None
-            self._hide_terminal()
-        self.after(1000, self._poll_running)
-
-    def track_running(self, name, path, process, hwnd=None):
-        """把一个刚开出去的会话记进名单，界面立刻多出一行。返回那一行。"""
-        item = None
-        for known in self.running:
-            if known["path"] == path:
-                # 同一个目录又开了一个，只留最新那个，免得同一行重复
-                known.update({"name": name, "proc": process, "hwnd": hwnd,
-                              "watched": False})
-                item = known
-                break
-        if item is None:
-            item = {"name": name, "path": path, "proc": process, "hwnd": hwnd,
-                    "watched": False}
-            self.running.append(item)
-        self._render_running()
-        return item
-
-    def _watch_terminal(self, item, known, tries=0):
-        """等下开出去那扇终端窗口冒出来，把句柄记到这一行上。
-
-        窗口是 claude 那边异步建的，句柄只有比对启动前后两份窗口名单才拿得到
-        ——比对的事在 launch_workspace 拍快照那一步就决定好了，这里只是轮着等。
-        拿到句柄之前那一行照样显示，只是没有窗口操作那三个按钮。
-
-        等到 30 秒就不等了。要是 Windows Terminal 被设成"新窗口开成已有窗口的
-        标签页"，那就永远等不到——桌面上的窗口数压根没变，这边也就没法从里面
-        认出哪一个是我们那扇。再轮下去只是白烧 CPU。
-
-        收工（认出来了、退了、或者等超时）都盖一个 watched 戳。迁移流水线靠它判断
-        刚重开的那扇是不是已经认完了，好决定能不能接着拍下一份窗口名单。
-        """
-        if item not in self.running or item["proc"].poll() is not None:
-            item["watched"] = True
-            return
-        hwnd = fresh_terminal(known)
-        if hwnd is not None:
-            item["hwnd"] = hwnd
-            item["watched"] = True
-            self._render_running()
-            return
-        if tries >= 150:
-            item["watched"] = True
-            return
-        self.after(200, lambda: self._watch_terminal(item, known, tries + 1))
-
-    def _live_handle(self, item):
-        """那一行记的句柄还作不作数。不作数就顺手抹掉，别留着摆个假按钮。"""
-        hwnd = item.get("hwnd")
-        if hwnd and window_alive(hwnd):
-            return hwnd
-        if hwnd:
-            # 用户自己把那扇窗口关了，或者它已经退干净了
-            item["hwnd"] = None
-            self._render_running()
-        self.feedback_var.set("「{}」的窗口已经关掉了。".format(item["name"]))
-        return None
-
-    def bring_running(self, item):
-        hwnd = self._live_handle(item)
-        if hwnd is None:
-            return
-        bring_next_to(self, hwnd)
-        self.feedback_var.set("把「{}」的窗口挪到旁边了。".format(item["name"]))
-
-    def top_running(self, item):
-        hwnd = self._live_handle(item)
-        if hwnd is None:
-            return
-        pinned = toggle_topmost(hwnd)
-        if pinned is None:
-            return
-        self.feedback_var.set("「{}」{}。".format(
-            item["name"], "已压在最上层" if pinned else "不再压在最上层"))
-
-    def close_running(self, item):
-        """关掉一扇独立窗口。问一声再关：WT 一扇窗口可能挂着好几个标签页，
-        这一下会把里面别的标签页一起带走。"""
-        hwnd = self._live_handle(item)
-        if hwnd is None:
-            return
-        if not messagebox.askyesno(
-                "关掉窗口",
-                "关掉「{}」的窗口？\n\n如果那扇窗口里还开着别的标签页，"
-                "会一起关掉。".format(item["name"])):
-            return
-        close_window(hwnd)
-        item["hwnd"] = None
-        self._render_running()
-        self.feedback_var.set("已让「{}」的窗口关闭。".format(item["name"]))
-
-    def launch_workspace(self, item, cont=False, prompt=None, autopilot=False,
-                         hook_flags=None):
-        """真正把 claude 拉起来，新窗口还是塞进本窗口看那个勾。
-
-        autopilot=True 是「AI 托管」那条路：这次会话无条件挂上 hook，不看底下那个
-        勾——用户是在托管对话框里当场选的档，那个选择就该管这一次。
-
-        hook_flags 是托管那次要挂的具体开关（哪个档、指挥模型是谁），由
-        start_autonomy 按档位算好传进来。**不能在这儿另算一份**：底下那个勾只代表
-        "挂上自动继续"，托管选了第 2、3 档时它算不出该多挂什么，再写一次配置就把
-        刚写好的那份覆盖回第 1 档了。
-        """
-        path = item["path"]
-        permission = workspace_permission(item)
-        settings = None
-        auto_continue = self.auto_continue_var.get() or autopilot
-        if auto_continue:
-            try:
-                settings = ensure_hook_settings(**(hook_flags
-                                                   or {"auto_continue": True}))
-            except OSError as e:
-                messagebox.showerror("挂 hook 失败",
-                                     "写不了 hook 配置，这次就不挂了：\n{}".format(e))
-
-        if self.embed_var.get():
-            self.embed_workspace(item, cont, prompt, settings, permission)
-            return None
-        # 拍快照得赶在启动之前：窗口是 claude 那边异步建出来的，等它冒出来再
-        # 去数，就分不清哪扇是这次新开的、哪扇是上一轮留下的了。
-        known = terminal_windows()
-        # 摆到旁边这件事两个平台的时机不一样：Windows 是起完窗再按句柄挪
-        # （bring_next_to，用户自己点），非 Windows 没这一手，只能趁起窗那一刻
-        # 把坐标告诉终端（-geometry）。坐标这会儿就得算好，晚了窗口已经开在别处。
-        beside = None
-        if not WINDOW_CONTROL:
-            x, y = window_position(self)
-            beside = (x + self.winfo_width() + SIDE_GAP, y)
-        try:
-            process = spawn_terminal(path, cont, prompt, settings, permission,
-                                     beside=beside)
-        except Exception as e:
-            messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
-            return
-        entry = self.track_running(item["name"], path, process)
-        self._watch_terminal(entry, known)
-        if autopilot:
-            self.feedback_var.set(
-                "已托管「{}」（{}）：它停下问你话时会自己接上，权限 {}。关掉那扇"
-                "窗口就结束。".format(item["name"],
-                                  autonomy_caption(hook_flags),
-                                  permission_option(permission)))
-        else:
-            self.feedback_var.set("已在新窗口启动{}（权限：{}）：{}".format(
-                "（接着上次聊）" if cont else "", permission_option(permission), path))
-        return entry
-
-    def start_autonomy(self, item, task, tier=1, commander=""):
-        """「AI 托管」按下去之后：在那个工作区起个新会话，把任务当开场白。
-
-        新会话（不 --continue）是故意的：托管是丢一件新活进去，不是接着上一段
-        聊天。不带 --continue 时 claude 把命令行上那个位置参数当第一条用户消息
-        送进去，这条路线上文书探针验过。
-
-        commander 只有第 2 档用得上，是那个替用户拍板的模型的预设名。
-        """
-        path = item["path"]
-        if not os.path.isdir(path):
-            messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
-            return
-        flags = tier_flags(tier, commander)
-        # 先把 hook 配置文件写出来试一次：写不了就别开——开出去一个没挂上 hook
-        # 的会话，用户以为托管着呢，其实它停下来就在那儿干等。
-        # 也算好这次的开关一起交给 launch_workspace，别让它自己再算一遍。
-        try:
-            ensure_hook_settings(**flags)
-        except OSError as e:
-            messagebox.showerror("挂 hook 失败",
-                                 "写不了 hook 配置，这次没法托管：\n{}".format(e))
-            return
-
-        self.config_data["autonomy"] = tier
-        self.config_data["autonomy_workspace"] = path
-        self.config_data["autonomy_commander"] = flags["commander"]
-        save_config(self.config_data)
-        self.launch_workspace(item, cont=False, prompt=task, autopilot=True,
-                              hook_flags=flags)
-
-    def launch_nth(self, number):
-        """Ctrl+1~9：和鼠标点一样，也弹那个选择框。"""
-        if 1 <= number <= len(self.ws_view):
-            self.open_workspace(self.ws_view[number - 1])
-            return "break"
-
-    def _focus_filter(self, _event=None):
-        self.filter_entry.focus_set()
-        self.filter_entry.select_range(0, "end")
-        return "break"
-
-    # ── 内嵌终端 ──
-
-    def _on_embed_toggle(self):
-        """这个勾是"新开的会话塞不塞进本窗口"的偏好，跟自动刷文档那个一样记下来。
-
-        取消勾选只是把当前嵌着的那个放回独立窗口，不打断它——所以这不是"关掉
-        终端"，下一次启动照样按这个勾决定。
-        """
-        self.config_data["embed"] = self.embed_var.get()
-        save_config(self.config_data)
-        if not self.embed_var.get():
-            self.detach_terminal()
-
-    def _on_auto_continue_toggle(self):
-        self.config_data["auto_continue"] = self.auto_continue_var.get()
-        save_config(self.config_data)
-        if self.auto_continue_var.get():
-            self.feedback_var.set(
-                "已挂上 Stop hook：它停下问话时替它接一句「接着干，自己定」，连着推 "
-                "{} 轮就放行；隔 {} 分钟重新数，它自己说「已完成」也会停。".format(
-                    AUTO_CONTINUE_MAX, AUTO_CONTINUE_RESET // 60))
-        else:
-            self.feedback_var.set("新开的会话不再自动继续。")
-
-    def embed_workspace(self, item, cont=False, prompt=None, settings=None,
-                        permission=None):
-        """把 claude 塞进本窗口。已经有一个的话先把它放出去，不打断它。"""
-        if self._pending:
-            self.feedback_var.set("上一个还在启动，稍等一下。")
-            return
-        self.detach_terminal()
-        try:
-            process, known = spawn_console(item["path"], cont, prompt, settings,
-                                           permission)
-        except Exception as e:
-            messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
-            return
-        self._pending = (process, known, item, settings, 0)
-        self.feedback_var.set("正在把 claude 装进窗口…")
-        self.after(80, self._poll_console)
-
-    def _poll_console(self):
-        """控制台窗口是异步建的，拿到之前一直轮询，别把界面卡住。"""
-        process, known, item, settings, tries = self._pending
-        hwnd = fresh_console(known)
-        if hwnd is None:
-            if tries >= 75:
-                self._pending = None
-                self.feedback_var.set("等不到控制台窗口，claude 可能已经退出了。")
-                return
-            self._pending = (process, known, item, settings, tries + 1)
-            self.after(80, self._poll_console)
-            return
-
-        self._pending = None
-        self.term_name_var.set(item["path"])
-        self.term_head.pack(fill="x", pady=(0, 6))
-        self.term_holder.pack(fill="both", expand=True)
-        self._room_for_terminal(True)
-        self.update_idletasks()
-        self.embedded = EmbeddedConsole(process, hwnd, self.term_holder)
-        self.track_running(item["name"], item["path"], process)
-        self.feedback_var.set(
-            "claude 已内嵌在 {}。conhost 没有字体回退，个别符号会是方框。"
-            .format(item["path"]))
-
-    def _room_for_terminal(self, want):
-        """内嵌时右边多长出一栏，左边那列一个像素都不动；退出去还原。
-
-        早先的写法是把左列收窄到 SIDE_WIDTH 再让终端占剩下的，结果一内嵌，
-        主界面就被重新排了一遍版：工作区那几行本来挤着路径和四个按钮，一窄
-        全被截成「De..上次聊…」。终端要地方就从右边往外长、窗口跟着变宽，
-        前头那半张脸原样留着——这才是用户要的「不影响本来的布局」。
-
-        宽度这块只有一个出处：先摆好栏，再让 _apply_min_size 把它算进下限，窗口
-        就照那个下限变宽/还原。这样手动缩窗口也缩不过去，左列始终是原来那么宽。
-        """
-        if want:
-            self._width_before_embed = self.winfo_width()
-            self.panel.pack(side="left", fill="both", expand=False,
-                            padx=(SIDE_GAP, 0))
-            self._apply_min_size()
-            self._widen(self.minsize()[0])
-        else:
-            was = self._width_before_embed
-            self.panel.pack_forget()
-            self._width_before_embed = None
-            self._apply_min_size()
-            if was:
-                self._widen(was)
-        self.model_list.fit()
-        self.ws_list.fit()
-
-    def _widen(self, width):
-        """改宽度，并保证整扇窗口还留在虚拟桌面内——贴到右边缘就往左挪。"""
-        if not width:
-            return
-        left, _top, right, _bottom = screen_bounds(self)
-        width = min(width, right - left)
-        x, y = window_position(self)
-        if x + width > right:
-            x = max(left, right - width)
-        self.geometry("{}x{}".format(width, self.winfo_height()))
-        self.update_idletasks()
-        place_window(self, x, y)
-
-    def detach_terminal(self):
-        """把内嵌的控制台放回独立窗口，进程不动。"""
-        if not self.embedded:
-            return
-        try:
-            self.embedded.detach()
-        except Exception:
-            pass
-        self.embedded = None
-        self._hide_terminal()
-
-    def close_terminal(self):
-        """关掉内嵌的这个会话——等同点它标题栏的 X。
-
-        先好好说：给控制台发 WM_CLOSE，claude 有工夫把手头的活收尾。三秒还没
-        退就掐掉 conhost，那里面的 cmd 和 claude 会跟着一起走；不然按钮按下去
-        可能半天没动静，看着像坏的。
-        """
-        embedded, self.embedded = self.embedded, None
-        if embedded is None:
-            return
-        try:
-            embedded.close()
-        except Exception:
-            pass
-        process = getattr(embedded, "process", None)
-        self._hide_terminal()
-        self.feedback_var.set("正在关掉这个会话…")
-        if process is not None:
-            self.after(3000, lambda: process.poll() is None and process.terminate())
-
-    def _hide_terminal(self):
-        """把右边那栏收回去，宽度还原。进程的事调用方自己管。"""
-        self.term_head.pack_forget()
-        self.term_holder.pack_forget()
-        self.term_name_var.set("")
-        self._room_for_terminal(False)
-
-    def _on_window_move(self, event):
-        """本窗口自己挪了：把内嵌的那个重新贴到终端栏上。
-
-        子控件的事件也会流到这儿（顶层窗口在 bindtags 里占一环），所以拿
-        event.widget 挡一下——只有它就是本窗口时才是真挪了窗口，不然列表里
-        随便哪个控件动一下都要白贴一遍。
-        """
-        if event.widget is not self or self.embedded is None or self._placing:
-            return
-        self._placing = True
-        try:
-            self.embedded.place()
-        finally:
-            self._placing = False
-
-    def _on_term_resize(self, _event):
-        """终端栏自己变了尺寸（缩放窗口、或者右边这栏刚长出来）。"""
-        if self.embedded and not self._placing:
-            self._placing = True
-            try:
-                self.embedded.place()
-            finally:
-                self._placing = False
-
     def open_folder(self, path):
         if not os.path.isdir(path):
             messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
@@ -1234,103 +650,3 @@ class Launcher(UpdateMixin, ModelsMixin, WorkspacesMixin,
         except OSError as exc:
             messagebox.showerror("打不开", "打开 {} 失败：\n{}".format(TOOL_DIR, exc))
 
-    def write_handoff(self, item, ignore_git=None):
-        """在那个目录里 fork 一份会话，让它写 handoff.md。
-
-        只有手动那一条路（工作区行上那颗「整理交接文档」）。
-
-        ignore_git 传 None 是"还没定"：这个目录是 git 仓库时，先弹个框问一句
-        要不要让 handoff.md 进版本管理（见 ask_handoff_git），答完由那个框回头
-        再调一次、带着选好的值过来。
-        """
-        path = item["path"]
-        if self._busy():
-            self.feedback_var.set("启动器手上有活，等它跑完再单独整理。")
-            return
-        if not os.path.isdir(path):
-            messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
-            return
-        if self._handoff_proc is not None and self._handoff_proc.poll() is None:
-            self.feedback_var.set("上一份交接文档还在写，等它写完。")
-            return
-        # 弹框这一问排在上面几道检查之后：这次要是本来就写不了，先告诉他写不了，
-        # 别让人选完一遍才发现白选。
-        if ignore_git is None:
-            if is_git_repo(path):
-                self.ask_handoff_git(item)
-                return
-            ignore_git = False
-
-        target = os.path.join(path, HANDOFF_FILE)
-        try:
-            before = os.path.getmtime(target)
-        except OSError:
-            before = 0.0
-
-        # 输出导到临时文件而不是管道：没人读的管道写满会把子进程卡死。
-        log = tempfile.NamedTemporaryFile(prefix="handoff_", suffix=".log",
-                                          delete=False)
-        try:
-            self._handoff_proc = subprocess.Popen(
-                [claude_exe(), "-c", "--fork-session", "-p",
-                 handoff_prompt(ignore_git),
-                 "--allowedTools", HANDOFF_TOOLS],
-                cwd=path, stdin=subprocess.DEVNULL, stdout=log,
-                stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
-        except Exception as e:
-            log.close()
-            os.remove(log.name)
-            messagebox.showerror("启动失败", "叫不起 claude：\n{}".format(e))
-            return
-        log.close()
-
-        self._handoff_ctx = (item, target, before)
-        self._handoff_log = log.name
-        self.task_head_var.set("正在整理交接文档")
-        self.task_name_var.set(item["name"])
-        self._show_task_area()
-        self._task_started = time.time()
-        self._task_step("正在读这个目录的会话记录，写出 {}".format(HANDOFF_FILE))
-        self.after(400, self._poll_handoff)
-
-    def _poll_handoff(self):
-        """claude 是另一个进程，只能轮询着等它。"""
-        proc = self._handoff_proc
-        if proc is None:
-            return
-        if proc.poll() is None:
-            self.after(500, self._poll_handoff)
-            return
-
-        self._handoff_proc = None
-        item, target, before = self._handoff_ctx
-        self._handoff_ctx = None
-        detail = self._read_handoff_log()
-
-        if os.path.exists(target) and os.path.getmtime(target) > before:
-            ok, why = True, "写好了：{}".format(target)
-        elif proc.returncode != 0:
-            ok, why = False, detail or "退出码 {}".format(proc.returncode)
-        else:
-            ok = False
-            why = "跑完了但没生成 {}——这个目录可能还没聊过，没有会话可以交接。".format(
-                HANDOFF_FILE)
-
-        self.feedback_var.set("「{}」的交接文档{}".format(
-            item["name"], why if ok else "没写成：" + why))
-        self._hide_task_area()
-
-    def _read_handoff_log(self, limit=160):
-        """把 claude 吐的最后一句拿来做失败原因，然后清掉临时文件。"""
-        text = ""
-        try:
-            with open(self._handoff_log, encoding="utf-8", errors="replace") as f:
-                text = f.read().strip()
-        except OSError:
-            pass
-        try:
-            os.remove(self._handoff_log)
-        except OSError:
-            pass
-        self._handoff_log = None
-        return " ".join(text.split())[-limit:]

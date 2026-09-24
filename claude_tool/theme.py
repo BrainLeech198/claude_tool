@@ -1,4 +1,4 @@
-"""配色、字体，以及量文字宽度的那两个工具。
+"""配色、字体、间距，以及量文字宽度的那两个工具。
 
 measure/ellipsize 单独拎出来是因为它们被 widgets 和 ui 大量用到来算布局，
 是"界面"这件事里唯一有逻辑的部分。
@@ -23,6 +23,17 @@ OK = "#2f9e6b"
 ALERT_BG = "#fdf3f2"
 
 FONT_FAMILY = "Microsoft YaHei UI"
+
+
+# ── 间距 ──────────────────────────────────────────────────────────────────
+
+# 左列和终端栏之间、以及正文左右各留的空档。
+#
+# 搁这儿而不是 launcher.py 的常量区：用它的一共三处，其中两处已经拆到了别的
+# 模块——内嵌终端（ui/terminal.py 的 _room_for_terminal）和会话启动（ui/
+# sessions.py 的 launch_workspace）。那两个文件 import 不到 launcher 的模块级
+# 常量，硬写就会绕成循环 import。
+SIDE_GAP = 14
 
 
 def font(size=11, bold=False):
