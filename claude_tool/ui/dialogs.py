@@ -582,8 +582,14 @@ class LauncherDialogs:
         self._center(dialog)
 
 
-    def open_workspace(self, item):
-        """点工作区先问一句：新开一个还是接着上次聊，要不要先读交接文档。"""
+    def open_workspace(self, item, cont=None):
+        """点工作区先问一句：新开一个还是接着上次聊，要不要先读交接文档。
+
+        cont 是"从哪儿点进来的"，不传就是老样子（不预选，回车当"接着上次聊"）：
+        - 右栏「新会话」传 False：默认不读交接文档，回车=开新会话，主按钮也是它。
+        - 右栏「接着上次」传 True：默认读交接文档，回车=接着上次聊。
+        框子本身照旧摆出来——**权限等级只有这儿能改**（见 ui/detail.py 的说明）。
+        """
         path = item["path"]
         if not os.path.isdir(path):
             messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
@@ -600,7 +606,12 @@ class LauncherDialogs:
                  justify="left", wraplength=430).grid(row=0, column=0, columnspan=2,
                                                       sticky="w")
 
-        read_var = tk.BooleanVar(value=has_handoff)
+        # 不传 cont 时照旧：有交接文档就勾上（老的默认值就是它）。
+        if cont is None:
+            read_default = has_handoff
+        else:
+            read_default = has_handoff and cont
+        read_var = tk.BooleanVar(value=read_default)
         if has_handoff:
             tk.Checkbutton(body, text="先读交接文档 " + HANDOFF_FILE + "，接着上次的进度干",
                            variable=read_var, bg=PAGE_BG, fg=TEXT, font=font(10),
@@ -679,10 +690,12 @@ class LauncherDialogs:
             dialog.destroy()
             self.launch_workspace(item, cont=cont, prompt=prompt)
 
-        finish_form(dialog, [("接着上次聊", lambda: go(True), True),
-                             ("开新会话", lambda: go(False), False)])
+        # 主按钮跟着"从右栏哪个按钮点进来"走：点「新会话」进来的，回车/主按钮
+        # 就该是开新会话，不然默认选中项和按钮上写的字是拧着的。
+        finish_form(dialog, [("接着上次聊", lambda: go(True), cont is not False),
+                             ("开新会话", lambda: go(False), cont is False)])
         dialog.bind("<Escape>", lambda e: dialog.destroy())
-        dialog.bind("<Return>", lambda e: go(True))
+        dialog.bind("<Return>", lambda e: go(cont if cont is not None else True))
         self._center(dialog)
 
 

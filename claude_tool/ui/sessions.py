@@ -80,7 +80,6 @@ class SessionsMixin:
         if not self.running:
             self.running_frame.pack_forget()
             self._running_shown = False
-            self.model_list.fit()
             self.ws_list.fit()
             return
         for item in self.running:
@@ -117,9 +116,11 @@ class SessionsMixin:
             for caption, command in reversed(ops):
                 PillButton(holder, caption, command,
                            bg=PANEL_BG).pack(side="right", padx=(6, 0))
-        self.running_frame.pack(fill="x", before=self.model_list.head)
+        # 摆在 notice_area 里排在进度区后面（先摆的在上面，进度区用 before= 插队）。
+        # 0.4 之前锚的是 self.model_list.head ——「模型」区现在在设置窗里，主窗上
+        # 没有那个锚点了，改由这块容器自己定顺序。
+        self.running_frame.pack(fill="x")
         self._running_shown = True
-        self.model_list.fit()
         self.ws_list.fit()
 
     # ── 交接进度 ──
@@ -193,14 +194,15 @@ class SessionsMixin:
             return
         self._jobs_shown = showing
         if showing:
-            # 锚在「正在跑」上面；「正在跑」自己永远锚在模型区上面，所以后摆的
-            # 那个反而排在下面——这里得赶在它之前摆，出来的顺序才是活在上。
-            anchor = (self.running_frame if self._running_shown
-                      else self.model_list.head)
-            self.jobs_frame.pack(fill="x", pady=(16, 0), before=anchor)
+            # 锚在「正在跑」上面；没有「正在跑」就自己占头一格。两者都在
+            # notice_area 里，容器自己没摆出来时这块也不会出现（父控件没映射）。
+            if self._running_shown:
+                self.jobs_frame.pack(fill="x", pady=(16, 0),
+                                     before=self.running_frame)
+            else:
+                self.jobs_frame.pack(fill="x", pady=(16, 0))
         else:
             self.jobs_frame.pack_forget()
-        self.model_list.fit()
         self.ws_list.fit()
 
     def _task_step(self, text):
@@ -436,9 +438,19 @@ class SessionsMixin:
                               hook_flags=flags)
 
     def launch_nth(self, number):
-        """Ctrl+1~9：和鼠标点一样，也弹那个选择框。"""
+        """Ctrl+1~9：选中第 n 个，然后开。
+
+        以前是"直接开、不选中"。0.4 把选中和工作分成了两件事（左栏点一下只
+        选中，开会话是右栏按钮的事），但这条快路是给熟手用的，多一步选中没有
+        意义——选中和开一起做，手感不变。
+
+        开会话本身还是走 open_workspace 那个对话框（权限等级只有那儿能改），
+        跟鼠标点右栏「新会话」一样。
+        """
         if 1 <= number <= len(self.ws_view):
-            self.open_workspace(self.ws_view[number - 1])
+            item = self.ws_view[number - 1]
+            self.select_workspace(item["path"])
+            self.open_workspace(item)
             return "break"
 
     def _focus_filter(self, _event=None):

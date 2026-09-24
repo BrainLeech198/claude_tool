@@ -33,6 +33,9 @@ def default_config():
         "workspaces": [{"name": "默认", "path": WORKPLACE_DIR,
                         "handoff_ignore_git": False}],
         "window": None,
+        # 左栏当前选中那一本（记路径不记名字：改名不影响选中）。
+        # 老配置文件里没这个键，读的地方一律用 .get()，别用 []。
+        "selected_workspace": None,
         # 底下这一排勾都记着上次的状态，但首次装上一定是关的：内嵌终端会改变新开
         # 的会话开在哪儿，自动继续会替用户拍板，自动查 claude 新版会联网，都不该
         # 悄悄替用户打开。（启动器查**自己**新版那条 0.4 起没开关了，每次启动都

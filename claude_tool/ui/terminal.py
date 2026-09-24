@@ -117,7 +117,6 @@ class TerminalMixin:
             self._apply_min_size()
             if was:
                 self._widen(was)
-        self.model_list.fit()
         self.ws_list.fit()
 
     def _widen(self, width):

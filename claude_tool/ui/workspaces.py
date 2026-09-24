@@ -10,22 +10,13 @@ import os
 import queue
 import threading
 import time
-import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 
 from claude_tool import mover
-from claude_tool.config import (
-    humanize_ago,
-    last_chat_time,
-    merge_scanned,
-    path_key,
-    save_config,
-)
+from claude_tool.config import merge_scanned, path_key, save_config
 from claude_tool.handoff import HANDOFF_FILE
 from claude_tool.host import trash_path
 from claude_tool.paths import TOOL_DIR
-from claude_tool.theme import ACCENT, MUTED, PAGE_BG, TEXT, WARN, font
-from claude_tool.widgets import Row
 
 
 # 搬工作区时主线程去后台线程那儿收进度的节奏。比迁移流水线那个松一点：复制是 IO
@@ -40,8 +31,15 @@ class WorkspacesMixin:
 
     # ── 有哪些书 ──
     def refresh_workspaces(self):
-        self.ws_list.clear()
-        inner = self.ws_list.inner
+        """算出列表里该有哪几本、按什么顺序，然后交给左栏去画。
+
+        画归 ui/nav.py（那是"长什么样"），这儿只回答"有哪些"——跟"搬迁/改名/
+        移除怎么干"是同一域的两半，所以还在一份文件里。
+
+        行上的动作不在这儿了：0.4 起「改名/搬迁/移除/↑↓/删交接文档」在右栏
+        对着选中的那一本做（见 ui/detail.py）。一行里排七个两字词会糊成一片，
+        而且"移除"跟"新会话"并排摆着，手滑的代价差太远。
+        """
         workspaces = self.config_data["workspaces"]
         needle = self.ws_filter.get().strip().lower()
 
@@ -51,70 +49,24 @@ class WorkspacesMixin:
             if needle else list(workspaces)
         self.ws_view = view
 
+        # 选中态先对齐：选中那本可能刚被移除、改名或者搬走。得赶在画之前做，
+        # 不然这一帧右栏显示的还是个已经不在列表里的路径。
+        self._sync_selection()
+
         if not workspaces:
             # 跟模型那边一个路数：先把"工作区"这个词解释掉，再说去哪儿加。原来只有
             # 一句"点右上角"，可"工作区"本身对没上手的人就不是个自明的词。
-            tk.Label(inner, text="还没有工作区。", bg=PAGE_BG, fg=TEXT,
-                     font=font(10, True)).pack(anchor="w", padx=6, pady=(12, 3))
-            tk.Label(inner, text="工作区 = 一个项目文件夹，claude 就在那儿读写文件。\n"
-                                 "右上角「＋ 添加工作区」既能新建一个文件夹，"
-                                 "也能把已经有的目录加进来。",
-                     bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
-                     ).pack(anchor="w", padx=6, pady=(0, 9))
-            # 上面那个分支（筛不出来）有 fit()，这条原来漏了——空列表时滚动区的高度
-            # 还停在上一次 fit 的值上，跟"没有工作区"该占的高度对不上。
-            self.ws_list.fit()
-            return
-        if not view:
-            tk.Label(inner, text="没有匹配「{}」的工作区。".format(self.ws_filter.get().strip()),
-                     bg=PAGE_BG, fg=MUTED, font=font(10)).pack(anchor="w", pady=10, padx=6)
-            self.ws_list.fit()
-            return
-
-        for position, item in enumerate(view):
-            path = item["path"]
-            exists = os.path.isdir(path)
-            # 右侧那格放"这行现在什么状态"：有没有交接文档、上次聊是多久以前。
-            # 不往副标题里塞是有原因的——副标题是路径，长了会被省略号吃掉尾巴，
-            # 而"上次聊"正好就是被吃掉的那部分，等于白写。右侧这格是右对齐的，
-            # 永远不会被截断。
-            has_handoff = exists and os.path.isfile(os.path.join(path, HANDOFF_FILE))
-            if not exists:
-                note, note_color = "目录不存在", WARN
-            else:
-                stamp = last_chat_time(path)
-                parts = []
-                if has_handoff:
-                    parts.append("有交接文档")
-                if stamp is not None:
-                    parts.append("上次聊 " + humanize_ago(stamp))
-                # 有交接文档是"现在能接着干"的信号，用强调色；只是时间就是中性灰。
-                note = " · ".join(parts)
-                note_color = ACCENT if parts[:1] == ["有交接文档"] else MUTED
-            # actions 是从右往左摆的（下标 0 在最右边），所以这里的顺序要倒着念：
-            # 屏幕上从左到右是 搬迁 开目录 ↑ ↓ 改名 移除。上移/下移用箭头不用词，
-            # 是因为一行里塞六个两字词会糊成一片，而箭头没有认不出来的风险。
-            actions = [("移除", lambda it=item: self.remove_workspace(it)),
-                       ("改名", lambda it=item: self.rename_workspace(it)),
-                       ("↓", lambda it=item: self.move_workspace(it, 1)),
-                       ("↑", lambda it=item: self.move_workspace(it, -1)),
-                       ("开目录", lambda p=path: self.open_folder(p)),
-                       ("搬迁", lambda it=item: self.open_move_dialog(it))]
-            # 「删交接文档」挂在列表最末 = 屏幕最左边。动作是从右边开始排的，加在
-            # 末尾意味着上面那六个格子一个都不挪窝——只有真有文档的行，最左边才多
-            # 冒出来这一颗。没有文档的行不摆它，免得按下去只得到一句"没有"。
-            if has_handoff:
-                actions.append(("删交接文档",
-                                lambda it=item: self.remove_handoff(it)))
-            Row(inner, title=item["name"], subtitle=path, height=52,
-                warn=note, warn_color=note_color,
-                # 行号就是 Ctrl+行号。9 以后没有号（按不到），但位置留着，
-                # 免得后几行的标题跟前面错开一格。
-                badge=str(position + 1) if position < 9 else "",
-                on_click=lambda it=item: self.open_workspace(it),
-                actions=actions,
-                ).pack(fill="x", pady=3)
-        self.ws_list.fit()
+            self._render_nav_hint(
+                "还没有工作区。",
+                "工作区 = 一个项目文件夹，claude 就在那儿读写文件。\n"
+                "下面「＋ 添加工作区」既能新建一个文件夹，也能把已经有的目录加进来。")
+        elif not view:
+            self._render_nav_hint(
+                "没有匹配「{}」的工作区。".format(self.ws_filter.get().strip()),
+                "换个词试试，或者把筛选框清空。")
+        else:
+            self._render_nav_rows()
+        self.refresh_detail()
 
     def move_workspace(self, item, step):
         """把工作区在列表里挪一格。step 是 -1 上移、+1 下移。
