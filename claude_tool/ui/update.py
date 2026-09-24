@@ -62,9 +62,8 @@ class UpdateMixin:
         """手动查一次（顶栏那个「查更新」）。不管底下那个勾开没开都查。
 
         只管 claude。启动器自己那件事不搭这颗按钮的车——一次点击出两条结果，反馈
-        栏就一行，后到的把先到的顶掉，用户只看得到一半。自己那个要手动查，就去
-        底下勾一下那颗「自动查启动器新版」（勾上当场就查一次，见
-        _on_self_check_toggle）。
+        栏就一行，后到的把先到的顶掉，用户只看得到一半。自己那件事 0.4 起改成启动
+        即查、没有开关，也不再需要"手动查一次"这个入口。
         """
         if not self._local_version:
             self.feedback_var.set("还没读到本机 claude 的版本号，过一两秒再点一次。")
@@ -169,24 +168,15 @@ class UpdateMixin:
     # 跟上面那条 claude 的流水线是两套：查的是不同东西（一个 npm、一个我们自己的
     # 官网），能做的事也不一样——claude 那边只能指路，这边能把包装下来替掉自己。
 
-    def _on_self_check_toggle(self):
-        self.config_data["auto_self_update"] = self.auto_self_var.get()
-        save_config(self.config_data)
-        if not self.auto_self_var.get():
-            self.feedback_var.set(
-                "关掉了：启动时不再联网查启动器自己有没有新版。想再查一次就再勾上"
-                "——勾上那一下当场会查。")
-            return
-        self.feedback_var.set("正在问官网启动器出到哪版了…")
-        self._start_self_check(manual=True)
-
     def _start_self_check(self, manual=False):
         """后台问一次官网。结果走 self_queue 回主线程。
 
         跟 claude 那条一样得在后台：网络不通时单是超时就好几秒。
 
-        manual 就是"用户自己勾的/点的"：查不到或者已经是最新，这两种"什么事都
-        没发生"的结果只有手动那次需要说出来，自动那次闭嘴。
+        manual 就是"用户自己点的"：查不到、或者已经是最新，这两种"什么事都没
+        发生"的结果只有手动那次需要说出来，自动那次闭嘴。0.4 起启动即查（底下
+        那个勾去掉了），所以现在没有调用方传 True——参数留着是给设置窗「关于」
+        页的手动查入口用的，别顺手删。
         """
         def work():
             try:
