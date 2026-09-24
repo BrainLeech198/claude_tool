@@ -4,8 +4,8 @@
 重复。一个窗而不是每域一个窗，是为了以后加设置项不用再加窗口——0.4 之前"凌乱"
 的观感，恰恰是入口太多造成的。
 
-0.4 这一版只落三页（模型 / 工作区 / 行为开关），正好把原来平铺在主窗上的三块
-搬进来；「关于」那页（版本号、官网链接、手动查启动器新版）留到 Task 7。
+四页：模型 / 工作区 / 行为开关 这三页把原来平铺在主窗上的三块搬进来，「关于」
+那页收版本号、官网链接和手动查启动器新版。
 
 **关窗只是 withdraw，不是 destroy**：模型那页的「测试」是后台线程往队列里灌结果、
 主线程取出来回填到那几行卡片上的（见 ui/models.py 的 _drain_results）。窗口一销毁，
@@ -13,19 +13,23 @@
 的问题就不存在了；重开时刷新一遍，看到的还是最新的。
 """
 import tkinter as tk
+from tkinter import messagebox
 
-from claude_tool.host import EMBED_SUPPORTED
+from claude_tool import __version__
+from claude_tool import versions
+from claude_tool.host import EMBED_SUPPORTED, open_url
 from claude_tool.theme import MUTED, PAGE_BG, PANEL_BG, TEXT, font
-from claude_tool.widgets import PillButton
+from claude_tool.widgets import PillButton, Tip
 
 
 # 分页顺序就是这儿定的，_settings_rail 照着画。
-PAGES = ("模型", "工作区", "行为开关")
+PAGES = ("模型", "工作区", "行为开关", "关于")
 # 每个分页由哪个方法建。名字在这儿配一次，_settings_show_page 照着调。
 BUILDERS = {
     "模型": "_settings_page_models",
     "工作区": "_settings_page_workspaces",
     "行为开关": "_settings_page_switches",
+    "关于": "_settings_page_about",
 }
 SETTINGS_W, SETTINGS_H = 640, 560
 # 模型列表滚到多高封顶。原来跟 WORKSPACE_MAX 一起摆在 launcher.py 顶部，工作区
@@ -180,3 +184,59 @@ class SettingsMixin:
                  bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
                  justify="left", wraplength=SETTINGS_W - 200,
                  ).pack(fill="x", pady=(6, 0))
+
+    # ── 关于 ──
+
+    def _settings_page_about(self, parent):
+        """这一版叫什么、官网在哪儿、想立刻问一次新版按哪儿。
+
+        手动查那颗按钮走的是 update 那边的 `_start_self_check(manual=True)`。
+        0.4 把「自动查启动器新版」那个勾去掉、改成启动即查之后，这个参数就再没
+        人传 True 了——留着的唯一去处就是这一页（见 ui/update.py 里那段说明）。
+        """
+        tk.Label(parent, text="Claude 启动器", bg=PAGE_BG, fg=TEXT,
+                 font=font(12, True), anchor="w").pack(fill="x")
+        tk.Label(parent, text="版本 {}".format(__version__), bg=PAGE_BG,
+                 fg=MUTED, font=font(10), anchor="w").pack(fill="x", pady=(2, 14))
+
+        row = tk.Frame(parent, bg=PAGE_BG)
+        row.pack(fill="x")
+        PillButton(row, "打开官网", self._open_launcher_site, bg=PAGE_BG,
+                   ).pack(side="left")
+        check = PillButton(row, "查启动器新版", self._check_launcher_update,
+                           primary=True, bg=PAGE_BG)
+        check.pack(side="left", padx=(6, 0))
+        Tip(check, "现在就去官网问一次有没有新版")
+        # 地址原样摆出来：想手抄、想发给别人都用得上，比只留一颗按钮实在。
+        tk.Label(row, text=versions.SITE, bg=PAGE_BG, fg=MUTED, font=font(9),
+                 anchor="w").pack(side="left", padx=(10, 0))
+
+        # 查的结果落在这一行上（update._say_self_check 往这儿写）。只看主窗底栏
+        # 那条反馈是不够的——设置窗是独立的 Toplevel，常常正盖在主窗上面。
+        tk.Label(parent, textvariable=self.self_check_note_var, bg=PAGE_BG,
+                 fg=TEXT, font=font(9), anchor="w", justify="left",
+                 wraplength=SETTINGS_W - 200).pack(fill="x", pady=(14, 0))
+
+        tk.Label(parent,
+                 text="启动器每次开都会自己去官网看一眼，落后了才在顶栏提一句；"
+                      "这颗按钮只是「我现在就想问一次」。",
+                 bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
+                 justify="left", wraplength=SETTINGS_W - 200,
+                 ).pack(fill="x", pady=(10, 0))
+
+    def _open_launcher_site(self):
+        try:
+            open_url(versions.SITE)
+        except OSError as error:
+            messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(error))
+            return
+        self.feedback_var.set("已在浏览器里打开官网：{}".format(versions.SITE))
+
+    def _check_launcher_update(self):
+        """手动查一次启动器自己有没有新版。
+
+        先去上一句「正在问…」：这一问要联网，快也要一两秒，中间不给个回音，
+        用户会以为按钮没反应、再点第二下。
+        """
+        self.self_check_note_var.set("正在问官网，稍等一下……")
+        self._start_self_check(manual=True)
