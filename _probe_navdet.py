@@ -218,10 +218,17 @@ def main():
             # 光"没换行"还不够——要它离换行还有余量。Task 8 查出来的：上一版
             # DETAIL_MIN_WIDTH=390 时右栏只分到 442，而这排最宽状态（含删交接
             # 文档）要 441，余 1 像素；换个字体就换了。这条盯的就是那个余量。
-            row_worst = manage[0].master.winfo_reqwidth()
-            margin = app.detail_area.winfo_width() - row_worst
-            check("窄屏下那排离换行还有余量（右栏 {} - 那排 {} = {}）".format(
-                app.detail_area.winfo_width(), row_worst, margin),
+            #
+            # 拿"那排自己那个框的实际宽度"比，**不是** detail_area 的宽度：右栏
+            # 里还有个显示路径的 Label，两个数不一样。（0.4 收尾修的那次布局 bug
+            # 正是这排被挤到右半栏、宽度只有 339，而 detail_area 仍是 616——按
+            # detail_area 量会看不出问题。）
+            row_frame = manage[0].master
+            row_worst = row_frame.winfo_reqwidth()
+            row_have = row_frame.winfo_width()
+            margin = row_have - row_worst
+            check("窄屏下那排离换行还有余量（那排实分 {} - 需要 {} = {}）".format(
+                row_have, row_worst, margin),
                 margin >= 20, True)
         check("窄屏下左栏没被挤扁", app.side.winfo_width(), NAV_WIDTH)
         check("窄屏下右栏还有地儿",

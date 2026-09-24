@@ -181,10 +181,11 @@ app.update_idletasks()
 # 0.4：这一行搬进设置窗了，那是另一个 Toplevel，管不到主窗下限。所以下限现在
 # 应该**正好**等于 _apply_min_size 按两栏常数算出来的那个数——多一点就说明有
 # 别的东西在往上顶。
-# 别再把上界写死成一个数：下限这一路已经动过三次（去掉自更新的勾时没动、
-# 主窗重做后是 726、Task 8 把右栏量准之后是 796），每动一次都得回来改一遍
-# 那种写死值。这里改成"跟算式对"。
-expected = (L.NAV_WIDTH + L.PAGE_PAD + L.DETAIL_MIN_WIDTH + 2 * L.PAGE_PAD
+# 别再把上界写死成一个数：下限这一路已经动过几次（去掉自更新的勾时没动、主窗
+# 重做后是 726、Task 8 把右栏量准之后是 796、收尾把页面空档统一成 PAGE_GUTTER
+# 之后是 804），每动一次都得回来改一遍那种写死值。这里改成"跟算式对"。
+# 注意两侧那道缝是 PAGE_GUTTER（页面统一空档），不是 PAGE_PAD（两栏之间的缝）。
+expected = (L.NAV_WIDTH + L.PAGE_PAD + L.DETAIL_MIN_WIDTH + 2 * L.PAGE_GUTTER
             + L.MIN_MARGIN)
 check("下限正好是两栏常数算出来的那个数",
       app.minsize()[0] == expected,

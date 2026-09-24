@@ -37,6 +37,7 @@ from claude_tool.ui.detail import DETAIL_MIN_WIDTH             # noqa: E402
 from claude_tool.ui.launcher import (                          # noqa: E402
     MIN_HEIGHT_FLOOR,
     MIN_MARGIN,
+    PAGE_GUTTER,
     PAGE_PAD,
     Launcher,
 )
@@ -73,7 +74,7 @@ app.refresh_workspaces()
 app.update()
 
 nav_need = app.side.winfo_reqwidth()
-manage_row = app._detail_manage[0].master
+manage_row = app.detail_manage_row
 manage_need = manage_row.winfo_reqwidth()
 print("  窗口实际 :", app.winfo_width(), "x", app.winfo_height())
 print("  minsize  :", app.minsize())
@@ -81,7 +82,7 @@ print("  左导航要 :", nav_need, "像素（定宽常数）")
 print("  右栏自然宽 :", app.detail_area.winfo_reqwidth(),
       "像素（里面有个显示路径的 Label，会随路径长短飘，不做下限依据）")
 print("  「管理」那排要 :", manage_need, "像素（含「删交接文档」，这才是依据）")
-print("  右栏实际分到 :", app.detail_area.winfo_width(), "像素")
+print("  「管理」那排实分到 :", manage_row.winfo_width(), "像素")
 print("  embed 默认:", app.embed_var.get(), " auto_continue 默认:",
       app.auto_continue_var.get(), " auto_version_check 默认:",
       app.auto_version_var.get())
@@ -93,10 +94,13 @@ check("左导航就是那个定宽数", nav_need, NAV_WIDTH)
 # 给它定的下限得真够摆下那排按钮——不然缩到最窄「管理」那排就换行了
 check("DETAIL_MIN_WIDTH 够摆下那排（含删交接文档）",
       manage_need <= DETAIL_MIN_WIDTH, True)
-# 下限就是 _apply_min_size 那条式子，钉住它
+# 下限就是 _apply_min_size 那条式子，钉住它。
+# 注意正文两侧那道缝是 PAGE_GUTTER（页面统一空档），不是 PAGE_PAD（那是两栏之间
+# 的缝）——0.4 收尾前 body 用 14、式子按 16 算，差的那 4 像素一直被 MIN_MARGIN
+# 悄悄吃掉，两边其实对不上。
 check("下限宽度 = 两栏 + 各道缝",
       app.minsize()[0],
-      NAV_WIDTH + PAGE_PAD + DETAIL_MIN_WIDTH + 2 * PAGE_PAD + MIN_MARGIN)
+      NAV_WIDTH + PAGE_PAD + DETAIL_MIN_WIDTH + 2 * PAGE_GUTTER + MIN_MARGIN)
 check("下限高度 = 可用底线", app.minsize()[1], MIN_HEIGHT_FLOOR)
 
 # 真缩到下限看那排有没有换行——"常数够大"和"布局真没换行"是两件事
@@ -104,8 +108,12 @@ app.geometry("{}x{}".format(*app.minsize()))
 app.update()
 lines = {child.winfo_y() for child in manage_row.winfo_children()}
 check("缩到最窄那排也没换行", len(lines), 1)
-check("而且离换行还有余量（不是刚好卡住）",
-      app.detail_area.winfo_width() - manage_need >= 20, True)
+# 量"那排真分到多少"要用它自己那个框的实际宽度：它 fill="x" 撑满右栏，但右栏里
+# 还有个显示路径的 Label，`detail_area.winfo_width()` 不一定等于它的宽度。
+row_width = manage_row.winfo_width()
+check("而且离换行还有余量（那排实分 {} - 需要 {} = {}）".format(
+    row_width, manage_need, row_width - manage_need),
+    row_width - manage_need >= 20, True)
 app.destroy()
 
 print()
