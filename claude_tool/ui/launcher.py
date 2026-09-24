@@ -1,9 +1,13 @@
 """主窗口。
 
-左列模型、右列工作区，底下一排开关，中间一条"正在跑"——这是骨架：窗口怎么起、
-底部那排开关怎么摆、两栏的装配顺序，以及不属于任何一域的那几个小方法。
+左导航（工作区）加右详情（选中那本的动作），顶栏只留"需要立刻知道"的更新胶囊，
+底下一条状态行——这是骨架：窗口怎么起、两栏的装配顺序、以及不属于任何一域的那
+几个小方法。模型区、工作区区、那排开关都收进了设置窗（见 ui/settings.py）。
 
 各个域按 mixin 拆在 ui/ 底下（见 设计说明-0.4.md 第三节）：
+  nav.py         左栏导航：工作区列表、筛选、选中态
+  detail.py      右栏详情：选中那本的模型、路径、日常与管理动作
+  settings.py    设置窗：模型 / 工作区 / 行为开关 / 关于
   dialogs.py     加模型、加工作区、点工作区那次询问
   update.py      顶栏版本检查 + 启动器自更新
   models.py      模型列表、测试、换模型那条流水线
@@ -257,6 +261,10 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             value=bool(self.config_data.get("auto_continue")))
         self.auto_version_var = tk.BooleanVar(
             value=bool(self.config_data.get("auto_version_check")))
+        # 设置窗「关于」页那行字：手动查启动器新版的结果。反馈栏只有主窗底下
+        # 那一条，而设置窗是独立的 Toplevel、常常正盖在主窗上面——结果得在眼皮
+        # 底下能看见，所以单独存一份给它（update._say_self_check 往这儿写）。
+        self.self_check_note_var = tk.StringVar(value="")
 
         # 上次选的那本接着选中。记路径不记名字，改名不影响它。
         # 目录要是已经没了（删了、改名了、整条被移除了），refresh_workspaces 里的

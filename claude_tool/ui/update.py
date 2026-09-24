@@ -203,17 +203,27 @@ class UpdateMixin:
         except queue.Empty:
             pass
 
+    def _say_self_check(self, message):
+        """「查启动器新版」有结果了，说一句。
+
+        两个地方要说：主窗底下那条反馈栏（唯一出口），和设置窗「关于」页上那
+        一行。设置窗是独立的 Toplevel，手动查的时候它多半正盖在主窗上面——只
+        写反馈栏，用户点完盯着设置窗等半天，什么都看不到。
+        """
+        self.feedback_var.set(message)
+        self.self_check_note_var.set(message)
+
     def _apply_self_check(self, manual, result):
         if result is None:
             # 跟 claude 那边同一个道理：查不到就闭嘴，除非是用户自己点的。
             if manual:
-                self.feedback_var.set(
+                self._say_self_check(
                     "没查到官网上最新是几版（可能联不上网），比不了。")
             return
         if not result.stale:
             self._hide_self_update()
             if manual:
-                self.feedback_var.set(
+                self._say_self_check(
                     "启动器本机是 {}，网上也是这一版，不用更新。".format(
                         __version__))
             return
@@ -234,7 +244,7 @@ class UpdateMixin:
                   "下完问你要不要现在装")
         pill.pack(side="left", padx=(10, 0))
         self._self_pill = pill
-        self.feedback_var.set(
+        self._say_self_check(
             "启动器本机是 {}，官网上已经出到 {} 了。".format(
                 __version__, release.latest))
 
