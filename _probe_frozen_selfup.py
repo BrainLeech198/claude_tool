@@ -7,9 +7,11 @@
 再抓一张主界面的图，人眼看一眼底栏：0.4 起「自动查启动器新版」那个勾已经去掉，
 底下应当只剩内嵌终端、自动继续、自动查 claude 新版三个勾，且版式没塌。
 
-沙箱 USERPROFILE，不碰用户真实的 ~/.claude_tool。
+沙箱 USERPROFILE，不碰用户真实的 ~/.claude_tool；窗口位置也改成屏幕外（见
+park_profile），全程不上屏。
 """
 import ctypes
+import json
 import os
 import subprocess
 import sys
@@ -83,6 +85,33 @@ def capture(hwnd, width, height):
     return Image.frombuffer("RGB", (width, height), buf.raw, "raw", "BGRX", 0, 1)
 
 
+def park_profile(profile):
+    """把这份沙箱配置里的窗口位置挪到屏幕外。
+
+    exe 是独立进程，探针那套"把窗口摆到 +30000"的手法够不着它；但它在启动时会
+    按沙箱 launcher.json 里的 window.x/y 摆自己（见 ui/launcher.py 的
+    _restore_geometry）。所以先把那份配置改掉，窗口一出生就在屏幕外——全程不
+    上屏，用户在电脑前也不会看到任何东西弹出来。
+
+    **别把这段删了**：删掉之后窗口会按默认位置开在屏幕正中，虽然只闪一两秒就
+    被 kill，那也算是"打扰用户"。
+    """
+    path = os.path.join(profile, ".claude_tool", "launcher.json")
+    if not os.path.exists(path):
+        print("  警告：沙箱里没有 launcher.json，窗口位置没法定，可能上屏")
+        return
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    # 注意是 get 不是 setdefault：这份配置里 window 这个键**在**，但值是 null，
+    # setdefault 见键在就原样返回 null，后面赋值当场 TypeError。
+    win = data.get("window") or {}
+    data["window"] = win
+    win["x"], win["y"] = 32000, 32000
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print("  窗口位置 -> 32000,32000（屏幕外）")
+
+
 def main():
     if not os.path.exists(EXE):
         print("没有", EXE)
@@ -90,6 +119,7 @@ def main():
     os.environ["USERPROFILE"] = PROFILE          # 给 exe 用，子进程继承
     os.environ["HOME"] = PROFILE
     env = dict(os.environ, USERPROFILE=PROFILE, HOME=PROFILE)
+    park_profile(PROFILE)
     proc = subprocess.Popen([EXE], env=env)
     print("起了 exe，PID =", proc.pid)
 
