@@ -21,7 +21,8 @@ import sys
 import time
 import tkinter as tk
 
-PROFILE = "D:/Desktop/tmp/navdet"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("navdet")
 os.environ["USERPROFILE"] = PROFILE
 os.environ["HOME"] = PROFILE
 

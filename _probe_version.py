@@ -22,7 +22,8 @@ import sys
 import time
 from ctypes import wintypes
 
-PROFILE = "D:/Desktop/tmp/version"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("version")
 INSET = 8
 
 os.environ["USERPROFILE"] = PROFILE
@@ -31,7 +32,7 @@ shutil.rmtree(PROFILE, ignore_errors=True)
 os.makedirs(PROFILE, exist_ok=True)
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-from _probe_common import rebind                       # noqa: E402
+from _probe_common import rebind  # noqa: E402
 
 import tkinter as tk                                       # noqa: E402
 from PIL import Image                                      # noqa: E402

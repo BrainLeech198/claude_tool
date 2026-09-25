@@ -20,7 +20,8 @@ from ctypes import wintypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 EXE = os.path.join(ROOT, "dist", "claude_tool", "claude_tool.exe")
-PROFILE = "D:/Desktop/tmp/frz_selfup"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("frz_selfup")
 OUT = os.path.join(ROOT, "_frozen_selfup.png")
 INSET = 8
 

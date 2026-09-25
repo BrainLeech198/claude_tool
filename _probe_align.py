@@ -28,7 +28,8 @@ import sys
 import time
 import tkinter as tk
 
-PROFILE = "D:/Desktop/tmp/align"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("align")
 os.environ["USERPROFILE"] = PROFILE
 os.environ["HOME"] = PROFILE
 

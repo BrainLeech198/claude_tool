@@ -10,11 +10,12 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-PROFILE = "D:/Desktop/tmp/embed"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("embed")
 os.environ["USERPROFILE"] = PROFILE
 os.environ["HOME"] = PROFILE
 sys.path.insert(0, ROOT)
-from _probe_common import rebind                       # noqa: E402
+from _probe_common import rebind  # noqa: E402
 
 from claude_tool import claude as C
 from claude_tool import winhost as W

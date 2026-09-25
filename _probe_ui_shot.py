@@ -16,7 +16,8 @@ import sys
 import time
 from ctypes import wintypes
 
-PROFILE = "D:/Desktop/tmp/ui_shot"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("ui_shot")
 INSET = 8
 
 os.environ["USERPROFILE"] = PROFILE

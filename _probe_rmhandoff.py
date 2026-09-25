@@ -14,8 +14,9 @@ import shutil
 import sys
 from ctypes import wintypes
 
-PROFILE = "D:/Desktop/tmp/rmhandoff"
-WORKSPACE = "D:/Desktop/tmp/rmhandoff/工作区甲"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("rmhandoff")
+WORKSPACE = os.path.join(sandbox("rmhandoff"), "工作区甲")
 OUT = sys.argv[1] if len(sys.argv) > 1 else None
 
 os.environ["USERPROFILE"] = PROFILE

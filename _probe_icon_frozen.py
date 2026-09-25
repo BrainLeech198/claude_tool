@@ -19,7 +19,8 @@ from ctypes import wintypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 EXE = os.path.join(ROOT, "dist", "claude_tool", "claude_tool.exe")
-PROFILE = "D:/Desktop/tmp/icon_frz"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("icon_frz")
 OUT = os.path.join(ROOT, "_icon_frozen_zoom.png")
 
 user32 = ctypes.windll.user32

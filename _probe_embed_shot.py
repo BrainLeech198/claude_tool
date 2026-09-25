@@ -10,11 +10,12 @@ from ctypes import wintypes
 from PIL import ImageGrab
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-PROFILE = "D:/Desktop/tmp/embed_shot"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("embed_shot")
 os.environ["USERPROFILE"] = PROFILE
 os.environ["HOME"] = PROFILE
 sys.path.insert(0, ROOT)
-from _probe_common import rebind                       # noqa: E402
+from _probe_common import rebind  # noqa: E402
 
 from claude_tool import claude as C
 from claude_tool import winhost as W

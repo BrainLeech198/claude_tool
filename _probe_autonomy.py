@@ -18,13 +18,14 @@ import sys
 import tkinter as tk
 
 # 必须在 import claude_tool.paths 之前：TOOL_DIR 是导入时算出来的。
-PROFILE = "D:/Desktop/tmp/autonomy"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("autonomy")
 os.environ["USERPROFILE"] = PROFILE
 os.environ["HOME"] = PROFILE
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-from _probe_common import rebind                       # noqa: E402
+from _probe_common import rebind  # noqa: E402
 
 import claude_tool.ui.launcher as L
 from claude_tool.config import CONFIG_FILE

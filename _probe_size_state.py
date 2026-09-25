@@ -22,7 +22,8 @@ import os
 import shutil
 import sys
 
-PROFILE = "D:/Desktop/tmp/size_state"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("size_state")
 os.environ["USERPROFILE"] = PROFILE
 os.environ["HOME"] = PROFILE
 shutil.rmtree(PROFILE, ignore_errors=True)

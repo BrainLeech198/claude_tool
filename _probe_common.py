@@ -29,7 +29,27 @@ launcher 命名空间里那份跟它已经没有关系。`L.spawn_console = ...`
 `prefix="claude_tool"` 已经够 `_probe_workplace` 那种情况了。
 """
 
+import os
 import sys
+
+
+# 探针沙箱的根目录。
+#
+# **别写回用户的桌面。** 以前每个探针各自硬写 "D:/Desktop/tmp/<自己的名字>"，跑一轮
+# 全量回归就在桌面上摊出二三十个目录（用户抱怨过"你放的到处都是"），而且**只清不
+# 治**——下次跑还长出来。现在统一指到仓库内的 temp/probes/sandboxes/（temp/ 已进
+# .gitignore）。**谁都不许再往仓库外写沙箱。**
+SANDBOX_ROOT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "temp", "probes", "sandboxes")
+
+
+def sandbox(name):
+    """第 name 号探针自己的沙箱目录。
+
+    只算路径、**不建目录**——建不建由各探针自己决定（有的探针要验"目录不存在时
+    怎么办"，替它建了就把被测的行为改掉了）。
+    """
+    return os.path.join(SANDBOX_ROOT, name)
 
 
 def rebind(name, value, prefix="claude_tool"):

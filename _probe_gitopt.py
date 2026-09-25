@@ -19,7 +19,8 @@ import sys
 import time
 from ctypes import wintypes
 
-PROFILE = "D:/Desktop/tmp/gitopt"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("gitopt")
 INSET = 8
 
 os.environ["USERPROFILE"] = PROFILE

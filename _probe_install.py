@@ -23,19 +23,20 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 # 原生脚本那半要往 ~/.local/bin 里找一个不存在的文件，沙箱化一下别碰用户真实的
 # 那份（跟 _probe_autonomy.py 一个路数，必须在 import claude_tool.paths 之前）。
-PROFILE = "D:/Desktop/tmp/install"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("install")
 os.environ["USERPROFILE"] = PROFILE
 os.environ["HOME"] = PROFILE
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-from _probe_common import rebind                       # noqa: E402
+from _probe_common import rebind  # noqa: E402
 
 from claude_tool import claude as C                # noqa: E402
 from claude_tool import install as I               # noqa: E402
 from claude_tool.paths import LOCAL_BIN            # noqa: E402
 
-SANDBOX = "D:/Desktop/tmp/install/work"
+SANDBOX = os.path.join(sandbox("install"), "work")
 OK = [True]
 
 

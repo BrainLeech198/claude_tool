@@ -19,10 +19,10 @@ from ctypes import wintypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-from _probe_common import rebind                       # noqa: E402
+from _probe_common import rebind, sandbox             # noqa: E402
 
-PROFILE = "D:/Desktop/tmp/migrate"
-WORKSPACE = "D:/Desktop/tmp/migrate/工作区甲"
+PROFILE = sandbox("migrate")
+WORKSPACE = os.path.join(sandbox("migrate"), "工作区甲")
 OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "_migrate_shot.png")
 CREATE_NEW_CONSOLE = 0x00000010
 

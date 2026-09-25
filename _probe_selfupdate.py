@@ -26,21 +26,22 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 # 下载落在 ~/.claude_tool/downloads 下面，沙箱化一下别碰用户真实的那份（必须在
 # import claude_tool.paths 之前）。
-PROFILE = "D:/Desktop/tmp/selfup"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("selfup")
 os.environ["USERPROFILE"] = PROFILE
 os.environ["HOME"] = PROFILE
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-from _probe_common import rebind                       # noqa: E402
+from _probe_common import rebind  # noqa: E402
 
 from claude_tool import __version__                 # noqa: E402
 from claude_tool import selfupdate as S             # noqa: E402
 from claude_tool import versions                    # noqa: E402
 from claude_tool.paths import DOWNLOAD_DIR          # noqa: E402
 
-SANDBOX = "D:/Desktop/tmp/selfup/work"
-SERVE = "D:/Desktop/tmp/selfup/serve"
+SANDBOX = os.path.join(sandbox("selfup"), "work")
+SERVE = os.path.join(sandbox("selfup"), "serve")
 OK = [True]
 
 

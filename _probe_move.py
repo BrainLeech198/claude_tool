@@ -17,8 +17,9 @@ from ctypes import wintypes
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
-PROFILE = "D:/Desktop/tmp/move"
-WORKSPACE = "D:/Desktop/tmp/move/工作区甲"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("move")
+WORKSPACE = os.path.join(sandbox("move"), "工作区甲")
 OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "_move_shot.png")
 
 os.environ["USERPROFILE"] = PROFILE
@@ -27,7 +28,7 @@ os.environ["HOME"] = PROFILE
 from claude_tool import config as C               # noqa: E402
 from claude_tool import mover                     # noqa: E402
 from claude_tool.ui import launcher as L          # noqa: E402
-from _probe_common import rebind                  # noqa: E402
+from _probe_common import rebind  # noqa: E402
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32

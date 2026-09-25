@@ -25,7 +25,8 @@ import shutil
 import sys
 import tkinter as tk
 
-PROFILE = "D:/Desktop/tmp/footer_align"
+from _probe_common import sandbox  # noqa: E402
+PROFILE = sandbox("footer_align")
 os.environ["USERPROFILE"] = PROFILE
 os.environ["HOME"] = PROFILE
 
