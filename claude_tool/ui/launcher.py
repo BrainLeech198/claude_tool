@@ -69,6 +69,7 @@ from claude_tool.ui.detail import DETAIL_MIN_WIDTH, DetailMixin
 from claude_tool.ui.dialogs import LauncherDialogs
 from claude_tool.ui.models import ModelsMixin
 from claude_tool.ui.nav import NAV_WIDTH, NavMixin
+from claude_tool.ui.plugins import PluginsMixin
 from claude_tool.ui.sessions import SessionsMixin
 from claude_tool.ui.settings import SettingsMixin
 from claude_tool.ui.terminal import TerminalMixin
@@ -109,8 +110,8 @@ def default_window_size(screen_w, screen_h):
 
 
 class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
-               WorkspacesMixin, SessionsMixin, TerminalMixin, LauncherDialogs,
-               tk.Tk):
+               WorkspacesMixin, SessionsMixin, TerminalMixin, PluginsMixin,
+               LauncherDialogs, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Claude 启动器")
@@ -278,6 +279,9 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self._build_ui()
         self.refresh_models()
         self.refresh_workspaces()
+        # 插件得等两栏都建好才接：挂载点（顶栏那块、右栏的插件区）在 _build_ui 里
+        # 建。这里只发现 + 加载"用户启用过的"，不问任何问题（见 ui/plugins.py）。
+        self._setup_plugins()
         self._apply_min_size()
         self._probe_claude_version()
         # 启动器自己有没有新版：0.4 起每次都查，不再由用户开关。查的是我们自己
@@ -424,6 +428,11 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         tool_dir = PillButton(line, "打开配置目录", self._open_tool_dir, bg=PANEL_BG)
         tool_dir.pack(side="right")
         Tip(tool_dir, "模型预设和工作区都记在这儿，想手改文件就从这儿进去")
+        # 插件的全局入口（toolbar 挂载点）挂在「打开配置目录」左边。pack 的
+        # side="right" 是**先摆的占最右**，所以这条先建会挤在 config 目录右侧——
+        # 反过来，让插件排在它左边：这一块后摆。见 ui/plugins.py 的 _render。
+        self.toolbar_actions = tk.Frame(line, bg=PANEL_BG)
+        self.toolbar_actions.pack(side="right")
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # 没装 claude 才挂出来的告警条，装好了整条不占地方

@@ -63,3 +63,22 @@ ILLEGAL_CHARS = r'[<>:"/\\|?*\s]'
 # 原来这里跟 ILLEGAL_CHARS 共用一条规则、把空格也挡了，可内置供应商表里就有 6 家
 # 名字带空格（「智谱 GLM」这种），从下拉里挑一家就把一个存不下去的名字填进了表单。
 ILLEGAL_FILE_CHARS = r'[<>:"/\\|?*]'
+
+
+# 插件目录。跟 ICON_FILE 一样两条路：源码跑的时候在包自己的 plugins/ 底下，
+# 打包之后 PyInstaller 把 datas 摊在 sys._MEIPASS（onedir 就是 exe 旁边那个
+# _internal/）里。
+#
+# **不要用 hiddenimports 收插件**（spec 里那份是手工维护的清单）：加一个插件就得
+# 改一次 spec，而插件本来就是"往目录里丢一个文件夹"的东西。当 datas 收源码、
+# 运行时用 importlib 加载。
+PLUGIN_DIR = (
+    os.path.join(sys._MEIPASS, "plugins")
+    if getattr(sys, "frozen", False)
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
+)
+
+# 插件在启动器这边的状态（信没信过、启没启用）。**跟 launcher.json 分开放**：
+# 那份是用户的工作区配置，这份是"我信任过哪些插件的哪个版本"，混在一起以后两边
+# 的迁移会互相拖累——用户想重置工作区不该顺带把信任记录也清了。
+PLUGIN_STATE_FILE = os.path.join(TOOL_DIR, "plugins.json")
