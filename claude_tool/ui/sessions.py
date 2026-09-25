@@ -73,6 +73,19 @@ class SessionsMixin:
         self.running_rows = tk.Frame(self.running_frame, bg=PAGE_BG)
         self.running_rows.pack(fill="x")
 
+    def _notice_fit(self):
+        """把整条 notice_area 的高度收一收。
+
+        Tk 这儿有个坑：子件 pack_forget 之后，父框「该多大」还停在上一次布局
+        的值上——实测 reqh 卡着不退，于是把最后一个会话关掉之后，窗口顶上就
+        留一条白，再也收不回去（用户报的「进行中的 AI 对话关闭之后顶部留白」
+        就是它）。显式 configure 一个高度才能逼它重算：一个子块都没摆 = 压到
+        1px（跟页面底色同色，看不出来）；有货 = 设回 0，让子件自己把高度顶出来。
+        """
+        shown = any(child.winfo_manager()
+                    for child in self.notice_area.winfo_children())
+        self.notice_area.configure(height=0 if shown else 1)
+
     def _render_running(self):
         """照 self.running 重画那几行。空了就整块收起来。"""
         for child in self.running_rows.winfo_children():
@@ -81,6 +94,7 @@ class SessionsMixin:
             self.running_frame.pack_forget()
             self._running_shown = False
             self.ws_list.fit()
+            self._notice_fit()
             return
         for item in self.running:
             line = tk.Frame(self.running_rows, bg=PANEL_BG,
@@ -122,6 +136,7 @@ class SessionsMixin:
         self.running_frame.pack(fill="x")
         self._running_shown = True
         self.ws_list.fit()
+        self._notice_fit()
 
     # ── 交接进度 ──
 
@@ -190,20 +205,20 @@ class SessionsMixin:
             self.task_frame.pack(fill="x")
 
         showing = self._task_visible
-        if showing == self._jobs_shown:
-            return
-        self._jobs_shown = showing
-        if showing:
-            # 锚在「正在跑」上面；没有「正在跑」就自己占头一格。两者都在
-            # notice_area 里，容器自己没摆出来时这块也不会出现（父控件没映射）。
-            if self._running_shown:
-                self.jobs_frame.pack(fill="x", pady=(16, 0),
-                                     before=self.running_frame)
+        if showing != self._jobs_shown:
+            self._jobs_shown = showing
+            if showing:
+                # 锚在「正在跑」上面；没有「正在跑」就自己占头一格。两者都在
+                # notice_area 里，容器自己没摆出来时这块也不会出现（父控件没映射）。
+                if self._running_shown:
+                    self.jobs_frame.pack(fill="x", pady=(16, 0),
+                                         before=self.running_frame)
+                else:
+                    self.jobs_frame.pack(fill="x", pady=(16, 0))
             else:
-                self.jobs_frame.pack(fill="x", pady=(16, 0))
-        else:
-            self.jobs_frame.pack_forget()
-        self.ws_list.fit()
+                self.jobs_frame.pack_forget()
+            self.ws_list.fit()
+        self._notice_fit()
 
     def _task_step(self, text):
         """换掉进度条底下那行说明。秒数自己会往上加，表示它没死。"""
