@@ -46,6 +46,11 @@ class NavMixin:
         # 设置入口只此一处（右栏和顶栏都不再重复），见 设计说明-0.4.md 第二节。
         PillButton(second, "⚙ 设置", self.open_settings, bg=PAGE_BG,
                    ).pack(side="right")
+        # 插件入口单独占一行：240 宽下把「插件」塞进上面任何一行都顶出去了
+        # （「重新扫描」和「⚙ 设置」那一行实测已经快贴边，见本方法开头那段）。
+        third = tk.Frame(self.rail_footer, bg=PAGE_BG)
+        third.pack(fill="x", pady=(6, 0))
+        PillButton(third, "插件", self.open_plugins, bg=PAGE_BG).pack(side="left")
 
         head = tk.Frame(parent, bg=PAGE_BG)
         head.pack(fill="x", pady=(16, 6))
@@ -84,6 +89,8 @@ class NavMixin:
         save_config(self.config_data)
         self._render_nav_rows()
         self.refresh_detail()
+        # 当前选中那本变了，通知订阅了工作区的插件（没插件就是个空操作）。
+        self._notify_plugin_workspace()
 
     def selected_entry(self):
         """当前选中的工作区 dict，没有就 None。
@@ -131,13 +138,17 @@ class NavMixin:
             child.destroy()
         for position, item in enumerate(self.ws_view):
             picked = item["path"] == self.selected_path
-            Row(self.nav_area.inner, title=item["name"], subtitle=item["path"],
-                active=picked,
-                # 行号就是 Ctrl+行号。9 以后没有号（按不到），但位置留着，
-                # 免得后几行的标题跟前面错开一格。
-                badge=str(position + 1) if position < 9 else "",
-                on_click=lambda it=item: self.select_workspace(it["path"]),
-                ).pack(fill="x", pady=3)
+            row = Row(self.nav_area.inner, title=item["name"], subtitle=item["path"],
+                      active=picked,
+                      # 行号就是 Ctrl+行号。9 以后没有号（按不到），但位置留着，
+                      # 免得后几行的标题跟前面错开一格。
+                      badge=str(position + 1) if position < 9 else "",
+                      on_click=lambda it=item: self.select_workspace(it["path"]),
+                      )
+            row.pack(fill="x", pady=3)
+            # 右键菜单留给插件（workspace_row 挂载点）：针对这一行，不一定先选中
+            # 它。没有插件挂这个点就不弹（见 ui/plugins.py 的 _plugin_row_menu）。
+            row.bind("<Button-3>", lambda e, it=item: self._plugin_row_menu(e, it))
         self.nav_area.fit()
 
     def _render_nav_hint(self, title, body):
