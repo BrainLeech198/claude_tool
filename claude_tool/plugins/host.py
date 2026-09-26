@@ -8,11 +8,16 @@
 manifest.API_VERSION）。所以这里刻意**不**暴露 `Launcher` 实例、`config_data`、
 以及任何 `_` 开头的私有物。插件要的是能力，不是宿主的内部状态。
 
-## 挂载点是"动作"，不是控件
+## 挂载点有两种：动作和面板
 
-插件注册的是 `(where, 文字, 回调)`，**长什么样、摆在哪儿由宿主决定**。这样插件
-不用知道 `PillButton` 是什么，宿主也能在插件没加载时不留空位——布局契约留在宿主
-这边，插件那边零布局知识。
+- `register_action(where, 文字, 回调)` —— 一个动作。**长什么样、摆在哪儿由宿主
+  决定**：这样插件不用知道 `PillButton` 是个什么东西，宿主也能在插件没加载时不留
+  空位。布局契约留在宿主这边，插件那边零布局知识。
+- `register_view(where, build)` —— 一整块界面，`build(parent, entry)` 往宿主给的
+  容器里摆控件。适合"选中这一本之后该显示的东西"（书卡、章列表、人物……）。什么
+  时候画、换工作区时重画，都由宿主管。
+
+两种都只有宿主知道摆在哪儿；插件给的永远是"要什么"，不是"摆哪儿"。
 
 ## 谁负责调 notify_*
 
@@ -39,9 +44,15 @@ class Host:
     #   workspace_row     左栏某一行的右键菜单，针对某一本、不一定先选中
     MOUNTS = ("toolbar", "workspace_detail", "workspace_row")
 
+    # 能画**整块面板**的挂载点（`register_view`）。只有右栏详情区：那是"选中这一
+    # 本之后该看什么"的地方。顶栏是一排全局入口胶囊（用 `register_action` 加），
+    # 左栏行那个是右键菜单——都塞不进一整块面板。
+    VIEW_MOUNTS = ("workspace_detail",)
+
     def __init__(self, app=None):
         self._app = app
         self._actions = {where: [] for where in self.MOUNTS}
+        self._views = {where: [] for where in self.VIEW_MOUNTS}
         self._pages = []
         self._watchers = []
         self._on_mounts = None      # 宿主挂的"挂载点变了，重建一下"
@@ -168,6 +179,32 @@ class Host:
 
         return unregister
 
+    def register_view(self, where, build):
+        """往一个挂载点注册**一整块界面**。`where` 只能是 `VIEW_MOUNTS` 里那些。
+
+        `build(parent, entry)` 会收到一个空 `Frame`（这个插件的专属容器）和"当前
+        那条工作区"（可能是 None），把控件摆进 `parent` 就行。
+
+        跟 `register_action` 的分工：那个只给一颗按钮、点了才干活；这个能画整块
+        面板。**什么时候画由宿主定**——宿主会在换工作区时清空容器、重调 `build`，
+        所以 `build` 要经得起反复调用（同一个 host 上重复注册、换一本重画都会再
+        进来一次），别在里面假设"我只跑一次"。
+
+        返回撤销函数，语义跟 `register_action` 一样。
+        """
+        if where not in self._views:
+            raise ValueError("没有 {!r} 这个能画面板的地方，能用的是 {}".format(
+                where, " / ".join(self.VIEW_MOUNTS)))
+        self._views[where].append(build)
+        self.bump_mounts()
+
+        def unregister():
+            if build in self._views[where]:
+                self._views[where].remove(build)
+                self.bump_mounts()
+
+        return unregister
+
     def register_settings_page(self, title, build):
         """往设置窗加一页。`build(parent)` 收到一个 `Frame`，把界面摆进去就行。
 
@@ -187,6 +224,10 @@ class Host:
     def actions(self, where):
         """宿主用：某个挂载点上现在挂着哪些动作。"""
         return list(self._actions.get(where, ()))
+
+    def views(self, where):
+        """宿主用：某个挂载点上现在挂着哪些面板画笔。"""
+        return list(self._views.get(where, ()))
 
     def settings_pages(self):
         """宿主用：插件加进来的设置页。"""

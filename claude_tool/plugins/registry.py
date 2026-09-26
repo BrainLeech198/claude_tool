@@ -40,9 +40,10 @@ class Plugin:
     `enable_error` / `module` 是加载那一刻才填的（用户在插件管理里点「启用」时）。
     """
 
-    def __init__(self, path, folder_name):
+    def __init__(self, path, folder_name, builtin=False):
         self.path = path
         self.folder_name = folder_name
+        self.builtin = builtin     # 随启动器发出去的那份；用户自己导入的是 False
         self.manifest = None
         self.error = None          # 坏插件的原因（清单层）
         self.blocked = None        # 门禁不过的原因
@@ -83,12 +84,22 @@ class Plugin:
 class Registry:
     """扫插件目录、记住信过谁、把启用过的加载起来。
 
-    `plugin_dir` / `state_file` 可注入是为了让探针跑在沙箱里——**不注入就是用户
-    的真目录**，探针用之前务必看 `_probe_common.sandbox`。
+    **扫两个目录**（见 paths）：随启动器发出去的内置插件，加上用户自己导入的那份。
+    `plugin_dir` / `plugin_dirs` / `state_file` 可注入是为了让探针跑在沙箱里——
+    **不注入就是用户的真目录**，探针用之前务必看 `_probe_common.sandbox`。
     """
 
-    def __init__(self, plugin_dir=None, state_file=None):
-        self.plugin_dir = plugin_dir if plugin_dir is not None else paths.PLUGIN_DIR
+    def __init__(self, plugin_dir=None, state_file=None, plugin_dirs=None):
+        if plugin_dirs is not None:
+            self.plugin_dirs = [d for d in plugin_dirs if d]
+        elif plugin_dir is not None:
+            # 单目录注入（老调用点与探针走这条）。
+            self.plugin_dirs = [plugin_dir]
+        else:
+            # 内置那份排前、用户那份排后——后扫到的盖掉先扫到的，于是"用户用一个
+            # 自己改过的版本顶掉内置的同名插件"天然生效（见 discover）。
+            self.plugin_dirs = [paths.PLUGIN_DIR, paths.USER_PLUGIN_DIR]
+        self.plugin_dir = self.plugin_dirs[0] if self.plugin_dirs else paths.PLUGIN_DIR
         self.state_file = (state_file if state_file is not None
                            else paths.PLUGIN_STATE_FILE)
         self.plugins = []
@@ -154,23 +165,33 @@ class Registry:
 
     # ── 发现 ────────────────────────────────────────────────────
     def discover(self, host_version=None):
-        """扫一遍插件目录，返回 `Plugin` 列表。
+        """扫一遍所有插件目录，返回 `Plugin` 列表。
 
         **不 import 任何插件代码**——这一步只读 `plugin.json`。信任确认要看的东西
         必须能在"还没跑过别人代码"的前提下摆出来（见 manifest.py 开头）。
+
+        目录按 `plugin_dirs` 的先后扫，**同 id 时后扫到的盖掉先扫到的**：内置那份
+        在前、用户那份在后，于是用户能用自己的版本顶掉内置同名插件。被顶掉的那份
+        不出现在结果里——否则同一个 id 会出现两张卡，还各说各的状态。
         """
         host_version = host_version or __version__
-        self.plugins = []
-        if os.path.isdir(self.plugin_dir):
-            for folder_name in sorted(os.listdir(self.plugin_dir)):
-                path = os.path.join(self.plugin_dir, folder_name)
+        found = {}
+        for index, base in enumerate(self.plugin_dirs):
+            if not os.path.isdir(base):
+                continue
+            # `plugin_dirs` 的第一项＝"随启动器发出去的内置那份"（见 __init__）。
+            # 这个标记只用来在插件管理里分「内置」和「用户导入」，不影响加载，也不
+            # 影响信任——用户自己导入的插件一样要过一遍启用。
+            builtin = index == 0
+            for folder_name in sorted(os.listdir(base)):
+                path = os.path.join(base, folder_name)
                 if not os.path.isdir(path):
                     continue
                 # 下划线/点开头的一律不当插件：`__pycache__` 之类，以及"我暂时
                 # 不想让它被扫到"这种意图。
                 if folder_name.startswith(("_", ".")):
                     continue
-                plugin = Plugin(path, folder_name)
+                plugin = Plugin(path, folder_name, builtin=builtin)
                 try:
                     plugin.manifest = manifest_mod.read(path)
                 except manifest_mod.BadManifest as exc:
@@ -178,7 +199,8 @@ class Registry:
                 else:
                     plugin.blocked = manifest_mod.gate(plugin.manifest,
                                                        host_version)
-                self.plugins.append(plugin)
+                found[plugin.id] = plugin
+        self.plugins = sorted(found.values(), key=lambda p: p.id)
         self.refresh_flags()
         return self.plugins
 
