@@ -23,6 +23,22 @@ import sys
 ROOT = os.path.dirname(SPECPATH)
 WINDOWS = sys.platform == "win32"
 
+# 内置插件跟着一起打包。**不是用 hiddenimports 收**——插件是"往目录里丢一个文件夹"
+# 的东西，加一个就得改一次那份手工清单；而且 `claude_tool/plugins/` 底下还住着宿主
+# 自己的模块（host / manifest / registry / pack），那些是正经 import 的、PyInstaller
+# 自己会收，用 hiddenimports 列它们纯属重复。
+#
+# 所以这里的规矩是：**只收子目录**（＝插件本体），摊到 `_internal/plugins/<名字>`，
+# 正好对上 `paths.PLUGIN_DIR`。运行时由 `plugins/registry.load` 用 importlib 加载。
+# 现在一个内置插件都没有，这个列表就是空的——加插件时**不用动这个文件**。
+_PLUGINS_SRC = os.path.join(ROOT, "claude_tool", "plugins")
+_BUILTIN_PLUGINS = [
+    (os.path.join(_PLUGINS_SRC, name), os.path.join("plugins", name))
+    for name in sorted(os.listdir(_PLUGINS_SRC))
+    if not name.startswith(("_", "."))
+    and os.path.isdir(os.path.join(_PLUGINS_SRC, name))
+]
+
 a = Analysis(
     [os.path.join(ROOT, "claude_tool", "__main__.py")],
     pathex=[ROOT],
@@ -30,7 +46,11 @@ a = Analysis(
     # 窗口图标要跟着一起打包：exe 的那个 icon= 只管资源管理器里显示的样子，
     # tkinter 的标题栏/任务栏图标得自己在运行时拿这张 png 设（见 ui/launcher.py）。
     # 摊在包的根目录下，paths.ICON_FILE 按 sys._MEIPASS 找它。
-    datas=[(os.path.join(SPECPATH, "icon.png"), ".")],
+    datas=[
+        # 窗口图标（见上面那段）＋ 内置插件（见 _BUILTIN_PLUGINS 那段）。
+        (os.path.join(SPECPATH, "icon.png"), "."),
+        *_BUILTIN_PLUGINS,
+    ],
     # ui 那两个模块是在 main() 里面才 import 的（为了让 --hook 那条路
     # 完全不碰 tkinter）。PyInstaller 扫得到，但这里再写死一份——漏了就是打包出来
     # 才炸，而且炸在"点开没反应"上，不值当省这一行。
