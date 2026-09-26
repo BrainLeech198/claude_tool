@@ -139,11 +139,14 @@ class PluginsMixin:
         if not views and not actions:
             return
         entry = self.selected_entry()
-        tk.Label(area, text="插件", bg=PAGE_BG, fg=MUTED,
-                 font=font(9)).pack(anchor="w")
-        for index, build in enumerate(views):
+        head = tk.Label(area, text="插件", bg=PAGE_BG, fg=MUTED, font=font(9))
+        head.pack(anchor="w")
+        # 面板先建在**还没摆出来**的容器里，确认它真画了东西再 pack。因为插件可以按
+        # 当前工作区决定"这一块不出现"（比如选中的不是小说工程）——那种情况下右栏
+        # 不该留一条光秃秃的「插件」标题。空面板连标题一起收掉，这里没有空位。
+        holders = []
+        for build in views:
             holder = tk.Frame(area, bg=PAGE_BG)
-            holder.pack(fill="x", pady=(8 if index == 0 else 12, 0))
             try:
                 build(holder, entry)
             except Exception as exc:                  # noqa: BLE001
@@ -152,9 +155,19 @@ class PluginsMixin:
                     type(exc).__name__, exc), bg=PAGE_BG, fg=WARN, font=font(9),
                     anchor="w", justify="left", wraplength=380,
                 ).pack(anchor="w")
+            holders.append(holder)
+        drawn = [holder for holder in holders if holder.winfo_children()]
+        for holder in holders:
+            if holder not in drawn:
+                holder.destroy()
+        if not drawn and not actions:
+            head.destroy()
+            return
+        for index, holder in enumerate(drawn):
+            holder.pack(fill="x", pady=(8 if index == 0 else 12, 0))
         if actions:
             line = tk.Frame(area, bg=PAGE_BG)
-            line.pack(fill="x", pady=(8 if not views else 12, 0))
+            line.pack(fill="x", pady=(8 if not drawn else 12, 0))
             for text, callback in actions:
                 PillButton(line, text, lambda cb=callback: self._run_plugin(cb),
                            bg=PAGE_BG, height=26).pack(side="left", padx=(0, 6))

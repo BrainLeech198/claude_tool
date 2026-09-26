@@ -1,0 +1,10 @@
+{
+  "id": "novel_assistant",
+  "name": "小说工作台",
+  "version": "0.1.0",
+  "api_version": 1,
+  "min_host": "0.4.0",
+  "entry": "__init__.py:register",
+  "author": "claude_tool",
+  "description": "选中一本小说工程，右栏直接摊开书卡、章节（带已发布标记）、人物与本轮观察词，并一键按审查协议开一个会话。"
+}
