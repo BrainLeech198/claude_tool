@@ -277,6 +277,22 @@ def test_host():
     host.register_settings_page("插件页", lambda parent: None)
     check("加设置页也触发重建", len(bums), 2)
 
+    # 画面板：注册 / 撤销 / 挂到只能放菜单的地方要报错
+    undo_view = host.register_view("workspace_detail",
+                                   lambda parent, entry: None)
+    check("画面板也触发重建", len(bums), 3)
+    check("view 挂上去了", len(host.views("workspace_detail")), 1)
+    check("view 跟动作分开放",
+          [t for t, _ in host.actions("workspace_detail")], ["乙"])
+    undo_view()
+    check("撤销之后 view 没了", host.views("workspace_detail"), [])
+    try:
+        host.register_view("workspace_row", lambda parent, entry: None)
+        badview = None
+    except ValueError as exc:
+        badview = str(exc)
+    check("菜单这种地方不能画面板", isinstance(badview, str), True)
+
     # 订阅工作区变化
     seen = []
     unsub = host.on_workspace_change(lambda entry: seen.append(entry))

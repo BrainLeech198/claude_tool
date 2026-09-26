@@ -101,20 +101,14 @@ class Manifest:
         return "<Manifest {} {} v{}>".format(self.id, self.name, self.version)
 
 
-def read(plugin_dir):
-    """读一个插件目录里的 `plugin.json`；读不成抛 `BadManifest`。"""
-    path = os.path.join(plugin_dir, FILE_NAME)
-    if not os.path.isfile(path):
-        raise BadManifest("没有 {}（每个插件都必须有它，清单不能写在代码里）"
-                          .format(FILE_NAME))
-    try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-    except ValueError as exc:
-        raise BadManifest("{} 不是合法 JSON：{}".format(FILE_NAME, exc))
-    except OSError as exc:
-        raise BadManifest("{} 读不了：{}".format(FILE_NAME, exc))
+def parse(data, path):
+    """从**已经读进来的**清单元数据造一份 `Manifest`；不合规抛 `BadManifest`。
 
+    只验"清单自己合不合规"，**不查 `id` 跟目录名是否一致**——那件事取决于这份清单
+    落在哪个目录，交给调用方补：`read()` 补（磁盘上是一个萝卜一个坑），
+    `pack.import_zip()` 不补（那会儿包还没解开、没有目录可比，`id` 反而是接下来
+    要建的那个目录名）。
+    """
     if not isinstance(data, dict):
         raise BadManifest("{} 顶层要是一个对象（{{...}}），现在是 {}".format(
             FILE_NAME, type(data).__name__))
@@ -139,7 +133,24 @@ def read(plugin_dir):
         raise BadManifest("entry {!r} 得写成 '文件.py:函数名'（比如 "
                           "'__init__.py:register'）".format(data["entry"].strip()))
 
-    manifest = Manifest(path, data)
+    return Manifest(path, data)
+
+
+def read(plugin_dir):
+    """读一个插件目录里的 `plugin.json`；读不成抛 `BadManifest`。"""
+    path = os.path.join(plugin_dir, FILE_NAME)
+    if not os.path.isfile(path):
+        raise BadManifest("没有 {}（每个插件都必须有它，清单不能写在代码里）"
+                          .format(FILE_NAME))
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except ValueError as exc:
+        raise BadManifest("{} 不是合法 JSON：{}".format(FILE_NAME, exc))
+    except OSError as exc:
+        raise BadManifest("{} 读不了：{}".format(FILE_NAME, exc))
+
+    manifest = parse(data, path)
 
     folder_name = os.path.basename(os.path.normpath(plugin_dir))
     if manifest.id != folder_name:

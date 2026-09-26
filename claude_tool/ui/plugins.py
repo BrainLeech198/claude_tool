@@ -19,13 +19,21 @@
 
 ## 目录在哪儿
 
-插件就是 `claude_tool/plugins/` 下的一个文件夹（打包后在 exe 旁边的 `_internal/`
-里，见 paths.PLUGIN_DIR）。**用户自己写的插件也丢这儿**——没有第二个目录。
+两个（见 paths）：
+
+  PLUGIN_DIR        随启动器一起发出去的内置插件。打包后在 exe 旁边的 `_internal/`
+                    里，**只读、升级一次覆盖一次**。
+  USER_PLUGIN_DIR   用户自己导入的插件（`~/.claude_tool/plugins/`）。这是**用户
+                    数据**，升级、重装都不动它。
+
+同名时用户那份优先（见 registry.discover）。平时不用管这两条路——管理窗那个
+「导入 .zip」按钮会把包解到用户目录里（见 plugins/pack.py）。
 """
 import os
 import tkinter as tk
+from tkinter import filedialog, messagebox
 
-from claude_tool.paths import PLUGIN_DIR
+from claude_tool.paths import USER_PLUGIN_DIR
 from claude_tool.theme import (
     ACCENT,
     BORDER,
@@ -81,10 +89,16 @@ class PluginsMixin:
         return ok, failed
 
     def _notify_plugin_workspace(self):
-        """把"当前选中那本"推给插件。没加载过插件（或还没有 host）就当没事。"""
+        """换了工作区：先把插件面板按新的选中重画一遍，再通知订阅者。
+
+        重画排在前头——`build(parent, entry)` 拿到的 entry 得是**新**那条，订阅者
+        拿到的也得是。没加载过插件（或还没有 host）就当没事。
+        """
         host = getattr(self, "plugin_host", None)
-        if host is not None:
-            host.notify_workspace_change(self.selected_entry())
+        if host is None:
+            return
+        self._render_plugin_detail()
+        host.notify_workspace_change(self.selected_entry())
 
     # ── 画挂载点 ────────────────────────────────────────────────
 
@@ -109,21 +123,41 @@ class PluginsMixin:
                        bg=PANEL_BG).pack(side="right", padx=(0, 6))
 
     def _render_plugin_detail(self):
+        """右栏那块插件区：先摆插件画的面板（`register_view`），再摆动作按钮。
+
+        整块先清空再重建——换工作区走的就是这条路（见 `_notify_plugin_workspace`），
+        所以插件的 `build` 会反复被调到，它得经得起（见 host.register_view）。
+        """
         area = getattr(self, "detail_plugin_area", None)
         if area is None:
             return
         for child in area.winfo_children():
             child.destroy()
-        actions = self.plugin_host.actions("workspace_detail")
-        if not actions:
+        host = self.plugin_host
+        views = host.views("workspace_detail")
+        actions = host.actions("workspace_detail")
+        if not views and not actions:
             return
+        entry = self.selected_entry()
         tk.Label(area, text="插件", bg=PAGE_BG, fg=MUTED,
                  font=font(9)).pack(anchor="w")
-        line = tk.Frame(area, bg=PAGE_BG)
-        line.pack(fill="x", pady=(6, 0))
-        for text, callback in actions:
-            PillButton(line, text, lambda cb=callback: self._run_plugin(cb),
-                       bg=PAGE_BG, height=26).pack(side="left", padx=(0, 6))
+        for index, build in enumerate(views):
+            holder = tk.Frame(area, bg=PAGE_BG)
+            holder.pack(fill="x", pady=(8 if index == 0 else 12, 0))
+            try:
+                build(holder, entry)
+            except Exception as exc:                  # noqa: BLE001
+                # 一个插件画自己面板时炸了，不能让右栏整个空掉。
+                tk.Label(holder, text="插件面板出错：{}: {}".format(
+                    type(exc).__name__, exc), bg=PAGE_BG, fg=WARN, font=font(9),
+                    anchor="w", justify="left", wraplength=380,
+                ).pack(anchor="w")
+        if actions:
+            line = tk.Frame(area, bg=PAGE_BG)
+            line.pack(fill="x", pady=(8 if not views else 12, 0))
+            for text, callback in actions:
+                PillButton(line, text, lambda cb=callback: self._run_plugin(cb),
+                           bg=PAGE_BG, height=26).pack(side="left", padx=(0, 6))
 
     def _plugin_row_menu(self, event, item):
         """左栏某一行的右键菜单。没有插件挂 `workspace_row` 就什么都不弹。"""
@@ -166,15 +200,18 @@ class PluginsMixin:
         win.protocol("WM_DELETE_WINDOW", self._close_plugins)
         self._plugins_win = win
 
-        # 顶上那行说清"插件放哪儿"——不然用户拿着一个插件文件夹不知道往哪儿搁。
+        # 顶上那行说清"插件放哪儿、怎么装"——不然用户拿着一个下载下来的 zip 不
+        # 知道往哪儿搁。（内置插件在启动器自己的目录里，不在这儿列，那是随包走的、
+        # 用户改不动的。）
         head = tk.Frame(win, bg=PAGE_BG)
         head.pack(fill="x", padx=16, pady=(14, 0))
-        tk.Label(head, text="插件目录", bg=PAGE_BG, fg=MUTED,
+        tk.Label(head, text="你导入的插件放这儿", bg=PAGE_BG, fg=MUTED,
                  font=font(9)).pack(anchor="w")
-        tk.Label(head, text=PLUGIN_DIR, bg=PAGE_BG, fg=TEXT, font=font(9),
+        tk.Label(head, text=USER_PLUGIN_DIR, bg=PAGE_BG, fg=TEXT, font=font(9),
                  anchor="w", justify="left", wraplength=PLUGINS_W - 60,
                  ).pack(anchor="w", pady=(2, 0))
-        tk.Label(head, text="每个插件是这里面的一个文件夹，里面必须有 plugin.json。",
+        tk.Label(head, text="拿到 .zip 插件包，直接按下面「导入插件包」——不用自己\n"
+                            "解压，也不用管往哪个文件夹放。",
                  bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
                  justify="left", wraplength=PLUGINS_W - 60).pack(anchor="w")
 
@@ -185,7 +222,10 @@ class PluginsMixin:
 
         foot = tk.Frame(win, bg=PAGE_BG)
         foot.pack(fill="x", padx=16, pady=12)
-        PillButton(foot, "重新扫描", self._rescan_plugins, bg=PAGE_BG).pack(side="left")
+        PillButton(foot, "导入插件包", self._import_plugin_zip, primary=True,
+                   bg=PAGE_BG).pack(side="left")
+        PillButton(foot, "重新扫描", self._rescan_plugins,
+                   bg=PAGE_BG).pack(side="left", padx=(6, 0))
         PillButton(foot, "打开插件目录", self._open_plugin_dir,
                    bg=PAGE_BG).pack(side="left", padx=(6, 0))
 
@@ -203,10 +243,42 @@ class PluginsMixin:
         self.feedback_var.set("插件目录重扫过了")
 
     def _open_plugin_dir(self):
+        """在文件管理器里打开用户插件目录。
+
+        只开用户那份：内置那份在安装目录里，让用户去动它没好处（升级还会被盖掉）。
+        """
         from claude_tool.host import open_path
-        if not os.path.isdir(PLUGIN_DIR):
-            os.makedirs(PLUGIN_DIR, exist_ok=True)
-        open_path(PLUGIN_DIR)
+        if not os.path.isdir(USER_PLUGIN_DIR):
+            os.makedirs(USER_PLUGIN_DIR, exist_ok=True)
+        open_path(USER_PLUGIN_DIR)
+
+    def _import_plugin_zip(self):
+        """选一个插件包（.zip）装进来，然后重扫一遍。
+
+        装进来的插件**是未启用状态**——这不是漏了一步，是信任模型那条：新东西一律
+        先不给跑，用户点过「启用」才算。所以装完要明说一句"去点启用"。
+        """
+        from claude_tool.plugins import pack
+        path = filedialog.askopenfilename(
+            parent=self._plugins_win, title="选一个插件包",
+            filetypes=[("插件包", "*.zip"), ("所有文件", "*.*")])
+        if not path:
+            return
+        try:
+            pid, _place = pack.import_zip(path, USER_PLUGIN_DIR)
+        except pack.BadPackage as exc:
+            messagebox.showerror("这个包装不了", str(exc),
+                                 parent=self._plugins_win)
+            return
+        except Exception as exc:                          # noqa: BLE001
+            messagebox.showerror("导入失败", "{}: {}".format(
+                type(exc).__name__, exc), parent=self._plugins_win)
+            return
+        self._reload_plugins()
+        self._render_plugins_window()
+        plugin = self.plugin_registry.get(pid)
+        label = "{} v{}".format(plugin.name, plugin.version) if plugin else pid
+        self.feedback_var.set("装好了「{}」，在上面点「启用」就能用".format(label))
 
     def _render_plugins_window(self):
         body = self._plugins_body
@@ -237,6 +309,9 @@ class PluginsMixin:
         if plugin.version:
             tk.Label(head, text="v" + plugin.version, bg=PAGE_BG, fg=MUTED,
                      font=font(9)).pack(side="left", padx=(8, 0))
+        tk.Label(head, text="内置" if plugin.builtin else "你导入的",
+                 bg=PAGE_BG, fg=MUTED,
+                 font=font(9)).pack(side="left", padx=(8, 0))
         author = plugin.manifest.author if plugin.manifest else ""
         if author:
             tk.Label(head, text="· " + author, bg=PAGE_BG, fg=MUTED,
