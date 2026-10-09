@@ -121,7 +121,8 @@ def fresh_terminal(known):
 
 
 def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
-                   permission=None, beside=None, profile=None):
+                   permission=None, beside=None, profile=None,
+                   append_system_prompt=None):
     """在新控制台窗口里跑 claude，返回那个进程对象。
 
     完整的字符串命令行 + CREATE_NEW_CONSOLE，理由见 agent.agent_command。
@@ -133,7 +134,8 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
     """
     return subprocess.Popen(
         "cmd /k " + agent_command(profile, cont=cont, prompt=prompt,
-                                  settings=settings, permission=permission),
+                                  settings=settings, permission=permission,
+                                  append_system_prompt=append_system_prompt),
         cwd=workdir,
         creationflags=CREATE_NEW_CONSOLE,
     )
@@ -196,7 +198,7 @@ def close_window(target):
 
 
 def spawn_console(workdir, cont=False, prompt=None, settings=None,
-                  permission=None, profile=None):
+                  permission=None, profile=None, append_system_prompt=None):
     """开一个老式 conhost 跑 claude。
 
     返回 (进程, 启动前就存在的窗口句柄集合)——窗口是控制台那边异步建的，
@@ -206,7 +208,8 @@ def spawn_console(workdir, cont=False, prompt=None, settings=None,
     command = "title {} & {}".format(
         title_tag(profile.id if profile else None),
         agent_command(profile, cont=cont, prompt=prompt, settings=settings,
-                      permission=permission))
+                      permission=permission,
+                      append_system_prompt=append_system_prompt))
     # 同样得整条给字符串：塞进列表 Python 会重包一遍引号，开场白就断在空格上。
     process = subprocess.Popen(
         "conhost.exe cmd /k " + command,

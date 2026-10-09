@@ -174,7 +174,8 @@ def _spawn_macos(argv, workdir):
 
 
 def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
-                   permission=None, beside=None, profile=None):
+                   permission=None, beside=None, profile=None,
+                   append_system_prompt=None):
     """在一个新终端窗口里跑 claude，返回那个进程对象。
 
     命令用 claude 的绝对路径（find_claude 刚找到的那个），argv 一项一项过
@@ -186,7 +187,8 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
     """
     profile = profile or agents.get(agents.DEFAULT_AGENT)
     argv = agent_args(profile, cont=cont, prompt=prompt, settings=settings,
-                      permission=permission, exe=agent_exe(profile))
+                      permission=permission, exe=agent_exe(profile),
+                      append_system_prompt=append_system_prompt)
     if sys.platform == "darwin":
         return _spawn_macos(argv, workdir)
     return _spawn_x11(argv, workdir, beside)
