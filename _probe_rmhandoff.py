@@ -178,7 +178,8 @@ def main():
         (title, msg)) or True
 
     app = L.Launcher()
-    app.geometry("860x700+40+40")
+    # 只改尺寸、不带 +x+y：带位置会把窗口从 _probe_run 停的副屏拽回主屏。
+    app.geometry("860x700")
     app.update()
     for _ in range(30):
         app.update()

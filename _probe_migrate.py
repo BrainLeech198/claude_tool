@@ -315,7 +315,8 @@ def main():
         {"name": "甲", "path": WORKSPACE, "permission": "acceptEdits"}]
     app.config_data["workplace"] = WORKSPACE
     app.refresh_workspaces()
-    app.geometry("760x880+40+40")
+    # 只改尺寸、不带 +x+y：带位置会把窗口从 _probe_run 停的副屏拽回主屏，打扰用户。
+    app.geometry("760x880")
     app.update()
     drive = Drive(app)
 

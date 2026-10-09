@@ -49,6 +49,29 @@ import sys
 
 OFFSCREEN = "+30000+30000"
 
+
+def park_position():
+    """探针窗口停到哪儿：优先副屏，没有副屏才退回可视桌面之外。
+
+    原来一律 `+30000+30000`（谁也看不见），但有几条探针自己 `geometry("WxH+40+40")`
+    把窗口硬拽回主屏——用户在电脑前时就是它们打扰人。停副屏之后即便哪条又漏了
+    带位置，也只出现在副屏上，不挡主屏。
+
+    可用 `PROBE_PARK=+30000+30000` 覆盖成彻底看不见（跑批时想完全不占屏幕就设它）。
+    """
+    override = os.environ.get("PROBE_PARK")
+    if override:
+        return override
+    try:
+        import ctypes
+        gsm = ctypes.windll.user32.GetSystemMetrics
+        virtual_x, virtual_y = gsm(76), gsm(77)   # SM_X/YVIRTUALSCREEN
+        if virtual_x < 0:                          # 左边有屏 → 那就是副屏
+            return "+{}+{}".format(virtual_x + 20, virtual_y + 20)
+    except Exception:
+        pass
+    return OFFSCREEN
+
 # 这三块里哪一块会被加载，取决于平台（win32 走 winhost，别处走 nixhost），
 # 上层的 host 再把它那几个名字抄一遍。三个都要盯。
 _TARGETS = ("claude_tool.host", "claude_tool.winhost", "claude_tool.nixhost")
@@ -107,7 +130,7 @@ def _install():
     import tkinter as tk
 
     def off(self):
-        self.geometry(OFFSCREEN)
+        self.geometry(park_position())
 
     real_tk = tk.Tk.__init__
 
