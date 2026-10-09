@@ -141,14 +141,14 @@ def sweep_spawned():
 
 
 def fake_launch(workdir, cont=False, prompt=None, settings=None, permission=None,
-                beside=None):
+                beside=None, **kwargs):
     """替掉 winhost.spawn_terminal：开一扇真终端窗口，进程能 poll，句柄能被认出来。"""
     return _track(subprocess.Popen(
         ["cmd", "/k", "title claude-probe-mig & ping -n 600 127.0.0.1 > nul"],
         cwd=workdir, creationflags=CREATE_NEW_CONSOLE))
 
 
-def fake_spawn(workdir, cont=False, prompt=None, settings=None, permission=None):
+def fake_spawn(workdir, cont=False, prompt=None, settings=None, permission=None, **kwargs):
     """替掉 winhost.spawn_console：内嵌那条路要的是 conhost 的窗口。"""
     known = {hwnd for hwnd, _ in W.console_windows()}
     proc = _track(subprocess.Popen(
@@ -169,7 +169,7 @@ def setup():
     with open(preset_path("探针模型"), "w", encoding="utf-8") as f:
         f.write('{"env": {"ANTHROPIC_BASE_URL": "https://example.invalid",'
                 ' "ANTHROPIC_AUTH_TOKEN": "x", "ANTHROPIC_MODEL": "probe"}}')
-    rebind("claude_exe", lambda: FAKE)
+    rebind("agent_exe", lambda *a, **k: [FAKE])
     rebind("spawn_terminal", fake_launch)
     rebind("spawn_console", fake_spawn)
     L.messagebox.showerror = lambda title, msg, **k: print("  [错误框]", title, msg)

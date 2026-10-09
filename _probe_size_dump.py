@@ -56,8 +56,8 @@ def main():
     screen_w, screen_h = app.winfo_screenwidth(), app.winfo_screenheight()
     print("屏幕 {}x{}".format(screen_w, screen_h))
     width, height = default_window_size(screen_w, screen_h)
-    check("默认尺寸写死 900x950（屏幕装不下才收）", (width, height),
-          (min(900, screen_w - 20), min(950, screen_h - 100)))
+    check("默认尺寸写死 964x950（屏幕装不下才收）", (width, height),
+          (min(964, screen_w - 20), min(950, screen_h - 100)))
 
     def step():
         pump(app, 0.6)
@@ -69,19 +69,19 @@ def main():
 
         # 存了个比默认矮的：用户手调的高度就是他的偏好，照记（只守 minsize 那道
         # 下限，见 _restore_geometry 的说明——早先"不比默认矮就抬回默认"那版是错的）
-        app.config_data["window"] = {"x": 120, "y": 90, "w": 848, "h": 700}
+        app.config_data["window"] = {"x": 120, "y": 90, "w": 1100, "h": 700}
         app._restore_geometry()
         pump(app, 0.6)
-        dump(app, "存成 848x700")
+        dump(app, "存成 1100x700")
         check("矮的照记（不抬回默认）", app.winfo_height(), 700)
-        check("宽度照记", app.winfo_width(), 848)
+        check("宽度照记", app.winfo_width(), 1100)
         S.grab(pid, PREFIX + "_700.png", "Claude 启动器")
 
         # 存了个更高的：照记
-        app.config_data["window"] = {"x": 120, "y": 90, "w": 900, "h": 1400}
+        app.config_data["window"] = {"x": 120, "y": 90, "w": 964, "h": 1400}
         app._restore_geometry()
         pump(app, 0.6)
-        dump(app, "存成 900x1400")
+        dump(app, "存成 964x1400")
         check("比默认高就照记", app.winfo_height(), 1400)
         app.after(200, app.destroy)
 

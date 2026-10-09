@@ -45,7 +45,7 @@ def sweep_spawned():
     return killed
 
 
-def fake_spawn(workdir, cont=False, prompt=None, settings=None, permission=None):
+def fake_spawn(workdir, cont=False, prompt=None, settings=None, permission=None, **kwargs):
     known = {hwnd for hwnd, _ in W.console_windows()}
     cmd = "title {} & echo fakeprocess & ping -n 600 127.0.0.1 > nul".format(
         W.TITLE_TAG)

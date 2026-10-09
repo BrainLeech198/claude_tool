@@ -114,7 +114,7 @@ with open(preset_path(DEPUTY), "w", encoding="utf-8") as f:
 captured = {}
 
 
-def fake_launch(path, cont, prompt, settings, permission, beside=None):
+def fake_launch(path, cont, prompt, settings, permission, beside=None, **kwargs):
     captured.update({"path": path, "cont": cont, "prompt": prompt,
                      "settings": settings, "permission": permission})
     return type("P", (), {"poll": lambda self: None})()

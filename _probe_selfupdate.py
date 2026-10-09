@@ -326,10 +326,10 @@ def interface():
     release = versions.LauncherRelease("9.9.9", True, entry, base, None)
 
     # 这台机器上有 claude（探针就跑在仓库里）。要验的不是那条路，别让它去起进程。
-    real_find = L.find_claude
+    real_find = L.agent_path
     real_launcher, real_download = versions.launcher, S.download
     real_open, real_installer = S.open_artifact, S.INSTALLER
-    rebind("find_claude", lambda *a, **k: None)
+    rebind("agent_path", lambda *a, **k: None)
     versions.launcher = lambda local: release
 
     opened, answered = [], []
@@ -425,7 +425,7 @@ def interface():
             app.destroy()
         except Exception:
             pass
-        rebind("find_claude", real_find)
+        rebind("agent_path", real_find)
         versions.launcher, S.download = real_launcher, real_download
         S.open_artifact, S.INSTALLER = real_open, real_installer
         L.messagebox.askyesno = real_ask
