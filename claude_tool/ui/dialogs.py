@@ -962,7 +962,7 @@ class LauncherDialogs:
         goal.focus_set()
         self._center(dialog)
 
-    def _open_install_dialog(self, updating=False):
+    def _open_install_dialog(self, updating=False, profile=None):
         """没找到 claude 时，那颗「帮我装 claude」开的面板；claude 旧了时，顶栏
         那颗「有新版」开的也是它，只是 updating=True。
 
@@ -975,16 +975,19 @@ class LauncherDialogs:
         能走的（官方原生脚本）；升级的时候默认是"这份 claude 当初就是用这条装
         的"那条（见 install.installed_via），认不出来才退回第一条能走的。
 
-        路那份清单在 install.routes() 里，这层只管画。
+        路那份清单在 install.routes() 里，这层只管画。codebuddy 的路线是空的
+        （它没有一键装），这时不摆单选和命令格，只说一句「请从官网装」。
         """
+        profile = profile or agents.get(agents.DEFAULT_AGENT)
         dialog = tk.Toplevel(self)
         dialog.grab_set()
         what = "升级" if updating else "装"
-        body = make_form(dialog, "帮你{} claude".format(what))
+        body = make_form(dialog, "帮你{} {}".format(what, profile.id))
 
-        claude_path = agent_path(agents.get("claude"))
-        routes = install.routes(upgrade=updating, claude_path=claude_path)
-        table = install.checkup(claude_path=claude_path)
+        claude_path = agent_path(profile)
+        routes = install.routes(upgrade=updating, claude_path=claude_path,
+                               profile=profile)
+        table = install.checkup(claude_path=claude_path, profile=profile)
 
         tk.Label(body, text="这台机器上是什么", bg=PAGE_BG, fg=TEXT,
                  font=font(10, True), anchor="w").grid(
@@ -997,6 +1000,34 @@ class LauncherDialogs:
                      font=font(9), anchor="e").grid(row=index, column=1, sticky="e")
 
         head = len(table) + 2
+
+        if not routes:
+            # codebuddy 这轮不提供一键装——不摆假路线，老实说去官网装。
+            tk.Label(body, text="怎么" + what, bg=PAGE_BG, fg=TEXT,
+                     font=font(10, True), anchor="w").grid(
+                         row=head, column=0, columnspan=2, sticky="w",
+                         pady=(14, 2))
+            tk.Label(
+                body,
+                text="{} 没有一键{}的路，去官网照它自己的说明装。".format(
+                    profile.label, what),
+                bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
+                justify="left", wraplength=460,
+            ).grid(row=head + 1, column=0, columnspan=2, sticky="w",
+                   padx=(12, 0))
+
+            def open_docs():
+                try:
+                    open_url(profile.install_docs)
+                except OSError as error:
+                    messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(error),
+                                         parent=dialog)
+
+            PillButton(body, "打开官网说明", open_docs, bg=PAGE_BG).grid(
+                row=head + 2, column=0, sticky="w", pady=(14, 0))
+            self._center(dialog)
+            return
+
         tk.Label(body, text="怎么" + what, bg=PAGE_BG, fg=TEXT, font=font(10, True),
                  anchor="w").grid(row=head, column=0, columnspan=2, sticky="w",
                                   pady=(14, 2))
@@ -1146,9 +1177,9 @@ class LauncherDialogs:
             if updating and code == 0:
                 self._force_version_check = True
             self._recheck_claude()
-            fresh = agent_path(agents.get("claude"))
+            fresh = agent_path(profile)
             if fresh:
-                put("{}好了，claude 在 {}。".format(what, fresh), OK)
+                put("{}好了，{} 在 {}。".format(what, profile.label, fresh), OK)
             else:
                 put("还是没找到。上面那几行里有报错的话，照它说的来看看；"
                     "也可以点「打开官网说明」。", WARN)
@@ -1161,8 +1192,8 @@ class LauncherDialogs:
             if not messagebox.askyesno(
                     "开始" + what,
                     "要在这台机器上跑这条命令：\n\n{}\n\n"
-                    "它会动系统里的东西（{} claude）。开始吗？"
-                    .format(route["show"], what), parent=dialog):
+                    "它会动系统里的东西（{} {}）。开始吗？"
+                    .format(route["show"], what, profile.label), parent=dialog):
                 return
             # 跑起来之后把这些都锁上：跑到一半再点一次，同一台机器上会同时跑两
             # 个，谁也说不清最后装成了哪一版。
@@ -1184,7 +1215,7 @@ class LauncherDialogs:
 
         def open_docs():
             try:
-                open_url(install.DOCS_URL)
+                open_url(profile.install_docs or install.DOCS_URL)
             except OSError as error:
                 messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(error),
                                      parent=dialog)

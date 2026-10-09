@@ -79,10 +79,11 @@ class UpdateMixin:
         联网得在后台：网络不通时单是超时就是好几秒，摆到主线程上界面会僵住。
         """
         local = self._local_version
+        profile = agents.get(agents.DEFAULT_AGENT)
 
         def work():
             try:
-                result = versions.check(local)
+                result = versions.check(local, profile=profile)
             except Exception:
                 result = None
             self.version_check_queue.put((manual, result))

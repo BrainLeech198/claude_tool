@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 
+from claude_tool import agents
 from claude_tool.agent import CREATE_NO_WINDOW
 from claude_tool.paths import LOCAL_BIN, LOCAL_NAMES, NODE_DIR
 
@@ -25,7 +26,8 @@ NATIVE_PS1 = "https://claude.ai/install.ps1"
 NATIVE_SH = "https://claude.ai/install.sh"
 WINGET_ID = "Anthropic.ClaudeCode"
 BREW_CASK = "claude-code"
-NPM_PACKAGE = "@anthropic-ai/claude-code"
+# 默认那条（claude）的 npm 包名。真要拼命令时从 profile.npm_package 取，不写死。
+NPM_PACKAGE = agents.CLAUDE.npm_package
 
 # 便携版 Node 那条路从哪儿拿包。先官方，不通再退 npmmirror（国内那个 Node 镜像，
 # 目录结构跟官方一模一样，index.json 也是）。两个都连不上这条路才真走不了。
@@ -181,7 +183,7 @@ exit $code
 """.strip().replace("__URL__", url)
 
 
-def node_setup(platform=None, bases=NODE_DIST):
+def node_setup(platform=None, bases=NODE_DIST, package=None):
     """便携版 Node + npm 那条路要跑的东西。
 
     **为什么要有这条路**：前面几条各有各的门槛，实机上撞见过前两条一起走不通
@@ -199,12 +201,17 @@ def node_setup(platform=None, bases=NODE_DIST):
     把那个目录加进 PATH——脚本最后会把路径打出来，但不会替他改。
 
     bases 是包的来源，探针靠它指到本地那个小服务上，不真去下 Node。
+    package 是 npm 包名，不传走默认（claude 那个）。
     """
     platform = platform or sys.platform
+    package = package or NPM_PACKAGE
     listing = ", ".join("'{}'".format(base) for base in bases)
-    if platform == "win32":
-        return _NODE_PS.replace("__BASES__", "@(" + listing + ")")
-    return _NODE_SH.replace("__BASES__", " ".join(bases))
+    template = _NODE_PS if platform == "win32" else _NODE_SH
+    return (template
+            .replace("__BASES__",
+                     "@(" + listing + ")" if platform == "win32"
+                     else " ".join(bases))
+            .replace("__PACKAGE__", package))
 
 
 # Windows 那份。分号、花括号、$ 都是 PowerShell 自己的语法，所以整段做成模板、
@@ -259,7 +266,7 @@ Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 Remove-Item -Force $zip -ErrorAction SilentlyContinue
 [Console]::WriteLine("Node 解好了：$root")
 
-& (Join-Path $root 'npm.cmd') install -g --prefix $root --no-fund --no-audit '@anthropic-ai/claude-code'
+& (Join-Path $root 'npm.cmd') install -g --prefix $root --no-fund --no-audit '__PACKAGE__'
 if ($LASTEXITCODE -ne 0) { [Console]::WriteLine('npm 没装上 claude。'); exit $LASTEXITCODE }
 
 [Console]::WriteLine("装好了：$root\claude.cmd")
@@ -317,7 +324,7 @@ mv "$HOME/.claude_tool/$name" "$root"
 rm -f "$tgz"
 echo "Node 解好了：$root"
 
-"$root/bin/npm" install -g --prefix "$root" --no-fund --no-audit '@anthropic-ai/claude-code' || {
+"$root/bin/npm" install -g --prefix "$root" --no-fund --no-audit '__PACKAGE__' || {
     echo 'npm 没装上 claude。'
     exit 1
 }
@@ -328,7 +335,7 @@ echo '（不改也没关系，启动器自己认得这个位置。）'
 """.strip()
 
 
-def _node_show(platform):
+def _node_show(platform, package=None):
     """便携版那条摆给用户看的那行。
 
     这条路没有一个"官方原样一条命令"可抄（官方只管给你 Node，装 claude 是另一
@@ -342,7 +349,7 @@ def _node_show(platform):
     else:
         npm = "~/.claude_tool/node/bin/npm"
         prefix = "~/.claude_tool/node"
-    return "{} install -g --prefix {} {}".format(npm, prefix, NPM_PACKAGE)
+    return "{} install -g --prefix {} {}".format(npm, prefix, package or NPM_PACKAGE)
 
 
 def installed_via(claude_path, node_dir=None):
@@ -382,11 +389,14 @@ def installed_via(claude_path, node_dir=None):
 
 
 def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
-           claude_path=None):
+           claude_path=None, profile=None):
     """这台机器能走的装法，一条一项。upgrade=True 时拿到的是一组升级的路。
 
     platform / which / node 传进来就是"照这个模拟"，不传就照本机真实情况。
     node 传 None 表示"没装"，传 UNSET（默认）表示自己去问机器。
+    profile 是 agents.Agent 档位；不传走默认（claude）。**codebuddy 这轮不提供
+    安装路线**——它没有 npm 包、也没有我们认识的安装脚本，返回空表，面板那边
+    据此显示「CodeBuddy 请从官网装」，别假装能一键装。
 
     **upgrade=True 是干嘛的**：顶栏那颗「有新版」点开时用。命令换成各家升级用的
     那一条——winget 是 upgrade 子命令、brew 是 brew upgrade；原生脚本和 npm 那两
@@ -410,6 +420,9 @@ def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
     第一条永远是原生脚本——官方推荐它，而且它不需要任何前提。顺序就是面板上
     从上到下的顺序。
     """
+    profile = profile or agents.get(agents.DEFAULT_AGENT)
+    if not profile.npm_package:
+        return []
     platform = platform or sys.platform
     if node is UNSET:
         node = node_version(which)
@@ -478,6 +491,7 @@ def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
             key="brew"))
 
     # npm 三个平台都摆——Linux 上它往往是唯一一条现成的路。
+    package = profile.npm_package
     have_npm = which("npm") is not None
     if not have_npm:
         node_note, node_ready = "没装 Node/npm，这条走不了", False
@@ -497,8 +511,8 @@ def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
          "要有 Node 才行。装完更新走 npm，跟 claude 自己的自动更新不是一条路。"),
         node_note,
         node_ready,
-        ["npm", "install", "-g", NPM_PACKAGE],
-        "npm install -g {}".format(NPM_PACKAGE),
+        ["npm", "install", "-g", package],
+        "npm install -g {}".format(package),
         key="npm"))
 
     # 便携版 Node：留给"前几条都走不通、机器上又没有 Node"那种情况——实机上
@@ -511,9 +525,11 @@ def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
         "卸载就是把这个目录删掉。",
         "需要能连上 nodejs.org，连不上自动换 npmmirror",
         True,
-        (["powershell", "-NoProfile", "-Command", node_setup(platform)]
-         if platform == "win32" else ["bash", "-c", node_setup(platform)]),
-        _node_show(platform),
+        (["powershell", "-NoProfile", "-Command",
+          node_setup(platform, package=package)]
+         if platform == "win32"
+         else ["bash", "-c", node_setup(platform, package=package)]),
+        _node_show(platform, package),
         key="node", timeout=NODE_TIMEOUT))
 
     if upgrade:
@@ -530,21 +546,22 @@ def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
 
 
 def checkup(platform=None, which=shutil.which, node=UNSET, claude_path=None,
-            bin_dir=None):
+            bin_dir=None, profile=None):
     """面板顶上那张体检表，一行一项：(项目, 结果, 这一项算不算好)。
 
     只报"这台机器上是什么"，不动手也不拦着。哪条路走不了，是上面 routes() 那
     几项自己的事，这里只是把理由摆在明处。
     """
+    profile = profile or agents.get(agents.DEFAULT_AGENT)
     platform = platform or sys.platform
     if node is UNSET:
         node = node_version(which)
     rows = [("系统", platform_name(platform), True)]
 
     if claude_path:
-        rows.append(("claude", claude_path, True))
+        rows.append((profile.id, claude_path, True))
     else:
-        rows.append(("claude", "还没找到", False))
+        rows.append((profile.id, "还没找到", False))
         # 装到 PATH 外面那种：硬盘上有、`claude` 这五个字母敲不出来。这一条
         # 正是启动器能帮上忙的地方，得单独说。
         came_out = local_bin_claude(bin_dir)
