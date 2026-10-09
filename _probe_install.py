@@ -4,7 +4,7 @@
 
   1. **逻辑**（纯函数，不装任何东西、不联网）：三种平台各能走哪几条路、前提不满
      足的那条会不会乖乖灰掉、命令文本是不是官方那几条、Node 版本够不够。这一层
-     靠的是 routes() / checkup() / find_claude() 都收假的 platform、which 进来，
+     靠的是 routes() / checkup() / agent_path() 都收假的 platform、which 进来，
      所以不用去改这台机器的 PATH，也不用真装一次 claude。
   2. **流式输出**：拿一条无害命令跑一遍，看那个读数循环能不能把中文原样吐出来、
      退出码对不对、拉不起来的程序会不会变成 None 而不是炸掉。
@@ -32,9 +32,15 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 from _probe_common import rebind  # noqa: E402
 
-from claude_tool import claude as C                # noqa: E402
+from claude_tool import agent as A                 # noqa: E402
+from claude_tool import agents                     # noqa: E402
 from claude_tool import install as I               # noqa: E402
-from claude_tool.paths import LOCAL_BIN            # noqa: E402
+from claude_tool.paths import LOCAL_BIN, NODE_DIR  # noqa: E402
+
+# 这个探针整条线都是 claude 一档的事，先把档位拿出来，下面 A.agent_path(CLAUDE,…)
+# 一路用它。find_claude / claude_exe 这两个老名字拆开了：认装法要的是"路径"，
+# 起进程要的是"命令行前缀"（claude 是 `[路径]`，codebuddy 是 `[node, 脚本]`）。
+CLAUDE = agents.get("claude")
 
 SANDBOX = os.path.join(sandbox("install"), "work")
 OK = [True]
@@ -213,9 +219,9 @@ def versions():
 def finder():
     print("--- 装完当场认不认得出来 ---")
     check("PATH 里有就直接返回它",
-          C.find_claude(which_maker("claude")) == "/fake/bin/claude")
+          A.agent_path(CLAUDE, which_maker("claude")) == "/fake/bin/claude")
 
-    # 真建一个文件到沙箱的 ~/.local/bin 底下，走 find_claude 那条路径。
+    # 真建一个文件到沙箱的 ~/.local/bin 底下，走认落地位置那条路径。
     bin_dir = os.path.join(PROFILE, ".local", "bin")
     os.makedirs(bin_dir, exist_ok=True)
     real_local_bin = LOCAL_BIN
@@ -226,23 +232,25 @@ def finder():
           "{} vs {}".format(real_local_bin, bin_dir))
 
     check("PATH 里没有、~/.local/bin 里也没有 -> None",
-          C.find_claude(which_maker()) is None)
+          A.agent_path(CLAUDE, which_maker()) is None)
     target = os.path.join(bin_dir, "claude.exe")
     with open(target, "w", encoding="utf-8") as f:
         f.write("假的")
     check("PATH 里没有、~/.local/bin 里躺着 -> 认它",
-          C.find_claude(which_maker()) == target, C.find_claude(which_maker()))
+          A.agent_path(CLAUDE, which_maker()) == target,
+          A.agent_path(CLAUDE, which_maker()))
     check("清掉之后又回到 None",
-          (os.remove(target) or True) and C.find_claude(which_maker()) is None)
-    check("claude_exe 也跟着走同一条路",
-          C.claude_exe(which_maker("claude")) == "/fake/bin/claude")
+          (os.remove(target) or True)
+          and A.agent_path(CLAUDE, which_maker()) is None)
+    check("agent_exe 也跟着走同一条路",
+          A.agent_exe(CLAUDE, which_maker("claude")) == ["/fake/bin/claude"])
 
     # 便携版 Node 那条路：npm 的 shim 落在前缀根上（Windows 就是 NODE_DIR/claude.cmd，
     # 别的平台在它底下的 bin/）。装完那一刻 PATH 照样是旧的，认不出这个 shim 的话
     # 用户会觉得"提示装成功了、可它还说没装"——0.3.0 上就是这么报回来的。
     node_dir = os.path.join(PROFILE, ".claude_tool", "node")
-    check("NODE_DIR 落在沙箱里", os.path.normcase(C.NODE_DIR)
-          == os.path.normcase(node_dir), C.NODE_DIR)
+    check("NODE_DIR 落在沙箱里", os.path.normcase(NODE_DIR)
+          == os.path.normcase(node_dir), NODE_DIR)
     for sub, name in (("", "claude.cmd"), ("bin", "claude")):
         d = os.path.join(node_dir, sub) if sub else node_dir
         os.makedirs(d, exist_ok=True)
@@ -251,7 +259,8 @@ def finder():
             f.write("假的 shim")
         check("PATH 里没有、便携 Node 目录里躺着 {} -> 认它".format(
             os.path.join(sub, name) if sub else name),
-            C.find_claude(which_maker()) == shim, C.find_claude(which_maker()))
+            A.agent_path(CLAUDE, which_maker()) == shim,
+            A.agent_path(CLAUDE, which_maker()))
         os.remove(shim)
 
 
@@ -500,10 +509,10 @@ def panel():
 
     # 主窗口和面板都会自己去问「这台机器装没装 claude」。这台是有 claude 的
     # （探针就跑在仓库里，PATH 上有），可要验的正是"没装"那一条路，所以两边都
-    # 按没装来。find_claude 自己认不认得出，上面 finder() 那节已经验过了。
-    real_launcher_find, real_dialog_find = L.find_claude, D.find_claude
+    # 按没装来。agent_path 自己认不认得出，上面 finder() 那节已经验过了。
+    real_agent_path = A.agent_path
     real_routes, real_stream = I.routes, I.run_stream
-    rebind("find_claude", lambda *a, **k: None)
+    rebind("agent_path", lambda *a, **k: None)
 
     app = Launcher()
     app.update()
@@ -545,7 +554,7 @@ def panel():
         real_probe = app._probe_claude_version
         app._probe_claude_version = lambda: None      # 那一下单独在 _probe_version 里验
         try:
-            rebind("find_claude", lambda *a, **k: shim)
+            rebind("agent_path", lambda *a, **k: shim)
             app.feedback_var.set("")
             app._recheck_claude()
             app.update()
@@ -556,7 +565,7 @@ def panel():
                   app.feedback_var.get())
         finally:
             app._probe_claude_version = real_probe
-            rebind("find_claude", lambda *a, **k: None)
+            rebind("agent_path", lambda *a, **k: None)
             os.remove(shim)
 
         dialog, primary = open_install_panel(app)
@@ -855,7 +864,7 @@ def panel():
             pass
         for name, function in real_boxes.items():
             setattr(D.messagebox, name, function)
-        rebind("find_claude", real_launcher_find)
+        rebind("agent_path", real_agent_path)
         I.routes, I.run_stream = real_routes, real_stream
 
 

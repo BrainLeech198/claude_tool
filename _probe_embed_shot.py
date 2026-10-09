@@ -17,7 +17,7 @@ os.environ["HOME"] = PROFILE
 sys.path.insert(0, ROOT)
 from _probe_common import rebind  # noqa: E402
 
-from claude_tool import claude as C
+from claude_tool import agent as C
 from claude_tool import winhost as W
 from claude_tool.paths import WORKPLACE_DIR
 from claude_tool.ui import launcher as L

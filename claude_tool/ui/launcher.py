@@ -49,7 +49,8 @@ from claude_tool.config import (
     merge_scanned,
     save_config,
 )
-from claude_tool.claude import find_claude
+from claude_tool import agents
+from claude_tool.agent import agent_path
 from claude_tool.host import (
     EMBED_SUPPORTED,
     open_path,
@@ -503,7 +504,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         别的平台还挂不出来——面板把这些都收进去了，这条横幅只留"进去看看"
         和"再看看装上了没"。
         """
-        self.claude_path = find_claude()
+        self.claude_path = agent_path(agents.get("claude"))
         if self.claude_path is not None:
             return
         banner = self.banner
@@ -522,7 +523,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         tk.Frame(banner, bg=BORDER, height=1).pack(fill="x", side="bottom")
 
     def _recheck_claude(self):
-        self.claude_path = find_claude()
+        self.claude_path = agent_path(agents.get("claude"))
         if self.claude_path is None:
             self.feedback_var.set("还是没找到。装完可能要重开一次启动器，PATH 才会刷新。")
             return

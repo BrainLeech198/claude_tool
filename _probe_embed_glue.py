@@ -39,7 +39,7 @@ print("沙箱：", SANDBOX, flush=True)
 os.environ["USERPROFILE"] = SANDBOX
 os.environ["HOME"] = SANDBOX
 
-from claude_tool import claude as C  # noqa: E402
+from claude_tool import agent as C  # noqa: E402
 from claude_tool import winhost as W  # noqa: E402
 from claude_tool.ui import launcher as L  # noqa: E402
 

@@ -40,7 +40,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 自己查出来的比大小（claude_tool/versions.py），两边解出来的形状必须一样。
 sys.path.insert(0, ROOT)
 from claude_tool import __version__               # noqa: E402
-from claude_tool.claude import find_claude        # noqa: E402
+from claude_tool import agents                    # noqa: E402
+from claude_tool.agent import find_agent          # noqa: E402
 from claude_tool.versions import number, parse    # noqa: E402
 
 DATA = os.path.join(ROOT, "docs", "releases.js")
@@ -71,12 +72,13 @@ def local_claude():
     （新版偶尔跟一句更新提示），parse 只认第一段数字，正好。整件事都不该拦住
     打包：读不到就返回空串，记进记录里，页面上不显示那一格。
     """
-    exe = find_claude()
-    if not exe:
+    profile = agents.get("claude")
+    prefix = find_agent(profile)
+    if not prefix:
         return ""
     try:
-        result = subprocess.run([exe, "--version"], capture_output=True,
-                                timeout=30)
+        result = subprocess.run(prefix + profile.version_argv(),
+                                capture_output=True, timeout=30)
     except Exception:
         return ""
     text = (result.stdout or result.stderr or b"").decode("utf-8", "replace")
