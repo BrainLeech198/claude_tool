@@ -9,7 +9,7 @@ import os
 import subprocess
 
 from claude_tool import agents
-from claude_tool.agent import CREATE_NEW_CONSOLE, agent_command
+from claude_tool.agent import CREATE_NEW_CONSOLE, agent_args, agent_command
 
 
 # ── 内嵌终端 ──────────────────────────────────────────────────────────────
@@ -125,7 +125,11 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
                    append_system_prompt=None):
     """在新控制台窗口里跑 claude，返回那个进程对象。
 
-    完整的字符串命令行 + CREATE_NEW_CONSOLE，理由见 agent.agent_command。
+    直接把 argv 列表交给 Popen，不套 cmd /k：cmd 那层的引号规则会把
+    "C:\Program Files\..." 劈成 C:\Program（见 agent.agent_command 的说明），
+    路径带空格就跑不起来。argv 列表交给 Popen 时 Python 走 CreateProcess
+    的多参数通道，没有引号问题。
+
     beside 是"把窗口摆到启动器旁边"的坐标提示，非 Windows 上要靠终端的
     -geometry 参数实现；这边本来就有一套按句柄挪窗口的办法（bring_next_to），
     不用它。profile 是 agents.Agent 档位；不传走默认（claude）。
@@ -133,9 +137,8 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
     那个进程对象调用方留着轮询 poll()，就知道这个会话还开没开着。
     """
     return subprocess.Popen(
-        "cmd /k " + agent_command(profile, cont=cont, prompt=prompt,
-                                  settings=settings, permission=permission,
-                                  append_system_prompt=append_system_prompt),
+        agent_args(profile, cont=cont, prompt=prompt, settings=settings,
+                   permission=permission, append_system_prompt=append_system_prompt),
         cwd=workdir,
         creationflags=CREATE_NEW_CONSOLE,
     )
