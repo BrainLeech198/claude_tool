@@ -17,6 +17,7 @@ from tkinter import messagebox, ttk
 
 from claude_tool import versions
 from claude_tool import agents
+from claude_tool import shared_memory
 from claude_tool.agent import CREATE_NO_WINDOW, agent_exe
 from claude_tool.config import save_config
 from claude_tool.handoff import (
@@ -381,6 +382,12 @@ class SessionsMixin:
         path = item["path"]
         permission = workspace_permission(item)
         profile = agents.get(item.get("agent"))
+        # 有共享记忆就建互链、算注入文本；没有就什么都不做（老项目行为不变）。
+        try:
+            shared_memory.ensure_pointers(path)
+        except Exception:
+            pass
+        preamble = shared_memory.preamble(path)
         settings = None
         auto_continue = self.auto_continue_var.get() or autopilot
         if auto_continue:
@@ -393,7 +400,8 @@ class SessionsMixin:
 
         if self.embed_var.get():
             self.embed_workspace(item, cont, prompt, settings, permission,
-                                 profile=profile)
+                                 profile=profile,
+                                 append_system_prompt=preamble)
             return None
         # 拍快照得赶在启动之前：窗口是 claude 那边异步建出来的，等它冒出来再
         # 去数，就分不清哪扇是这次新开的、哪扇是上一轮留下的了。
@@ -407,7 +415,8 @@ class SessionsMixin:
             beside = (x + self.winfo_width() + SIDE_GAP, y)
         try:
             process = spawn_terminal(path, cont, prompt, settings, permission,
-                                     beside=beside, profile=profile)
+                                     beside=beside, profile=profile,
+                                     append_system_prompt=preamble)
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return
