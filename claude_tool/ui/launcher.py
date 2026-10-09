@@ -95,17 +95,21 @@ MIN_HEIGHT_FLOOR = 660
 CLOSE_GRACE_MS = 800
 
 def default_window_size(screen_w, screen_h):
-    """没存过尺寸时窗口开多大：写死 900x950。
+    """没存过尺寸时窗口开多大：写死 964x950。
 
     中间试过一版按屏幕比例算（宽 0.36、高 0.72，两头卡区间），理由是免得在
     768 高的笔记本上顶到屏幕外。但那版让"多大合适"变成了跟屏幕有关的事——
     同一份界面在不同机器上开出来不一样大，而这里其实就那么两块列表，该由里
     面的内容定。所以退回写死。
 
-    screen_w/screen_h 还是要的：屏幕本身就比 900x950 小的，按屏幕收一下，不
+    宽度跟 _apply_min_size 的下限对齐（964）：0.5 加了 agent 切换按钮后
+    DETAIL_MIN_WIDTH 从 460 涨到 620，下限跟着涨到 964。默认还留在 900 的话
+    开窗就被 minsize 顶上去，"默认"这个数就名存实亡了。
+
+    screen_w/screen_h 还是要的：屏幕本身就比 964x950 小的，按屏幕收一下，不
     然会有一截落在屏幕外够不着。位置那边另有 place_window 管。
     """
-    return min(900, screen_w - 20), min(950, screen_h - 100)
+    return min(964, screen_w - 20), min(950, screen_h - 100)
 
 
 class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
