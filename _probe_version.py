@@ -244,7 +244,7 @@ def ui(prefix):
     print("\n=== C. 界面 ===")
     real_run = subprocess.run
     real_popen = subprocess.Popen
-    real_find = L.find_claude
+    real_find = L.agent_path
     calls = {"run": [], "popen": []}
     answers = {"npm": (2, 1, 278), "site": None, "calls": []}
 
@@ -262,7 +262,7 @@ def ui(prefix):
 
     subprocess.run = fake_run
     subprocess.Popen = fake_popen
-    rebind("find_claude", lambda: r"C:\fake\claude.cmd")
+    rebind("agent_path", lambda *a, **k: r"C:\fake\claude.cmd")
     versions.npm_version = lambda: (answers["calls"].append("npm"),
                                     answers["npm"])[1]
     versions.site_version = lambda: (answers["calls"].append("site"),
@@ -385,7 +385,7 @@ def ui(prefix):
 
     subprocess.run = real_run
     subprocess.Popen = real_popen
-    rebind("find_claude", real_find)
+    rebind("agent_path", real_find)
     app.destroy()
 
 
@@ -429,20 +429,20 @@ def packaging():
             sys.argv = real_argv
 
     # 读本机版本号这两下
-    real_find, real_run = U.find_claude, U.subprocess.run
+    real_find, real_run = U.find_agent, U.subprocess.run
 
     class FakeResult:
         def __init__(self, out):
             self.stdout, self.stderr = out, b""
 
-    U.find_claude = lambda: "claude"
+    U.find_agent = lambda *a, **k: ["claude"]
     U.subprocess.run = lambda argv, **kw: FakeResult(b"2.1.150 (Claude Code)\n")
     check("从 claude --version 里读出号", U.local_claude(), "2.1.150")
     U.subprocess.run = lambda argv, **kw: FakeResult(b"not a version\n")
     check("读不出来就是空串", U.local_claude(), "")
-    U.find_claude = lambda: None
+    U.find_agent = lambda *a, **k: None
     check("没装 claude 也是空串", U.local_claude(), "")
-    U.find_claude, U.subprocess.run = real_find, real_run
+    U.find_agent, U.subprocess.run = real_find, real_run
 
     U.local_claude = lambda: "2.1.150"
     write_rel([])

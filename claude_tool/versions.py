@@ -26,7 +26,8 @@ import json
 import re
 import urllib.request
 
-NPM_LATEST = "https://registry.npmjs.org/@anthropic-ai/claude-code/latest"
+from claude_tool import agents
+
 SITE = "https://brainleech198.github.io/claude_tool/"
 SITE_RELEASES = SITE + "releases.js"
 TIMEOUT = 6
@@ -117,10 +118,24 @@ def newest_claude(text):
     return None
 
 
+def npm_url(profile):
+    """npm registry 上这个 agent 的 latest 地址；没有 npm 包就返回 None。"""
+    if not profile.npm_package:
+        return None
+    return "https://registry.npmjs.org/{}/latest".format(profile.npm_package)
+
+
 def npm_version():
-    """npm 上 claude 的最新版号，拿不到返回 None。"""
+    """npm 上 claude 的最新版号，拿不到返回 None。
+
+    零参：探针会把这个名字整个换成假的（不收参数），check() 也照零参叫它。
+    包名从 agents 里 claude 档位的 npm_package 取，不再写死在 URL 里。
+    """
+    url = npm_url(agents.get(agents.DEFAULT_AGENT))
+    if not url:
+        return None
     try:
-        return parse(json.loads(_get(NPM_LATEST)).get("version"))
+        return parse(json.loads(_get(url)).get("version"))
     except Exception:
         return None
 
@@ -133,19 +148,25 @@ def site_version():
         return None
 
 
-def check(local):
-    """本机这版 claude 落后了吗。
+def check(local, profile=None):
+    """本机这版 agent 落后了吗。
 
     local 是启动器已经拿到的那串（"claude 2.1.150"，就是顶栏显示的那个）。
-    npm 优先，它答不上来（没网、被墙）才回头问官网——官网那份是"打包时测过的
-    版本"，比 npm 的实时值旧，只能当兜底。
+    profile 不传走默认（claude）。npm 优先，它答不上来（没网、被墙）才回头问
+    官网——官网那份是"打包时测过的版本"，比 npm 的实时值旧，只能当兜底。
+    codebuddy 的 npm_package 是 None，没有 npm 这条源，直接走官网。
 
     返回 (最新版号文本, 拿的是哪个源, 本机是否落后)，查不到返回 None。
     本机版本读不出来时 stale 给 False：宁可不提示，也不要拿一个没读到的东西
     去比出一个"你落后了"。
     """
+    profile = profile or agents.get(agents.DEFAULT_AGENT)
     local_parts = parse(local)
-    for source, getter in (("npm", npm_version), ("官网", site_version)):
+    getters = []
+    if profile.npm_package:
+        getters.append(("npm", npm_version))
+    getters.append(("官网", site_version))
+    for source, getter in getters:
         latest = getter()
         if latest is None:
             continue
