@@ -139,6 +139,24 @@ def main():
     check("codebuddy 问版本也是 --version",
           codebuddy.version_argv() == ["--version"])
 
+    # ── 6. paths.for_agent + config 工作区 agent 字段 ──
+    print("--- 6. paths.for_agent / config.agent ---")
+    check("paths.CLAUDE_DIR 仍指向 claude 档位",
+          paths.CLAUDE_DIR == claude.config_dir)
+    check("for_agent 带出的字段齐",
+          all(hasattr(paths.for_agent("claude"), f) for f in
+              ("config_dir", "settings_file", "preset_dir", "projects_dir",
+               "exe_names")))
+    check("for_agent('codebuddy') 家目录是 ~/.codebuddy",
+          paths.for_agent("codebuddy").config_dir.endswith(".codebuddy"),
+          paths.for_agent("codebuddy").config_dir)
+    check("for_agent 认不出来回落 claude",
+          paths.for_agent("nope").config_dir == claude.config_dir)
+
+    from claude_tool.config import default_config
+    check("默认工作区带 agent 字段",
+          default_config()["workspaces"][0].get("agent") == "claude")
+
     print()
     print("结果:", "全过" if not BAD else "没过：" + str(BAD))
     return 1 if BAD else 0

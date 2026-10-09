@@ -57,6 +57,19 @@ ICON_FILE = (
 PRESET_SUFFIX = ".json"
 ILLEGAL_CHARS = r'[<>:"/\\|?*\s]'
 
+
+def for_agent(agent_id):
+    """按 agent id 拿它的目录布局（config_dir / settings_file / preset_dir …）。
+
+    返回的就是 agents.Agent 那个对象——它已经带着这些字段了，不另造壳。
+    认不出来的 id 由 agents.get 兜底回落 claude，不抛异常。
+
+    这儿延迟 import agents 是因为 agents 顶层就 import 了本模块的常量
+    （CLAUDE_DIR 等），放到函数里才不会绕成环。
+    """
+    from claude_tool import agents
+    return agents.get(agent_id)
+
 # 预设名要落成 <名字>.json 这个文件，管的只是"文件名里不能出现什么"，所以空格是
 # 合法的：Windows 那条路给 --settings 拼命令行时会整个包引号（见 claude_command），
 # Linux 那边是一项一个元素的 argv，两边都不怕空格。
