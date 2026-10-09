@@ -165,7 +165,10 @@ check("并成了「＋ 添加工作区」", "＋ 添加工作区" in labels, lab
 check("不再有「＋ 新建文件夹」", "＋ 新建文件夹" not in labels)
 check("不再有「＋ 选已有目录」", "＋ 选已有目录" not in labels)
 check("「重新扫描」还在", "重新扫描" in labels, labels)
-check("栏底那排一共三颗（加一本、重扫、设置）", len(labels) == 3, labels)
+# 0.4 插件宿主给栏底加了第 4 颗「插件」入口（ui/nav.py 的 third 那行，见
+# 设计说明-0.4.md 插件那节）：原来这句写死 3 颗，插件一进来就成了假红。
+check("栏底那排一共四颗（加一本、重扫、设置、插件）", len(labels) == 4, labels)
+check("插件入口也在栏底", "插件" in labels, labels)
 
 print()
 print("== 3. 那行重复的「新建文件夹建在 … [更改目录]」撤掉了 ==")

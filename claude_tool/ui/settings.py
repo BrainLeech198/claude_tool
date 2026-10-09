@@ -53,6 +53,8 @@ class SettingsMixin:
         win.title("设置")
         win.configure(bg=PAGE_BG)
         win.protocol("WM_DELETE_WINDOW", self._close_settings)
+        # Esc 跟点 X 一回事（都是 withdraw，不是销毁——理由见文件开头那段）。
+        win.bind("<Escape>", lambda _e: self._close_settings())
 
         box = tk.Frame(win, bg=PAGE_BG)
         box.pack(fill="both", expand=True)

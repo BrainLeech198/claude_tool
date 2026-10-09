@@ -27,7 +27,6 @@ from claude_tool.paths import (
     PRESET_DIR,
     TOOL_DIR,
 )
-from claude_tool import install
 from claude_tool.theme import (
     ACCENT,
     ACCENT_SOFT,
@@ -54,7 +53,6 @@ from claude_tool.claude import find_claude
 from claude_tool.host import (
     EMBED_SUPPORTED,
     open_path,
-    open_url,
     place_window,
     window_position,
 )
@@ -295,7 +293,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self.bind_all("<Control-F>", self._focus_filter)
         for number in range(1, 10):
             self.bind_all("<Control-Key-{}>".format(number),
-                          lambda _e, n=number: self.launch_nth(n))
+                          lambda _e, n=number: self._launch_nth_shortcut(n))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         # 内嵌的那个是贴在终端栏上的独立窗口，本窗口自身的挪动它跟不动——挪窗口
         # 时 Tk 只给顶层窗口发 <Configure>，终端栏那边一个都不发，_on_term_resize
@@ -459,8 +457,15 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self.feedback_var = tk.StringVar(
             value="左边点一本，右边按「新会话」；行首那个数字按住 Ctrl 就能直接开，"
                   "Ctrl+F 跳到筛选框。")
-        tk.Label(footer, textvariable=self.feedback_var, bg=PAGE_BG, fg=MUTED,
-                 font=font(9), anchor="w").pack(fill="x", padx=PAGE_GUTTER, pady=8)
+        feedback = tk.Label(footer, textvariable=self.feedback_var, bg=PAGE_BG,
+                            fg=MUTED, font=font(9), anchor="w", justify="left")
+        feedback.pack(fill="x", padx=PAGE_GUTTER, pady=8)
+        # 长消息（搬迁之后那条整路径之类）得能折行——不折就被横着裁掉半截。折到
+        # 多宽跟着自己的实际宽度走：窗口拉宽拉窄都跟着变，不用去猜窗口尺寸。
+        # 宽度还没量出来时（首帧可能是 1）不折，否则会按 1 像素把每个字拆成一行。
+        feedback.bind("<Configure>",
+                      lambda e: feedback.configure(
+                          wraplength=e.width if e.width > 40 else 0))
 
         body = tk.Frame(self, bg=PAGE_BG)
         body.pack(fill="both", expand=True, padx=PAGE_GUTTER)
@@ -526,19 +531,6 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 勾着"自动查新版"的话，这一问带出来的那次联网查也就跟着跑了。
         self._probe_claude_version()
         self.feedback_var.set("找到 claude 了：{}".format(self.claude_path))
-
-    def _open_install_page(self):
-        """开官方那份说明。安装面板里那颗「打开官网说明」走这儿。
-
-        跟面板里是同一个地址（install.DOCS_URL），别在这儿另写一份——这个地址
-        官方是会挪的，两处各存一份迟早对不上。
-        """
-        try:
-            open_url(install.DOCS_URL)
-        except OSError as e:
-            messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(e))
-            return
-        self.feedback_var.set("已在浏览器里打开安装说明。")
 
     def _build_terminal(self, parent):
         """内嵌终端那一块，先建好但不摆出来，等真要内嵌时再 pack。"""
@@ -640,6 +632,26 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             if target.contains(widget):
                 target.scroll(-int(event.delta / 120))
                 return
+
+    # 光标落在这些控件里时一律当"用户在打字"，全局快捷键让路。
+    _TYPING_CLASSES = ("Entry", "TEntry", "Text", "TCombobox", "Spinbox",
+                       "TSpinbox")
+
+    def _typing(self):
+        """光标现在是不是在某个输入控件里。
+
+        Ctrl+数字 / Ctrl+F 都是用 `bind_all` 绑到整个进程的（见 __init__），
+        设置窗、对话框里的输入框也吃这个绑定。不判一下的话：在筛选框里敲个
+        日期按下 Ctrl+3，主窗就弹出「新会话」了。
+        """
+        widget = self.focus_get()
+        return widget is not None and widget.winfo_class() in self._TYPING_CLASSES
+
+    def _launch_nth_shortcut(self, number):
+        """Ctrl+1~9 的快路入口：在打字就不接，否则交给 sessions.launch_nth。"""
+        if self._typing():
+            return None
+        return self.launch_nth(number)
 
     def open_folder(self, path):
         if not os.path.isdir(path):

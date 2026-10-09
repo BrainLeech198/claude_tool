@@ -211,6 +211,7 @@ class PluginsMixin:
         win.title("插件")
         win.configure(bg=PAGE_BG)
         win.protocol("WM_DELETE_WINDOW", self._close_plugins)
+        win.bind("<Escape>", lambda _e: self._close_plugins())
         self._plugins_win = win
 
         # 顶上那行说清"插件放哪儿、怎么装"——不然用户拿着一个下载下来的 zip 不
@@ -329,6 +330,12 @@ class PluginsMixin:
         if author:
             tk.Label(head, text="· " + author, bg=PAGE_BG, fg=MUTED,
                      font=font(9)).pack(side="left", padx=(8, 0))
+
+        # 路径摆出来是信任模型要的（设计说明 5.1/5.3）：点「启用」等于让这段代码
+        # 在宿主进程里跑，"这是哪儿的代码"得让用户看得见，光有名字不够。
+        tk.Label(card, text=plugin.path, bg=PAGE_BG, fg=MUTED, font=font(8),
+                 anchor="w", justify="left",
+                 wraplength=PLUGINS_W - 60).pack(anchor="w", pady=(2, 0))
 
         if plugin.manifest and plugin.manifest.description:
             tk.Label(card, text=plugin.manifest.description, bg=PAGE_BG,

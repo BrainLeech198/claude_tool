@@ -203,15 +203,18 @@ class UpdateMixin:
         except queue.Empty:
             pass
 
-    def _say_self_check(self, message):
+    def _say_self_check(self, message, hint=""):
         """「查启动器新版」有结果了，说一句。
 
         两个地方要说：主窗底下那条反馈栏（唯一出口），和设置窗「关于」页上那
         一行。设置窗是独立的 Toplevel，手动查的时候它多半正盖在主窗上面——只
         写反馈栏，用户点完盯着设置窗等半天，什么都看不到。
+
+        hint 只写给设置窗那一行：下载入口（顶栏那颗「下载最新版」胶囊）长在主窗
+        顶栏上，设置窗盖住的时候够不着——不能只告诉用户"有新版了"就不管他去哪点。
         """
         self.feedback_var.set(message)
-        self.self_check_note_var.set(message)
+        self.self_check_note_var.set(message + ("\n" + hint if hint else ""))
 
     def _apply_self_check(self, manual, result):
         if result is None:
@@ -246,7 +249,9 @@ class UpdateMixin:
         self._self_pill = pill
         self._say_self_check(
             "启动器本机是 {}，官网上已经出到 {} 了。".format(
-                __version__, release.latest))
+                __version__, release.latest),
+            hint="新版的下载入口在主窗顶栏那颗「下载最新版 {}」上。".format(
+                release.latest))
 
     def _hide_self_update(self):
         if self._self_pill is None:
