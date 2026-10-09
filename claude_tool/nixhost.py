@@ -18,6 +18,12 @@ import tempfile
 from claude_tool import agents
 from claude_tool.agent import agent_args, agent_exe
 
+
+def title_tag(agent_id=None):
+    """内嵌控制台的标题标记。跟 winhost 那份一样——这是纯字符串拼法，
+    不碰任何平台 API，两个平台共用一份逻辑。"""
+    return "{}-embed".format(agent_id or "claude")
+
 # 内嵌那条路在非 Windows 上不存在，理由见 host.py。这里留着同名占位，好让
 # host.py 的名字表两个平台完全一致。
 _UNFINISHED = "{} 在 Linux/macOS 上还没做"
@@ -168,17 +174,17 @@ def _spawn_macos(argv, workdir):
 
 
 def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
-                   permission=None, beside=None):
+                   permission=None, beside=None, profile=None):
     """在一个新终端窗口里跑 claude，返回那个进程对象。
 
     命令用 claude 的绝对路径（find_claude 刚找到的那个），argv 一项一项过
     shlex.quote：开场白里带空格、引号、中文都不怕，这一层不做任何"猜哪里断开"
-    的事。
+    的事。profile 是 agents.Agent 档位；不传走默认（claude）。
 
     beside 是"摆到启动器旁边"的坐标，只有认 -geometry 的终端吃这一口，别的照旧
     由窗口管理器随便摆——这边没有 Windows 那种事后再挪的办法。
     """
-    profile = agents.get(agents.DEFAULT_AGENT)
+    profile = profile or agents.get(agents.DEFAULT_AGENT)
     argv = agent_args(profile, cont=cont, prompt=prompt, settings=settings,
                       permission=permission, exe=agent_exe(profile))
     if sys.platform == "darwin":

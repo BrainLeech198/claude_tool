@@ -80,6 +80,12 @@ class PillButton(tk.Canvas):
         self._set_hover(False)
         self._draw()
 
+    def set_text(self, text):
+        self._text = text
+        self._cw = measure(text, 10, self._primary) + 26
+        self.configure(width=self._cw)
+        self._draw()
+
     def _set_hover(self, value):
         self._hover = value and self._enabled
         self.configure(cursor="hand2" if self._hover else "arrow")

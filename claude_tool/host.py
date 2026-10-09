@@ -36,6 +36,7 @@ place_window = _host.place_window
 screen_bounds = _host.screen_bounds
 spawn_console = _host.spawn_console
 spawn_terminal = _host.spawn_terminal
+title_tag = _host.title_tag
 trash_path = _host.trash_path
 terminal_windows = _host.terminal_windows
 toggle_topmost = _host.toggle_topmost

@@ -13,7 +13,8 @@
 import os
 import tkinter as tk
 
-from claude_tool.config import humanize_ago, last_chat_time
+from claude_tool import agents
+from claude_tool.config import humanize_ago, last_chat_time, save_config
 from claude_tool.handoff import HANDOFF_FILE
 from claude_tool.theme import BORDER, HOVER_BG, MUTED, PAGE_BG, TEXT, font
 from claude_tool.widgets import PillButton, Tip
@@ -21,17 +22,21 @@ from claude_tool.widgets import PillButton, Tip
 
 # 右栏该有多宽。它不是"右栏就直接摆这么宽"——右栏是 fill="both" + expand，多宽
 # 由布局给。这个数只有一个用处：算窗口下限（见 launcher._apply_min_size），保证
-# 缩到最窄时【管理】那一排**六个**按钮还在同一行上。
+# 缩到最窄时【管理】那一排**所有**按钮还在同一行上。
 #
 # 实测（Task 8 量的，`_probe_size_state.py` 现在把这几条钉住了）：不含
 # 「删交接文档」时那排要 324 像素；含它（也就是最宽状态）要 **441**。Task 6 那版
 # 按估的按钮宽度写的是 390，实测下来最窄窗口里右栏只分到 442——比 441 多 1 像素，
 # 实质上是在赌字体。现在按实测取 460（441 + 19 余量）。
 #
+# 0.5 加了 agent 切换按钮（文案是档位的 label，最宽 "CodeBuddy Code"），管理排
+# 实测（_probe_size_state）要 577px。按同样思路取 620（577 + 43 余量，label 宽度
+# 随字体有出入，多留点）。
+#
 # 另外注意别拿 `detail_area.winfo_reqwidth()` 当依据：右栏里有个显示工作区路径的
 # Label，路径长一点那个数就飘（实测能到 601）。下限要的是这排按钮的宽度，那是个
 # 不随数据变的数。
-DETAIL_MIN_WIDTH = 460
+DETAIL_MIN_WIDTH = 620
 
 
 class DetailMixin:
@@ -108,6 +113,12 @@ class DetailMixin:
         self.detail_manage_row = manage
         tk.Label(manage, text="管理", bg=PAGE_BG, fg=MUTED,
                  font=font(9)).pack(side="left", padx=(0, 8))
+        # agent 切换：点了在 claude / codebuddy 之间翻。文案跟着当前档位变。
+        self._agent_btn = PillButton(manage, "claude",
+                                     self._detail_switch_agent,
+                                     bg=PAGE_BG, height=26)
+        self._agent_btn.pack(side="left", padx=(0, 6))
+        self._detail_manage.append(self._agent_btn)
         for caption, handler in (
                 ("改名", self._detail_rename),
                 ("搬迁", self._detail_move),
@@ -151,6 +162,7 @@ class DetailMixin:
         self.detail_title_var.set(item["name"])
         self.detail_path_var.set(item["path"])
         self.detail_meta_var.set(self._detail_note(item))
+        self._agent_btn.set_text(agents.get(item.get("agent")).label)
         self._detail_set_enabled(True)
 
     def _detail_set_enabled(self, flag):
@@ -226,6 +238,19 @@ class DetailMixin:
             self.open_folder(item["path"])
 
     # ── 管理动作 ──
+
+    def _detail_switch_agent(self):
+        """在这本工作区上翻一下用哪个 agent（claude ↔ CodeBuddy）。"""
+        self._with_selected(self._switch_agent)
+
+    def _switch_agent(self, item):
+        current = item.get("agent") or agents.DEFAULT_AGENT
+        new_id = "codebuddy" if current != "codebuddy" else "claude"
+        item["agent"] = new_id
+        save_config(self.config_data)
+        self._agent_btn.set_text(agents.get(new_id).label)
+        self.feedback_var.set(
+            "「{}」改用 {}。".format(item["name"], agents.get(new_id).label))
 
     def _detail_rename(self):
         self._with_selected(self.rename_workspace)
