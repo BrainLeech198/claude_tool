@@ -15,7 +15,8 @@ import subprocess
 import sys
 import tempfile
 
-from claude_tool.claude import claude_args, claude_exe
+from claude_tool import agents
+from claude_tool.agent import agent_args, agent_exe
 
 # 内嵌那条路在非 Windows 上不存在，理由见 host.py。这里留着同名占位，好让
 # host.py 的名字表两个平台完全一致。
@@ -177,7 +178,9 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
     beside 是"摆到启动器旁边"的坐标，只有认 -geometry 的终端吃这一口，别的照旧
     由窗口管理器随便摆——这边没有 Windows 那种事后再挪的办法。
     """
-    argv = claude_args(cont, prompt, settings, permission, exe=claude_exe())
+    profile = agents.get(agents.DEFAULT_AGENT)
+    argv = agent_args(profile, cont=cont, prompt=prompt, settings=settings,
+                      permission=permission, exe=agent_exe(profile))
     if sys.platform == "darwin":
         return _spawn_macos(argv, workdir)
     return _spawn_x11(argv, workdir, beside)

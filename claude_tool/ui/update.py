@@ -16,7 +16,8 @@ from tkinter import messagebox
 from claude_tool import selfupdate
 from claude_tool import versions
 from claude_tool import __version__
-from claude_tool.claude import CREATE_NO_WINDOW, find_claude
+from claude_tool import agents
+from claude_tool.agent import CREATE_NO_WINDOW, find_agent
 from claude_tool.config import save_config
 from claude_tool.host import open_url
 from claude_tool.theme import ACCENT, ACCENT_SOFT, HOVER_BG, MUTED, PANEL_BG
@@ -33,15 +34,16 @@ class UpdateMixin:
         规矩是只有主线程能改控件。所以这里只往队列里塞字符串，
         _poll_running 每次醒过来顺手把它捞出来贴上。
         """
-        exe = find_claude()
-        if not exe:
+        profile = agents.get(agents.DEFAULT_AGENT)
+        prefix = find_agent(profile)
+        if not prefix:
             self.version_queue.put("没找到 claude")
             return
 
         def work():
             try:
                 result = subprocess.run(
-                    [exe, "--version"], capture_output=True,
+                    prefix + profile.version_argv(), capture_output=True,
                     creationflags=CREATE_NO_WINDOW, timeout=20)
                 # 明确按 UTF-8 解：这台机器子进程默认走 cp936，版本串里万一有
                 # 非 ASCII 会解出乱码甚至抛异常。

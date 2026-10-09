@@ -21,7 +21,7 @@ import sys
 import time
 
 from claude_tool.paths import TOOL_DIR
-from claude_tool.claude import python_exe
+from claude_tool.agent import python_exe
 
 # 源码模式下 hook 要回头调的那个文件。不能写 handoff.py 自己——那样会被当成
 # 脚本直接跑，包内的相对导入就全崩了；__main__.py 认得这个入口标记。

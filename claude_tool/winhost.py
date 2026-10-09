@@ -8,7 +8,8 @@ import ctypes
 import os
 import subprocess
 
-from claude_tool.claude import CREATE_NEW_CONSOLE, claude_command
+from claude_tool import agents
+from claude_tool.agent import CREATE_NEW_CONSOLE, agent_command
 
 
 # ── 内嵌终端 ──────────────────────────────────────────────────────────────
@@ -115,7 +116,7 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
                    permission=None, beside=None):
     """在新控制台窗口里跑 claude，返回那个进程对象。
 
-    完整的字符串命令行 + CREATE_NEW_CONSOLE，理由见 claude.claude_command。
+    完整的字符串命令行 + CREATE_NEW_CONSOLE，理由见 agent.agent_command。
     beside 是"把窗口摆到启动器旁边"的坐标提示，非 Windows 上要靠终端的
     -geometry 参数实现；这边本来就有一套按句柄挪窗口的办法（bring_next_to），
     不用它。
@@ -123,7 +124,9 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
     那个进程对象调用方留着轮询 poll()，就知道这个会话还开没开着。
     """
     return subprocess.Popen(
-        "cmd /k " + claude_command(cont, prompt, settings, permission),
+        "cmd /k " + agent_command(agents.get(agents.DEFAULT_AGENT), cont=cont,
+                                  prompt=prompt, settings=settings,
+                                  permission=permission),
         cwd=workdir,
         creationflags=CREATE_NEW_CONSOLE,
     )
@@ -193,7 +196,9 @@ def spawn_console(workdir, cont=False, prompt=None, settings=None, permission=No
     """
     known = {hwnd for hwnd, _ in console_windows()}
     command = "title {} & {}".format(
-        TITLE_TAG, claude_command(cont, prompt, settings, permission))
+        TITLE_TAG, agent_command(agents.get(agents.DEFAULT_AGENT), cont=cont,
+                                 prompt=prompt, settings=settings,
+                                 permission=permission))
     # 同样得整条给字符串：塞进列表 Python 会重包一遍引号，开场白就断在空格上。
     process = subprocess.Popen(
         "conhost.exe cmd /k " + command,

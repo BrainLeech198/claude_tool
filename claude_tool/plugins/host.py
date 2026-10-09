@@ -140,9 +140,9 @@ class Host:
                                       settings=settings, permission=permission)
 
     def claude_args(self, **kwargs):
-        """拼一份 claude 的 argv（不真起进程）。参数跟 `claude.claude_args` 一样。"""
-        from claude_tool import claude
-        return claude.claude_args(**kwargs)
+        """拼一份 claude 的 argv（不真起进程）。参数跟 `agent.agent_args` 一样。"""
+        from claude_tool import agent, agents
+        return agent.agent_args(agents.get("claude"), **kwargs)
 
     def open_dir(self, path):
         """在系统文件管理器里打开一个目录。"""

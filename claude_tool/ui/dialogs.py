@@ -14,7 +14,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from claude_tool import install
-from claude_tool.claude import find_claude
+from claude_tool import agents
+from claude_tool.agent import agent_path
 from claude_tool.host import open_url
 from claude_tool.paths import (
     ILLEGAL_CHARS,
@@ -981,7 +982,7 @@ class LauncherDialogs:
         what = "升级" if updating else "装"
         body = make_form(dialog, "帮你{} claude".format(what))
 
-        claude_path = find_claude()
+        claude_path = agent_path(agents.get("claude"))
         routes = install.routes(upgrade=updating, claude_path=claude_path)
         table = install.checkup(claude_path=claude_path)
 
@@ -1137,7 +1138,7 @@ class LauncherDialogs:
                 widget.configure(state="normal")
             put("— {}完了，退出码 {} —".format(what, code),
                 OK if code == 0 else WARN)
-            # 做完自己再看一眼。find_claude 认原生脚本和便携版 Node 那两个落地
+            # 做完自己再看一眼。agent_path 认原生脚本和便携版 Node 那两个落地
             # 位置，所以这时候多半当场就能找到——不用用户自己再去点一次「重新
             # 检测」。升级完还要再问一次网上是哪版：顶栏那颗「有新版」得靠这个
             # 掉下去，不然升完了它还杵在那儿。那条自动查的勾没开也得问这一次
@@ -1145,8 +1146,9 @@ class LauncherDialogs:
             if updating and code == 0:
                 self._force_version_check = True
             self._recheck_claude()
-            if find_claude():
-                put("{}好了，claude 在 {}。".format(what, find_claude()), OK)
+            fresh = agent_path(agents.get("claude"))
+            if fresh:
+                put("{}好了，claude 在 {}。".format(what, fresh), OK)
             else:
                 put("还是没找到。上面那几行里有报错的话，照它说的来看看；"
                     "也可以点「打开官网说明」。", WARN)

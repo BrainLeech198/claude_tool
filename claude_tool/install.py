@@ -17,7 +17,7 @@ import subprocess
 import sys
 import threading
 
-from claude_tool.claude import CREATE_NO_WINDOW
+from claude_tool.agent import CREATE_NO_WINDOW
 from claude_tool.paths import LOCAL_BIN, LOCAL_NAMES, NODE_DIR
 
 DOCS_URL = "https://code.claude.com/docs/en/setup"
