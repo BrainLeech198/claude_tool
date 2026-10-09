@@ -7,6 +7,7 @@ import os
 import re
 import time
 
+from claude_tool import agents
 from claude_tool.paths import (
     CLAUDE_DIR,
     CONFIG_FILE,
@@ -31,7 +32,8 @@ def default_config():
         "workplace": WORKPLACE_DIR,
         "roots": [WORKPLACE_DIR],
         "workspaces": [{"name": "默认", "path": WORKPLACE_DIR,
-                        "handoff_ignore_git": False}],
+                        "handoff_ignore_git": False,
+                        "agent": agents.DEFAULT_AGENT}],
         "window": None,
         # 左栏当前选中那一本（记路径不记名字：改名不影响选中）。
         # 老配置文件里没这个键，读的地方一律用 .get()，别用 []。
@@ -98,6 +100,8 @@ def load_config():
                     "path": path,
                     "permission": workspace_permission(item),
                     "handoff_ignore_git": bool(item.get("handoff_ignore_git")),
+                    "agent": item.get("agent") if item.get("agent") in agents.ids()
+                    else agents.DEFAULT_AGENT,
                 })
         config["workspaces"] = workspaces
     config["auto_continue"] = bool(data.get("auto_continue"))
@@ -122,6 +126,11 @@ def save_config(config):
 
 
 PROJECTS_DIR = os.path.join(CLAUDE_DIR, "projects")
+
+
+def projects_dir_for(agent_id):
+    """这个 agent 的会话记录目录。认不出来的回落 claude。"""
+    return agents.get(agent_id).projects_dir
 
 
 def project_dir(path):
