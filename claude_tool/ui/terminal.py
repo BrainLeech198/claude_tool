@@ -20,6 +20,7 @@ from claude_tool.host import (
     place_window,
     screen_bounds,
     spawn_console,
+    title_tag,
     window_position,
 )
 from claude_tool.theme import SIDE_GAP
@@ -52,7 +53,7 @@ class TerminalMixin:
             self.feedback_var.set("新开的会话不再自动继续。")
 
     def embed_workspace(self, item, cont=False, prompt=None, settings=None,
-                        permission=None):
+                        permission=None, profile=None):
         """把 claude 塞进本窗口。已经有一个的话先把它放出去，不打断它。"""
         if self._pending:
             self.feedback_var.set("上一个还在启动，稍等一下。")
@@ -60,7 +61,7 @@ class TerminalMixin:
         self.detach_terminal()
         try:
             process, known = spawn_console(item["path"], cont, prompt, settings,
-                                           permission)
+                                           permission, profile=profile)
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return
@@ -71,7 +72,7 @@ class TerminalMixin:
     def _poll_console(self):
         """控制台窗口是异步建的，拿到之前一直轮询，别把界面卡住。"""
         process, known, item, settings, tries = self._pending
-        hwnd = fresh_console(known)
+        hwnd = fresh_console(known, title_tag(item.get("agent")))
         if hwnd is None:
             if tries >= 75:
                 self._pending = None

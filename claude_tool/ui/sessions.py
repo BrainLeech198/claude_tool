@@ -380,6 +380,7 @@ class SessionsMixin:
         """
         path = item["path"]
         permission = workspace_permission(item)
+        profile = agents.get(item.get("agent"))
         settings = None
         auto_continue = self.auto_continue_var.get() or autopilot
         if auto_continue:
@@ -391,7 +392,8 @@ class SessionsMixin:
                                      "写不了 hook 配置，这次就不挂了：\n{}".format(e))
 
         if self.embed_var.get():
-            self.embed_workspace(item, cont, prompt, settings, permission)
+            self.embed_workspace(item, cont, prompt, settings, permission,
+                                 profile=profile)
             return None
         # 拍快照得赶在启动之前：窗口是 claude 那边异步建出来的，等它冒出来再
         # 去数，就分不清哪扇是这次新开的、哪扇是上一轮留下的了。
@@ -405,7 +407,7 @@ class SessionsMixin:
             beside = (x + self.winfo_width() + SIDE_GAP, y)
         try:
             process = spawn_terminal(path, cont, prompt, settings, permission,
-                                     beside=beside)
+                                     beside=beside, profile=profile)
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return
@@ -512,7 +514,7 @@ class SessionsMixin:
                                           delete=False)
         try:
             self._handoff_proc = subprocess.Popen(
-                agent_exe(agents.get(agents.DEFAULT_AGENT))
+                agent_exe(agents.get(item.get("agent")))
                 + ["-c", "--fork-session", "-p",
                    handoff_prompt(ignore_git),
                    "--allowedTools", HANDOFF_TOOLS],

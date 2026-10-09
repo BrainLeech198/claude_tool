@@ -36,7 +36,15 @@ CONSOLE_CLASS = "ConsoleWindowClass"
 # 默认终端是 Windows Terminal 的时候，cmd /k 开出来的是这个类名的窗口，
 # 上面那个 ConsoleWindowClass 一个都找不到。两个都得认。
 TERMINAL_CLASSES = (CONSOLE_CLASS, "CASCADIA_HOSTING_WINDOW_CLASS")
+
+# 内嵌控制台的标题标记。claude 那条值是 "claude-embed"——探针拿它认窗，不能改。
+# 用 title_tag() 按档位取，别直接用这个常量（codebuddy 的是 "codebuddy-embed"）。
 TITLE_TAG = "claude-embed"
+
+
+def title_tag(agent_id=None):
+    """内嵌控制台的标题标记，用来认出自己开的那扇窗口。claude → "claude-embed"。"""
+    return "{}-embed".format(agent_id or "claude")
 
 _WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
@@ -113,20 +121,19 @@ def fresh_terminal(known):
 
 
 def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
-                   permission=None, beside=None):
+                   permission=None, beside=None, profile=None):
     """在新控制台窗口里跑 claude，返回那个进程对象。
 
     完整的字符串命令行 + CREATE_NEW_CONSOLE，理由见 agent.agent_command。
     beside 是"把窗口摆到启动器旁边"的坐标提示，非 Windows 上要靠终端的
     -geometry 参数实现；这边本来就有一套按句柄挪窗口的办法（bring_next_to），
-    不用它。
+    不用它。profile 是 agents.Agent 档位；不传走默认（claude）。
 
     那个进程对象调用方留着轮询 poll()，就知道这个会话还开没开着。
     """
     return subprocess.Popen(
-        "cmd /k " + agent_command(agents.get(agents.DEFAULT_AGENT), cont=cont,
-                                  prompt=prompt, settings=settings,
-                                  permission=permission),
+        "cmd /k " + agent_command(profile, cont=cont, prompt=prompt,
+                                  settings=settings, permission=permission),
         cwd=workdir,
         creationflags=CREATE_NEW_CONSOLE,
     )
@@ -188,7 +195,8 @@ def close_window(target):
     return True
 
 
-def spawn_console(workdir, cont=False, prompt=None, settings=None, permission=None):
+def spawn_console(workdir, cont=False, prompt=None, settings=None,
+                  permission=None, profile=None):
     """开一个老式 conhost 跑 claude。
 
     返回 (进程, 启动前就存在的窗口句柄集合)——窗口是控制台那边异步建的，
@@ -196,9 +204,9 @@ def spawn_console(workdir, cont=False, prompt=None, settings=None, permission=No
     """
     known = {hwnd for hwnd, _ in console_windows()}
     command = "title {} & {}".format(
-        TITLE_TAG, agent_command(agents.get(agents.DEFAULT_AGENT), cont=cont,
-                                 prompt=prompt, settings=settings,
-                                 permission=permission))
+        title_tag(profile.id if profile else None),
+        agent_command(profile, cont=cont, prompt=prompt, settings=settings,
+                      permission=permission))
     # 同样得整条给字符串：塞进列表 Python 会重包一遍引号，开场白就断在空格上。
     process = subprocess.Popen(
         "conhost.exe cmd /k " + command,
@@ -208,12 +216,12 @@ def spawn_console(workdir, cont=False, prompt=None, settings=None, permission=No
     return process, known
 
 
-def fresh_console(known):
+def fresh_console(known, tag=TITLE_TAG):
     """在 known 之外找新冒出来的控制台窗口；优先认标题打着自己标记的那个。"""
     new = [item for item in console_windows() if item[0] not in known]
     if not new:
         return None
-    tagged = [hwnd for hwnd, title in new if TITLE_TAG in title]
+    tagged = [hwnd for hwnd, title in new if tag in title]
     return tagged[0] if tagged else new[0][0]
 
 
