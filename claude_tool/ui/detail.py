@@ -171,6 +171,9 @@ class DetailMixin:
         line = "claude " + (self._local_version or "版本未知")
         path = item["path"]
         if not os.path.isdir(path):
+            # 目录没了，这条路上走不到下面那句 _sync_handoff_button——得在这儿
+            # 显式把「删交接文档」撤掉，不然切到一本已经不在的书，按钮会挂着。
+            self._sync_handoff_button(False)
             return line + " · 目录不存在"
         parts = [line]
         # 有交接文档是"现在能接着干"的信号，摆在 meta 里让用户一眼看到；

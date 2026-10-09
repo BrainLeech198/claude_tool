@@ -221,6 +221,12 @@ class Registry:
             raise RuntimeError("{} 不可加载：{}".format(plugin.id, plugin.problem))
         entry_file = plugin.manifest.entry_file
         entry_path = os.path.join(plugin.path, entry_file)
+        # 纵深防御：清单里的 entry 是外部输入，`..` 能把它带到插件目录外面去执行
+        # 任意 .py。manifest 的 ENTRY_RE 已经不放行 `..` 了，这里再按规格化后的
+        # 真实路径挡一道——跟 pack.py 解压时那道一模一样，理由也一样。
+        root = os.path.abspath(plugin.path)
+        if not os.path.abspath(entry_path).startswith(root + os.sep):
+            raise RuntimeError("入口跑到插件目录外面去了：{}".format(entry_file))
         if not os.path.isfile(entry_path):
             raise RuntimeError("入口文件找不到：{}".format(entry_file))
 

@@ -35,23 +35,37 @@ def rounded_rect(canvas, x1, y1, x2, y2, radius, **kwargs):
 
 
 class PillButton(tk.Canvas):
-    """圆角胶囊按钮。可以置灰：画成灰底灰字、不吃悬停、点了也不回调。"""
+    """圆角胶囊按钮。可以置灰：画成灰底灰字、不吃悬停、点了也不回调。
+
+    键盘也能用：takefocus 打开，Tab 走到它、回车或空格当按一下，聚焦时描一圈
+    强调色的边。自绘控件默认进不了 Tab 顺序，不补这段的话纯键盘用户在主窗里
+    除了 Ctrl+数字之外什么都按不了。
+    """
 
     def __init__(self, parent, text, command, primary=False, bg=PAGE_BG, height=28,
                  enabled=True):
         width = measure(text, 10, primary) + 26
         super().__init__(parent, width=width, height=height, bg=bg,
-                         highlightthickness=0, borderwidth=0)
+                         highlightthickness=0, borderwidth=0, takefocus=1)
         self._text = text
         self._command = command
         self._primary = primary
         self._enabled = enabled
         self._hover = False
+        self._focused = False
         self._cw, self._ch = width, height
 
         self.bind("<Enter>", lambda e: self._set_hover(True))
         self.bind("<Leave>", lambda e: self._set_hover(False))
         self.bind("<Button-1>", lambda e: self._click())
+        self.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.bind("<FocusOut>", lambda e: self._set_focus(False))
+        self.bind("<Return>", lambda e: self._click())
+        self.bind("<space>", lambda e: self._click())
+        self._draw()
+
+    def _set_focus(self, value):
+        self._focused = value
         self._draw()
 
     def _click(self):
@@ -81,6 +95,10 @@ class PillButton(tk.Canvas):
         else:
             fill = HOVER_BG if self._hover else PANEL_BG
             outline, fg = BORDER, TEXT
+        # 键盘焦点画一圈强调色边，跟悬停那个换底色是两回事——鼠标悬停和 Tab
+        # 聚焦可能同时发生，各表达各的。
+        if self._focused and self._enabled:
+            outline = ACCENT
         rounded_rect(self, 0, 0, self._cw - 1, self._ch - 1, self._ch / 2,
                      fill=fill, outline=outline or fill)
         self.create_text(self._cw / 2, self._ch / 2 + 1, text=self._text,

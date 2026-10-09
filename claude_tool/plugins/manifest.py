@@ -29,7 +29,12 @@ FILE_NAME = "plugin.json"
 # id 要拿来当模块名和状态文件的键，收窄到"字母数字下划线"。
 ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 # 入口写法：`<相对路径>.py:<函数名>`。只收 .py——别的一律当"我不知道怎么加载"。
-ENTRY_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_./-]*\.py):([A-Za-z_]\w*)$")
+#
+# 前面那个 `(?!.*\.\.)` 是拿来挡 `..` 的：清单里的 entry 是外部输入，配上下面的
+# 加载期拼接（registry 把 entry 直接 join 到插件目录上），`a/../../x.py` 这种就能
+# 跑到插件目录外面去执行任意 .py。加载那一步还有一道 abspath 兜底，这里先挡在门口。
+ENTRY_RE = re.compile(
+    r"^((?!.*\.\.)[A-Za-z0-9_][A-Za-z0-9_./-]*\.py):([A-Za-z_]\w*)$")
 
 # 必填 / 可选。可选字段缺了填空串，插件作者的清单能短一点。
 REQUIRED = ("id", "name", "version", "api_version", "min_host", "entry")
