@@ -33,7 +33,7 @@ window.RELEASES = [
   {
     "version": "0.5.0",
     "date": "2026-10-09",
-    "notes": "",
+    "notes": "这一版的主角是 CodeBuddy。启动器不再只认 claude：右栏可以按每一本工作区选「claude 还是 CodeBuddy Code」，模型预设、版本检查、装法路线都各走各的档位（CodeBuddy 不提供一键安装）。两档还能共享记忆——项目根目录放一份 AGENTS.md，两条路开会话时都会读它。顺带把插件装上：插件有清单、能打成 zip 导入，主窗留好了挂载点，「小说工作台」是第一个能用的内置插件。另修两处：顶栏提示收起后白边没回收；带空格的路径被 cmd /k 劈错。",
     "claude": "2.1.150",
     "windows": {
       "file": "ClaudeLauncher-0.5.0-Setup.exe",
