@@ -16,6 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from claude_tool import __version__
+from claude_tool import agents
 from claude_tool import versions
 from claude_tool.host import EMBED_SUPPORTED, open_url
 from claude_tool.theme import MUTED, PAGE_BG, PANEL_BG, TEXT, font
@@ -106,13 +107,47 @@ class SettingsMixin:
     def _settings_page_models(self, parent):
         # 还是 _build_section 那套（标题 + 右上那排动作 + 滚动列表），只是换了
         # 挂载的父控件。出来就是 self.model_list，下头的流水线一个字没改。
+        #
+        # top 那排是 0.5 加的 agent 切换：两个 agent 各有一份预设目录、各写各的
+        # settings.json，得先让人说清这页在管哪一个。不选的话默认 claude。
         self.model_list = self._build_section(
             parent, "模型", max_height=MODEL_MAX,
             actions=[("＋ 添加", self._open_model_dialog),
                      ("导入当前", self._import_current),
+                     ("导出", self._export_models),
+                     ("导入", self._import_models),
                      ("测试", self.test_all_models),
                      ("刷新", self.refresh_models)],
-            expand=True)
+            expand=True, top=self._build_model_agent_bar)
+        self.refresh_models()
+
+    def _build_model_agent_bar(self, parent):
+        """「模型」页顶上那排：这页现在在给哪个 agent 换模型。
+
+        两个 agent 的模型预设是分开的两摊（claude_settings / codebuddy_settings），
+        点哪个就切到哪一摊，切换写的是各自那份 settings.json。
+        """
+        self._model_agent_bar = tk.Frame(parent, bg=PAGE_BG)
+        self._model_agent_bar.pack(fill="x", pady=(0, 6))
+        self._render_model_agent_bar()
+
+    def _render_model_agent_bar(self):
+        """重画那排按钮：当前那档用强调色（跟设置窗左边分页栏一个路数）。"""
+        for child in self._model_agent_bar.winfo_children():
+            child.destroy()
+        tk.Label(self._model_agent_bar, text="给哪个换", bg=PAGE_BG, fg=MUTED,
+                 font=font(9)).pack(side="left", padx=(0, 8))
+        for agent_id in agents.ids():
+            PillButton(self._model_agent_bar, agents.get(agent_id).label,
+                       lambda a=agent_id: self._pick_model_agent(a),
+                       primary=(agent_id == self.model_agent), bg=PAGE_BG,
+                       ).pack(side="left", padx=(0, 6))
+
+    def _pick_model_agent(self, agent_id):
+        if agent_id == self.model_agent:
+            return
+        self.model_agent = agent_id
+        self._render_model_agent_bar()
         self.refresh_models()
 
     # ── 工作区 ──

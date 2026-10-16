@@ -8,19 +8,22 @@ _task_queue、_results…）都还在它的 __init__ 里，一个字没动。
 """
 import os
 import queue
-import shutil
 import threading
 import tkinter as tk
 from tkinter import messagebox
 
+from claude_tool import agents
+from claude_tool.config import humanize_ago, path_key
 from claude_tool.handoff import HANDOFF_FILE, READ_HANDOFF_PROMPT
 from claude_tool.host import close_window, window_alive
-from claude_tool.paths import SETTINGS_FILE
 from claude_tool.presets import (
     active_preset,
+    apply_preset,
+    cached_test_result,
     describe_preset,
     discover_presets,
     read_model,
+    record_test_result,
     test_preset,
 )
 from claude_tool.theme import MUTED, OK, PAGE_BG, TEXT, WARN, font
@@ -36,33 +39,46 @@ MIGRATE_POLL_MS = 200
 MIGRATE_WAIT_TRIES = 75          # 200 毫秒 × 75 ≈ 15 秒
 
 
+def _cached_warn(path):
+    """卡片右侧那行小字：上次测的结果 + 时间；没测过、或预设改过了给 None。"""
+    cached = cached_test_result(path)
+    if not cached:
+        return None
+    ok, note, when = cached
+    text = "{} · {}".format(note, humanize_ago(when)) if note else humanize_ago(when)
+    return text, (OK if ok else WARN)
+
+
 class ModelsMixin:
     def refresh_models(self):
+        # 这一页在管哪个 agent 的预设，由设置窗顶那排切换按钮（self.model_agent）
+        # 定；缺省是 claude，单档时跟以前一样。
+        #
         # 0.4 起「模型」这一区搬进了设置窗（见 ui/settings.py），窗口没开过时
         # 这张列表还不存在。这儿**只是提前返回，不是整个跳过**：顶栏那颗模型
         # 胶囊在主窗上一直摆着，它读的是 active_name，得照样更新——不然新装一份
         # 预设、设置窗还没开，胶囊会一直写着上次那个名字。
         if self.model_list is None:
-            presets = discover_presets()
-            self.active_name = active_preset(presets)
-            self._update_model_chip(
-                self.active_name or ("未设置" if not presets else "自定义 / 未知"),
-                bool(self.active_name))
+            presets = discover_presets(self.model_agent)
+            self.active_name = active_preset(presets, self.model_agent)
+            self._refresh_model_chip()
             return
         self.model_list.clear()
         self.model_rows = {}
-        presets = discover_presets()
-        self.active_name = active_preset(presets)
+        presets = discover_presets(self.model_agent)
+        self.active_name = active_preset(presets, self.model_agent)
         inner = self.model_list.inner
 
         if not presets:
             # 空状态是新手第一眼撞上的东西，别只丢一句"点右上角"。先把"模型"这
             # 个词解释了（备注留着，术语本身不动），再把两条路直接摆到眼前。
+            # 「用着谁」跟着这页在管的档位走，别在 codebuddy 那页写 claude。
+            label = agents.get(self.model_agent).label
             tk.Label(inner, text="还没有模型。", bg=PAGE_BG, fg=TEXT,
                      font=font(10, True)).pack(anchor="w", padx=6, pady=(12, 3))
             tk.Label(inner, text="模型 = 你打算用哪家的 AI（DeepSeek、Kimi 这种）。\n"
-                                 "已经在别的窗口里用着 claude 了，就直接导进来；"
-                                 "没配过就手动填一个。",
+                                 "已经在别的窗口里用着 {} 了，就直接导进来；"
+                                 "没配过就手动填一个。".format(label),
                      bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
                      ).pack(anchor="w", padx=6, pady=(0, 9))
             buttons = tk.Frame(inner, bg=PAGE_BG)
@@ -71,7 +87,7 @@ class ModelsMixin:
                        bg=PAGE_BG).pack(side="left")
             PillButton(buttons, "手动填", self._open_model_dialog, bg=PAGE_BG,
                        ).pack(side="left", padx=(8, 0))
-            self._update_model_chip("未设置", False)
+            self._refresh_model_chip()
             self.model_list.fit()
             return
 
@@ -81,19 +97,45 @@ class ModelsMixin:
                       active=(name == self.active_name), height=50,
                       on_click=lambda n=name, p=path: self.switch_model(n, p),
                       actions=[("移除", lambda n=name, p=path: self.remove_model(n, p)),
+                               ("复制", lambda n=name, p=path: self._open_model_dialog(copy=(n, p))),
                                ("编辑", lambda n=name, p=path: self._open_model_dialog((n, p)))])
             row.pack(fill="x", pady=3)
             self.model_rows[name] = row
-        self._update_model_chip(self.active_name or "自定义 / 未知",
-                                bool(self.active_name))
+            # 上次测的结果留着：卡片右侧直接标"可用 0.3s · 3 分钟前"，重开设置窗
+            # 不用再挨个重测。失败的会一直标红，直到下次测通为止。
+            cached = _cached_warn(path)
+            if cached:
+                row.set_warn(*cached)
+        self._refresh_model_chip()
         self.model_list.fit()
+
+    def _refresh_model_chip(self):
+        """右栏那颗「当前模型」胶囊。
+
+        它说的是**右栏盯着的这本工作区**现在用哪个模型——绑了预设就以绑的为准
+        （那才是它开会话时真正用的），没绑才回落到该 agent 全局生效的那个预设。
+        跟设置窗模型页在管哪个 agent（self.model_agent）是两回事。没选中按 claude 算。
+        """
+        item = self.selected_entry()
+        agent_id = item.get("agent") if item else agents.DEFAULT_AGENT
+        presets = discover_presets(agent_id)
+        bound = item.get("preset") if item else ""
+        if bound and bound in presets:
+            self._update_model_chip(bound, True)
+            return
+        name = active_preset(presets, agent_id)
+        self._update_model_chip(
+            name or ("未设置" if not presets else "自定义 / 未知"), bool(name))
 
     def test_all_models(self):
         """并发打一遍所有预设，结果落在各自的卡片右侧。"""
         if self._testing:
             self.feedback_var.set("上一轮还在测，等等。")
             return
-        presets = discover_presets()
+        # 测的是这一页正在管的那个 agent 的预设。漏了 agent 参数会去扫 claude 那摊，
+        # 而 model_rows 里摆的是当前档的——两下对不上，codebuddy 时一个 job 都凑不齐，
+        # 点「测试」永远只回一句"没有可测的模型预设"。
+        presets = discover_presets(self.model_agent)
         jobs = [(name, presets[name]) for name in self.model_rows if name in presets]
         if not jobs:
             self.feedback_var.set("没有可测的模型预设。")
@@ -106,7 +148,7 @@ class ModelsMixin:
         self.feedback_var.set("正在测 {} 个模型…".format(len(jobs)))
 
         def worker(name, path):
-            self._results.put((name, test_preset(path)))
+            self._results.put((name, path, test_preset(path)))
 
         for name, path in jobs:
             threading.Thread(target=worker, args=(name, path), daemon=True).start()
@@ -116,12 +158,17 @@ class ModelsMixin:
         """在主线程里收后台线程塞进队列的结果——Tk 控件只能主线程碰。"""
         try:
             while True:
-                name, (ok, note) = self._results.get_nowait()
+                name, path, (ok, note) = self._results.get_nowait()
                 remaining -= 1
+                # 留痕也在这个线程做：多个预设是并发测的，读改写那份表搁线程里会打架。
+                try:
+                    record_test_result(path, ok, note)
+                except Exception:
+                    pass
                 row = self.model_rows.get(name)
                 if row is not None:
                     try:
-                        row.set_warn(note, OK if ok else WARN)
+                        row.set_warn("{} · 刚刚".format(note), OK if ok else WARN)
                     except tk.TclError:
                         pass
         except queue.Empty:
@@ -130,20 +177,36 @@ class ModelsMixin:
             self.after(100, lambda: self._drain_results(remaining))
             return
         self._testing = False
-        self.feedback_var.set("测完了：绿色=打得通，红色=打不通。")
+        self.feedback_var.set("测完了：绿色=打得通，红色=打不通。结果留在卡片上，"
+                              "下次打开设置窗还在。")
 
     def switch_model(self, name, path):
+        profile = agents.get(self.model_agent)
         try:
-            shutil.copyfile(path, SETTINGS_FILE)
+            apply_preset(name, self.model_agent)
         except Exception as e:
             messagebox.showerror("切换失败", "写入 settings.json 失败：\n{}".format(e))
             return
         self.feedback_var.set(
-            "已切换到 {}（{}）。重启 Claude Code 后生效。".format(name, read_model(path)))
+            "已切换到 {}（{}）。重启 {} 后生效。".format(
+                name, read_model(path), profile.label))
         self.refresh_models()
         self._offer_migration()
 
     # ── 换模型时把开着的会话接过去 ──
+
+    def _config_workspace(self, path):
+        """按路径从配置里找回这本工作区的条目；找不到给 None。
+
+        开会话记进 self.running 的是**会话条目**（只有 name/path/proc/hwnd/agent），
+        没有 preset、permission 这些工作区字段。换模型要重开时得拿回工作区那条，
+        不然会把绑定信息丢掉。
+        """
+        key = path_key(path)
+        for entry in self.config_data["workspaces"]:
+            if path_key(entry["path"]) == key:
+                return entry
+        return None
 
     def _offer_migration(self):
         """正在跑的会话还挂在旧模型上，逐个问要不要接着聊下去。
@@ -161,7 +224,21 @@ class ModelsMixin:
         if self._busy():
             self.feedback_var.set("上一轮活还没干完，等它跑完。")
             return
-        sessions = list(self.running)
+        # 只问**这一档**的会话：改的是这个 agent 那份 settings.json，另一个 agent
+        # 开着的窗口一点都不受影响，去问它反而是打扰（而且拿它重开也是白重开）。
+        profile = agents.get(self.model_agent)
+        sessions = []
+        for item in self.running:
+            if agents.get(item.get("agent")).id != profile.id:
+                continue
+            # 这本绑了模型预设的，开会话时用的是那份预设（走 --settings），跟这次
+            # 改的全局 settings.json 一点关系都没有。既不该问它"还挂在旧模型上吗"
+            # （它没有），也不能拿它重开——重开那步读不到绑定，会把它悄悄拽去用
+            # 全局那个模型。直接跳过，它的模型本来就该保持不变。
+            workspace = self._config_workspace(item["path"])
+            if workspace is not None and workspace.get("preset"):
+                continue
+            sessions.append(item)
         if not sessions:
             return
         embedded_proc = self.embedded.process if self.embedded is not None else None
@@ -172,8 +249,8 @@ class ModelsMixin:
                     "要接着聊吗",
                     "「{}」这个会话还挂在旧模型上。\n\n"
                     "要关掉它，用新模型接着上次的上下文重新开吗？\n\n"
-                    "接着聊靠 claude 自己的 --continue，不写交接文档。"
-                    .format(item["name"])):
+                    "接着聊靠 {} 自己的 --continue，不写交接文档。"
+                    .format(item["name"], profile.label)):
                 picked.append({"item": item,
                                "was_embedded": item["proc"] is embedded_proc})
         if not picked:
@@ -254,8 +331,12 @@ class ModelsMixin:
         self._launch_migrated(job)
 
     def _launch_migrated(self, job):
-        item = job["item"]
-        self._task_step("用新模型重开「{}」。".format(item["name"]))
+        session = job["item"]
+        # 拿**工作区那条**去开，不是会话条目：会话条目只有 name/path/proc/hwnd/agent，
+        # 没有 permission，用它开会等于把用户挑的权限等级冲回默认；工作区那条还带
+        # 着 preset（这里经过筛选必然是空的，但拿对的那条更稳当）。
+        item = self._config_workspace(session["path"]) or session
+        self._task_step("用新模型重开「{}」。".format(session["name"]))
         # 目录里真有那份文档才让新会话去读它——硬塞的话，没写过交接的目录里就是
         # 让 claude 去读一个不存在的东西。跟点工作区那个弹框里「先读交接文档」
         # 那一勾是同一套判断（那边也是看见了文件才摆出来）。

@@ -13,6 +13,9 @@ GUI 探针要真建窗口才量得准（`winfo_width` / `winfo_reqwidth` 都得�
    桌面之外，人看不见；窗口照样 map、照样渲染，所以量出来的数和截图都不受影响。
 2. `place_window` 换成空操作：不然 `_restore_geometry` 会照着存下来的坐标把
    窗口摆回屏幕里（`_widen` 那条路也走它）。
+3. 给窗口挂 `WS_EX_NOACTIVATE`：搬出桌面**挡不住激活**——窗口一 map 出来 Windows
+   仍可能把它拉到前台，全屏游戏就掉焦点（用户抱怨过"一直让我的游戏失焦"）。
+   这个扩展样式让窗口"看得见、点不进来"，激活请求被系统挡掉，跟停在哪块屏无关。
 
 Windows 下 `IsWindowVisible` 对屏幕外的窗口仍然为真，所以探针里那些
 「枚举本进程的可见窗口」找窗口、`PrintWindow` 截图的路子都不受影响。
@@ -48,6 +51,36 @@ import runpy
 import sys
 
 OFFSCREEN = "+30000+30000"
+
+# WS_EX_NOACTIVATE：窗口照常 map、照常渲染，但系统永远不把它激活。
+GWL_EXSTYLE = -20
+WS_EX_NOACTIVATE = 0x08000000
+
+
+def _forbid_activation(window):
+    """给窗口挂上 WS_EX_NOACTIVATE，从根上断掉"抢前台焦点"。
+
+    光把窗口搬出可视桌面不够：窗口一 map 出来 Windows 仍可能把它激活，全屏游戏
+    就掉焦点（用户抱怨"一直让我的游戏失焦"）。这个扩展样式让窗口"看得见、点不
+    进来"——激活请求被系统挡掉，且跟位置无关（停副屏也一样）。
+
+    窗口照样 map、渲染，所以 `winfo_width` / PrintWindow 截图那些量法不受影响。
+    """
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.GetParent.restype = ctypes.c_void_p
+        user32.GetParent.argtypes = [ctypes.c_void_p]
+        user32.GetWindowLongW.restype = ctypes.c_long
+        user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                          ctypes.c_long]
+        hwnd = window.winfo_id()
+        frame = user32.GetParent(hwnd) or hwnd    # 带边框的顶层是客户区的父窗口
+        for target in (hwnd, frame):
+            style = user32.GetWindowLongW(target, GWL_EXSTYLE)
+            user32.SetWindowLongW(target, GWL_EXSTYLE, style | WS_EX_NOACTIVATE)
+    except Exception:
+        pass                                       # 非 Windows 走 nixhost，没这回事
 
 
 def park_position():
@@ -131,6 +164,11 @@ def _install():
 
     def off(self):
         self.geometry(park_position())
+        _forbid_activation(self)
+        # 边框（frame）窗口是**第一次 map 那一刻**才被系统建出来并重定父的，
+        # 所以 init 时能挂上的只有客户区。绑 <Map> 在窗口真显示之后再挂一遍，
+        # 才盖得住真正吃激活的那层 frame——不然去掉边框客户区，frame 照样抢焦点。
+        self.bind("<Map>", lambda e: _forbid_activation(self), add="+")
 
     real_tk = tk.Tk.__init__
 

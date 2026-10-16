@@ -580,22 +580,37 @@ def hook_settings_payload(auto_continue=False, hold=False, commander=""):
     }}
 
 
-def ensure_hook_settings(auto_continue=False, hold=False, commander=""):
-    """写出 hook 用的 settings 文件，返回它的路径。
+def ensure_hook_settings(auto_continue=False, hold=False, commander="", env=None):
+    """写出这次会话用的 settings 文件，返回它的路径。
 
     不往 Claude Code 自己的 settings.json 里写东西——这份是启动时用 --settings
-    传真上去的，Claude Code 会把它跟用户那份合并，用完即弃。开关按启动时勾了哪些
-    拼进命令行；勾选状态就此固化，之后改勾不影响已经跑着的会话。
+    传真上去的，Claude Code 会把它跟用户那份合并、用完即弃，而且**优先级高于**
+    用户 settings.json（官方：managed > 命令行 --settings > 项目 > 用户）。
+
+    env 是给这本工作区绑的那份模型预设的 env（ANTHROPIC_BASE_URL / _AUTH_TOKEN /
+    _MODEL）。有它就并进去——命令行这一层的 env 压过用户 settings.json 里那份，
+    于是"每个工作区用各自的模型"就成立了，而**全局那份 settings.json 一个字节
+    都不动**。没绑预设时传 None，这份就只装 hook，跟以前一样。
+
+    一个 hook 开关都没勾、又只有 env 时，也不写空的 hooks 键：那份纯 env 的配置
+    不该平白挂一个每调一次工具就起进程的 hook。
+
+    开关按启动时勾了哪些拼进命令行；勾选状态就此固化，之后改勾不影响已经跑着的
+    会话。
 
     顺手删掉老版本那份配置：它只干刷文档这一件事、命令行上写的是 --handoff-hook。
     刷文档那条路已经砍了，留着只会让人以为它还管用。
     """
+    payload = {}
+    if auto_continue or hold or commander:
+        payload.update(hook_settings_payload(auto_continue, hold, commander))
+    if env:
+        payload["env"] = {key: value for key, value in env.items()}
     os.makedirs(HOOK_DIR, exist_ok=True)
     try:
         os.remove(LEGACY_HOOK_SETTINGS)
     except OSError:
         pass
     with open(HOOK_SETTINGS, "w", encoding="utf-8") as f:
-        json.dump(hook_settings_payload(auto_continue, hold, commander), f,
-                  ensure_ascii=False, indent=2)
+        json.dump(payload, f, ensure_ascii=False, indent=2)
     return HOOK_SETTINGS

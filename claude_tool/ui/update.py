@@ -20,6 +20,12 @@ from claude_tool import agents
 from claude_tool.agent import CREATE_NO_WINDOW, find_agent
 from claude_tool.config import save_config
 from claude_tool.host import open_url
+from claude_tool.presets import (
+    active_preset,
+    discover_presets,
+    record_test_result,
+    test_preset,
+)
 from claude_tool.theme import ACCENT, ACCENT_SOFT, HOVER_BG, MUTED, PANEL_BG
 from claude_tool.widgets import PillButton, Tip
 
@@ -166,6 +172,73 @@ class UpdateMixin:
         # 当场就问一次，不用等下次启动：不然勾上去像是没反应。
         if self._local_version:
             self._start_version_check()
+
+    # ── 当前模型通不通（启动探一次）────────────────────────────────────────
+    # 跟"要不要更新"无关，摆这儿是因为它跟那几颗胶囊一样：结果落在顶栏，
+    # 只在出问题时冒头，平时不打扰。
+
+    def _start_model_health_check(self):
+        """后台拿当前生效的预设真打一次请求，结果走 health_queue 回主线程。
+
+        只探**默认档（claude）**那个生效预设：这是绝大多数人的主线，也免得开一次
+        启动器往两家 API 各发一个包。没设预设（走官方账号/内置模型）就不探——没得
+        探，也没必要探。
+        """
+        presets = discover_presets(agents.DEFAULT_AGENT)
+        name = active_preset(presets, agents.DEFAULT_AGENT)
+        if not name:
+            return
+        path = presets[name]
+
+        def work():
+            try:
+                ok, note = test_preset(path)
+            except Exception:
+                ok, note = True, ""      # 探测本身出错，当成"别报警"
+            self.health_queue.put((name, path, ok, note))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _poll_model_health(self):
+        try:
+            while True:
+                name, path, ok, note = self.health_queue.get_nowait()
+                # 顺手把这次体检的结果留痕，模型页卡片上就能看到"上次测通：X"。
+                try:
+                    record_test_result(path, ok, note)
+                except Exception:
+                    pass
+                if ok:
+                    self._hide_model_health()
+                else:
+                    self._show_model_health(name, note)
+        except queue.Empty:
+            pass
+
+    def _show_model_health(self, name, note):
+        """连不上：在顶栏摆一颗「模型连不上 预设名」，点它开设置窗的模型页。
+
+        不做弹框（每次开机一条网络问题拦一下，比它要提醒的事还烦）。胶囊是查出
+        问题才建的——宽度按文字量，得先知道是哪个预设。
+        """
+        if self._health_pill is not None:
+            self._health_pill.destroy()
+        pill = PillButton(self.top_line, "模型连不上 " + name,
+                          lambda: self.open_settings("模型"),
+                          primary=True, bg=PANEL_BG)
+        Tip(pill, "当前用的「{}」这次没打通（{}）。点开「模型」页测一测、换一个。"
+                  .format(name, note or "原因没读出来"))
+        pill.pack(side="left", padx=(10, 0))
+        self._health_pill = pill
+        self.feedback_var.set(
+            "当前模型「{}」没打通：{}。点顶栏那颗胶囊去「模型」页看看。".format(
+                name, note or "原因没读出来"))
+
+    def _hide_model_health(self):
+        if self._health_pill is None:
+            return
+        self._health_pill.destroy()
+        self._health_pill = None
 
     # ── 启动器自己有没有新版 ────────────────────────────────────────────────
     # 跟上面那条 claude 的流水线是两套：查的是不同东西（一个 npm、一个我们自己的

@@ -91,7 +91,7 @@ class TerminalMixin:
         self._room_for_terminal(True)
         self.update_idletasks()
         self.embedded = EmbeddedConsole(process, hwnd, self.term_holder)
-        self.track_running(item["name"], item["path"], process)
+        self.track_running(item["name"], item["path"], process, agent=item.get("agent"))
         self.feedback_var.set(
             "claude 已内嵌在 {}。conhost 没有字体回退，个别符号会是方框。"
             .format(item["path"]))

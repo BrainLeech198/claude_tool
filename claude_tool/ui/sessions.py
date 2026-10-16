@@ -41,6 +41,7 @@ from claude_tool.host import (
     window_position,
 )
 from claude_tool.permissions import permission_option, workspace_permission
+from claude_tool.presets import preset_path, read_env
 from claude_tool.theme import (
     ACCENT,
     BORDER,
@@ -262,6 +263,7 @@ class SessionsMixin:
             pass
         self._poll_version_check()
         self._poll_self_update()
+        self._poll_model_health()
 
         live = [item for item in self.running if item["proc"].poll() is None]
         if len(live) != len(self.running):
@@ -277,19 +279,24 @@ class SessionsMixin:
             self._hide_terminal()
         self.after(1000, self._poll_running)
 
-    def track_running(self, name, path, process, hwnd=None):
-        """把一个刚开出去的会话记进名单，界面立刻多出一行。返回那一行。"""
+    def track_running(self, name, path, process, hwnd=None, agent=None):
+        """把一个刚开出去的会话记进名单，界面立刻多出一行。返回那一行。
+
+        agent 是这个会话用的档位 id（claude / codebuddy）。换模型时那条"接着聊"
+        流水线靠它挑出该问哪些会话——改的是某一档的 settings.json，另一档开着的
+        窗口不受影响，重开时也得用回它自己那档。
+        """
         item = None
         for known in self.running:
             if known["path"] == path:
                 # 同一个目录又开了一个，只留最新那个，免得同一行重复
                 known.update({"name": name, "proc": process, "hwnd": hwnd,
-                              "watched": False})
+                              "watched": False, "agent": agent})
                 item = known
                 break
         if item is None:
             item = {"name": name, "path": path, "proc": process, "hwnd": hwnd,
-                    "watched": False}
+                    "watched": False, "agent": agent}
             self.running.append(item)
         self._render_running()
         return item
@@ -367,6 +374,20 @@ class SessionsMixin:
         self._render_running()
         self.feedback_var.set("已让「{}」的窗口关闭。".format(item["name"]))
 
+    def _bound_preset_env(self, item, profile):
+        """这本工作区绑的模型预设的 env；没绑、或者那份预设不在盘上，返回 None。
+
+        读不到就当没绑——宁可回落到全局/自带默认模型，也不要拿着一份读不动的配置
+        去开窗。预设名是按**这本工作区当前的档位**去那个 agent 的目录里找的。
+        """
+        name = item.get("preset")
+        if not name:
+            return None
+        path = preset_path(name, profile.id)
+        if not os.path.isfile(path):
+            return None
+        return read_env(path) or None
+
     def launch_workspace(self, item, cont=False, prompt=None, autopilot=False,
                          hook_flags=None):
         """真正把 claude 拉起来，新窗口还是塞进本窗口看那个勾。
@@ -388,15 +409,25 @@ class SessionsMixin:
         except Exception:
             pass
         preamble = shared_memory.preamble(path)
-        settings = None
+        # 这本工作区绑了模型预设的话，把它的 env 一并交给 --settings 带下去：命令行
+        # 这一层压过用户 settings.json，于是"这一本用哪个模型"就成立了，而全局那份
+        # settings.json 一个字节都不动。没绑（或那份预设已被删）就是 None，照常走
+        # 全局生效的那份（codebuddy 没绑时就走它自带默认模型）。
+        bound_env = self._bound_preset_env(item, profile)
         auto_continue = self.auto_continue_var.get() or autopilot
-        if auto_continue:
+        settings = None
+        if auto_continue or bound_env:
+            # 没勾自动继续、只为一个绑定预设写这份配置时，别把 hook 也带上——那份
+            # 是纯 env 的，平白挂一个每调一次工具就起进程的 hook 不划算。
+            flags = (hook_flags or {"auto_continue": True}) if auto_continue else \
+                {"auto_continue": False, "hold": False, "commander": ""}
             try:
-                settings = ensure_hook_settings(**(hook_flags
-                                                   or {"auto_continue": True}))
+                settings = ensure_hook_settings(env=bound_env, **flags)
             except OSError as e:
-                messagebox.showerror("挂 hook 失败",
-                                     "写不了 hook 配置，这次就不挂了：\n{}".format(e))
+                messagebox.showerror(
+                    "写不了配置",
+                    "写不了这次的{}，这一本会用默认设置开：\n{}".format(
+                        "会话配置" if bound_env else "hook 配置", e))
 
         if self.embed_var.get():
             self.embed_workspace(item, cont, prompt, settings, permission,
@@ -420,7 +451,7 @@ class SessionsMixin:
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return
-        entry = self.track_running(item["name"], path, process)
+        entry = self.track_running(item["name"], path, process, agent=profile.id)
         self._watch_terminal(entry, known)
         if autopilot:
             self.feedback_var.set(

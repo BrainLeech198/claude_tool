@@ -26,14 +26,30 @@ def path_key(path):
     return os.path.normcase(os.path.normpath(path))
 
 
+def new_workspace_entry(name, path):
+    """新建一条工作区记录的完整形状。
+
+    default_config、merge_scanned、以及界面那两个"加工作区"的入口（新建文件夹 /
+    选已有目录）都得用同一个形状，所以收成这一处。load_config 那段重建也是按
+    这个形状补齐旧配置的（见它注释：新加的字段最容易在那儿被悄悄吃掉）。
+
+    故意不含 permission：那一格是读的时候按 item 现算的（见
+    permissions.workspace_permission），没写就等于用默认值。
+    """
+    return {"name": name, "path": path,
+            "handoff_ignore_git": False,
+            "agent": agents.DEFAULT_AGENT,
+            # 这本文档绑的模型预设名（空 = 不绑，跟随全局 / 自带默认）。
+            # 绑了的话，开会话时它的 env 走 --settings 传下去，不覆盖全局配置。
+            "preset": ""}
+
+
 def default_config():
     """全新安装时的配置：默认工作区目录建在工具目录下，它本身也算第一个工作区。"""
     return {
         "workplace": WORKPLACE_DIR,
         "roots": [WORKPLACE_DIR],
-        "workspaces": [{"name": "默认", "path": WORKPLACE_DIR,
-                        "handoff_ignore_git": False,
-                        "agent": agents.DEFAULT_AGENT}],
+        "workspaces": [new_workspace_entry("默认", WORKPLACE_DIR)],
         "window": None,
         # 左栏当前选中那一本（记路径不记名字：改名不影响选中）。
         # 老配置文件里没这个键，读的地方一律用 .get()，别用 []。
@@ -102,6 +118,10 @@ def load_config():
                     "handoff_ignore_git": bool(item.get("handoff_ignore_git")),
                     "agent": item.get("agent") if item.get("agent") in agents.ids()
                     else agents.DEFAULT_AGENT,
+                    # 绑的模型预设名。不查它存在不存在——预设可能刚被删、或者被
+                    # 手改名了；真有对不上，开会话那步会当"没绑"照常开。
+                    "preset": item.get("preset").strip()
+                    if isinstance(item.get("preset"), str) else "",
                 })
         config["workspaces"] = workspaces
     config["auto_continue"] = bool(data.get("auto_continue"))
@@ -201,6 +221,7 @@ def merge_scanned(config):
         key = os.path.normcase(os.path.normpath(item["path"]))
         if key not in known:
             known.add(key)
-            config["workspaces"].append(item)
+            config["workspaces"].append(
+                new_workspace_entry(item["name"], item["path"]))
             added.append(item["name"])
     return added

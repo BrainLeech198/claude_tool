@@ -1,8 +1,11 @@
-"""入口：--hook 走 hook 那条路，其余打开窗口。
+"""入口：--hook 走 hook 那条路，子命令走命令行那条，其余打开窗口。
 
 被 Claude Code 的 hook 回头调用时不能碰 tkinter、也不该弹任何窗口——所以那条
 分支要在 import 主界面之前就分出去。开关（推着往下走 / 摁住危险动作 / 谁来答那
 个选项框）按启动时写进 settings 的那份从命令行传进来，读法在 handoff.hook_options。
+
+命令行那条同理：一个 tkinter 都不 import，没界面的机器上也能跑。它认得出的
+东西全在 claude_tool/cli.py；返回 None 表示"这不是子命令"，那就照旧开窗口。
 """
 import os
 import sys
@@ -21,6 +24,10 @@ from claude_tool.handoff import HOOK_FLAG, hook_options, run_hook
 def main():
     if HOOK_FLAG in sys.argv:
         return run_hook(**hook_options(sys.argv))
+    from claude_tool import cli
+    code = cli.main()
+    if code is not None:
+        return code
     from claude_tool.ui.launcher import Launcher
     Launcher().mainloop()
     return 0

@@ -334,7 +334,16 @@ class WorkspacesMixin:
         return True
 
     def refresh_workplace_label(self):
-        self.workplace_var.set(self.config_data["workplace"])
+        """把「默认工作区」那行路径字摆成当前值。
+
+        那个标签长在设置窗「工作区」页里，是懒建的：设置窗没开过、或者没切到那
+        一页，self.workplace_var 还是 None。这时候没什么可刷的——等那页真建起来
+        的时候，它照 config_data 现取（见 launcher._build_workspace_rows），所以
+        跳过去不会让显示变旧。以前是裸 set，没开过设置窗就抛 AttributeError。
+        """
+        var = getattr(self, "workplace_var", None)
+        if var is not None:
+            var.set(self.config_data["workplace"])
 
 
     def rescan(self):

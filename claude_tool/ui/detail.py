@@ -16,6 +16,7 @@ import tkinter as tk
 from claude_tool import agents
 from claude_tool.config import humanize_ago, last_chat_time, save_config
 from claude_tool.handoff import HANDOFF_FILE
+from claude_tool.presets import discover_presets
 from claude_tool.theme import BORDER, HOVER_BG, MUTED, PAGE_BG, TEXT, font
 from claude_tool.widgets import PillButton, Tip
 
@@ -37,6 +38,16 @@ from claude_tool.widgets import PillButton, Tip
 # Label，路径长一点那个数就飘（实测能到 601）。下限要的是这排按钮的宽度，那是个
 # 不随数据变的数。
 DETAIL_MIN_WIDTH = 620
+
+
+def _unbound_model_label(agent_id):
+    """没绑预设时这一本用什么（说明见 dialogs.unbound_model_label）。
+
+    文案在两个模块各留一份，是有意的：这是各管一摊的界面文案，为一行字把两个
+    mixin 模块勾在一起不值当。
+    """
+    return ("CodeBuddy 自带默认模型" if agents.get(agent_id).id == "codebuddy"
+            else "跟随全局")
 
 
 class DetailMixin:
@@ -79,6 +90,19 @@ class DetailMixin:
                  fg=MUTED, font=font(9), anchor="w").pack(fill="x")
         tk.Label(parent, textvariable=self.detail_meta_var, bg=PAGE_BG,
                  fg=MUTED, font=font(9), anchor="w").pack(fill="x", pady=(10, 0))
+
+        # 绑定行：给这一本单独指定一个模型预设。改了只影响这本——开会话时它的 env
+        # 走 --settings 带下去，全局那份 settings.json 一个字节都不动。不绑就跟随
+        # 全局（claude）/ 用它自带默认模型（codebuddy，按积分倍率计费）。
+        self.preset_row = tk.Frame(parent, bg=PAGE_BG)
+        self.preset_row.pack(fill="x", pady=(10, 0))
+        tk.Label(self.preset_row, text="工作区模型", bg=PAGE_BG, fg=MUTED,
+                 font=font(9)).pack(side="left", padx=(0, 8))
+        self._preset_btn = PillButton(self.preset_row, "跟随全局",
+                                      self._detail_pick_preset, bg=PAGE_BG, height=26)
+        self._preset_btn.pack(side="left")
+        Tip(self._preset_btn, "给这一本单独挑一个模型预设；只改这本，"
+                              "不动全局那份 settings.json")
 
         # 日常动作。三个都建成实例属性，没选中那本时要能一起置灰。
         #
@@ -152,22 +176,43 @@ class DetailMixin:
     def refresh_detail(self):
         """按当前选中的那一本重画右栏。没选中就整片置灰，别留一堆按不动的按钮
         让人猜为什么按不动。"""
+        # 顶上那颗「当前模型」说的是**这一本**用的 agent 现在生效哪个预设，得跟着
+        # 选中一起换。放在这儿而不是只靠 refresh_models：选中一本另一档的工作区时
+        # 并没有重新扫模型，不给它一个刷新点，胶囊会一直写着上一本的名字。
+        self._refresh_model_chip()
         item = self.selected_entry()
         if item is None:
             self.detail_title_var.set("还没选工作区")
             self.detail_path_var.set("左边点一下，或者先去设置里添加一个")
             self.detail_meta_var.set("")
+            self._preset_btn.set_text("跟随全局")
             self._detail_set_enabled(False)
             return
         self.detail_title_var.set(item["name"])
         self.detail_path_var.set(item["path"])
         self.detail_meta_var.set(self._detail_note(item))
         self._agent_btn.set_text(agents.get(item.get("agent")).label)
+        self._preset_btn.set_text(self._preset_button_text(item))
         self._detail_set_enabled(True)
+
+    def _preset_button_text(self, item):
+        """绑定按钮上那行字：绑了写预设名，没绑写"跟随全局/自带默认"。
+
+        绑的那份预设要是已经被删了（或者被手改名），开会话时是当"没绑"算的（见
+        sessions._bound_preset_env）——这儿就得把话说出来，不然按钮上还挂着个
+        早就不存在的名字，用户以为它在生效。
+        """
+        bound = item.get("preset") or ""
+        if not bound:
+            return _unbound_model_label(item.get("agent"))
+        if bound in discover_presets(item.get("agent")):
+            return bound
+        return bound + "（已失效）"
 
     def _detail_set_enabled(self, flag):
         for button in self._detail_daily + self._detail_manage:
             button.set_enabled(flag)
+        self._preset_btn.set_enabled(flag)
         if self._handoff_btn.winfo_manager() == "pack":
             self._handoff_btn.set_enabled(flag)
 
@@ -180,7 +225,14 @@ class DetailMixin:
         后半截原来挂在左栏列表行的右侧（见 ui/nav.py 的说明）：挪到这儿是对的，
         左栏只回答"有哪些"，"这一本现在什么样"是右栏的事。
         """
-        line = "claude " + (self._local_version or "版本未知")
+        # 头一句说的是"这一本用的那个 agent"。_local_version 本身就带着 "claude "
+        # 前缀（见 update._probe_claude_version），别再补一个——以前补了，结果这行
+        # 一直印成 "claude claude 1.2.3"。别的档位没探过版本号，就只报档位名。
+        profile = agents.get(item.get("agent"))
+        if profile.id == agents.DEFAULT_AGENT:
+            line = self._local_version or "版本未知"
+        else:
+            line = profile.label
         path = item["path"]
         if not os.path.isdir(path):
             # 目录没了，这条路上走不到下面那句 _sync_handoff_button——得在这儿
@@ -239,6 +291,10 @@ class DetailMixin:
 
     # ── 管理动作 ──
 
+    def _detail_pick_preset(self):
+        """给这一本单独挑模型预设（弹框在 dialogs.py）。"""
+        self._with_selected(self._open_preset_picker)
+
     def _detail_switch_agent(self):
         """在这本工作区上翻一下用哪个 agent（claude ↔ CodeBuddy）。"""
         self._with_selected(self._switch_agent)
@@ -247,10 +303,18 @@ class DetailMixin:
         current = item.get("agent") or agents.DEFAULT_AGENT
         new_id = "codebuddy" if current != "codebuddy" else "claude"
         item["agent"] = new_id
+        # 预设名是**分档**存的，换档后原来那个名字多半对不上新档的目录；留着的话
+        # 这本会"看着绑了个模型、开着其实是默认"。松开，让用户按新档重挑。
+        had_preset = bool(item.get("preset"))
+        item["preset"] = ""
         save_config(self.config_data)
-        self._agent_btn.set_text(agents.get(new_id).label)
-        self.feedback_var.set(
-            "「{}」改用 {}。".format(item["name"], agents.get(new_id).label))
+        # 整片右栏重画：换档不只改那颗按钮的字，顶上「当前模型」胶囊、meta 那行、
+        # 绑定按钮说的也都是"这一本用哪个 agent"。
+        self.refresh_detail()
+        note = "「{}」改用 {}。".format(item["name"], agents.get(new_id).label)
+        if had_preset:
+            note += "原来绑的模型已松开，按新档重挑一个。"
+        self.feedback_var.set(note)
 
     def _detail_rename(self):
         self._with_selected(self.rename_workspace)
