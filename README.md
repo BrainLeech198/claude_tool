@@ -84,6 +84,34 @@ build\打包.bat
 出 `Output\ClaudeLauncher-<版本>-Setup.exe`。装的时候默认免管理员、装在自己账户
 下；同一个目录也可以直接拷走双击运行，那份是免安装的。
 
+## 命令行
+
+不带子命令就是老样子——开窗口。带了子命令就走命令行，**一个 tkinter 都不
+import**，没界面的机器（服务器、SSH、CI）上也能跑，启动也快：
+
+```bat
+python -m claude_tool list                :: 列出工作区（* 是当前选中那本）
+python -m claude_tool new 项目部           :: 在默认工作区目录下建一个新文件夹
+python -m claude_tool add D:\some\dir      :: 把已有目录加进列表
+python -m claude_tool remove 手加的 --yes  :: 从列表拿掉（不删目录）
+python -m claude_tool go 项目部            :: 在那个工作区里开会话
+python -m claude_tool go 2 --continue      :: 序号跟左栏 Ctrl+2 是同一本
+python -m claude_tool go 项目部 --agent codebuddy
+python -m claude_tool go 项目部 --dry-run  :: 只把要跑的那条命令打出来
+python -m claude_tool model --agent codebuddy
+python -m claude_tool use deepseek         :: 把某个预设设成当前生效的
+python -m claude_tool doctor               :: 查环境：agent 找得到吗、配置有没有毛病
+python -m claude_tool version
+```
+
+装完包之后 `claude_tool.exe <子命令>` 一样能用（`python -m claude_tool` 和
+直接跑那个 exe 是同一条路）。`list` / `model` 都收 `--json`，方便脚本接。
+
+命令行跟界面共用同一套底层（`agents` / `config` / `presets` / `agent` /
+`host`），所以行为不会分家：绑定预设照样走 `--settings` 注入、全局
+`settings.json` 一个字节都不动；`go` 的序号就是左栏那个序号。子命令实现在
+`claude_tool/cli.py`，加新命令先确认用到的东西都还在 tkinter 外头。
+
 ## 目录
 
 ```
@@ -97,12 +125,15 @@ docs/              官网，GitHub Pages 就发这个目录，下载直链指 Gi
 根 `/` 或 `/docs`，中间没有别的选项。发布源设成 `master` 分支 + `/docs` 目录即可，
 不需要任何 Actions 或额外的 token 权限。
 
-发一版要手动做的只有两件：把 `claude_tool\__init__.py` 里的 `__version__` 改掉；在
+发一版要手动做的有三件：把 `claude_tool\__init__.py` 里的 `__version__` 改掉；在
 Gitee 和 GitHub 上**各**建一个 tag 为 `<版本号>`（`0.1.0` 这样，不带 v）的发行版，
-把 `Output\` 里那个 Setup.exe 传成附件。GitHub 那份就是官网卡片上「GitHub 下载」
-那个入口指的地方——仓库代码是镜像过去的，**发行版附件不跟着镜像走**，得自己传。
-其余都包在 `build\打包.bat` 里了，包括把这一版记进官网的版本清单（顺带读一次
-打包机上的 `claude --version`，写进"这版配着哪个 claude 测过"那一格）。
+把 `Output\` 里那个 Setup.exe 传成附件；最后**手动触发一次 GitHub Pages 重建**
+（`gh api -X POST repos/BrainLeech198/claude_tool/pages/builds`）。GitHub 那份就是
+官网卡片上「GitHub 下载」那个入口指的地方——仓库代码是镜像过去的，**发行版附件不
+跟着镜像走**，得自己传。Pages 那次也不能省：这个仓库用的是 legacy 构建，**推代码
+不会自动重建**，不手动触发的话官网上那一版根本不出现。其余都包在 `build\打包.bat`
+里了，包括把这一版记进官网的版本清单（顺带读一次打包机上的 `claude --version`，
+写进"这版配着哪个 claude 测过"那一格）。
 
 用户数据在 `~/.claude_tool/`，跟 Claude Code 的配置分开，卸载时不该删。
 详见 [设计说明.md](设计说明.md)。
@@ -118,4 +149,6 @@ Gitee 和 GitHub 上**各**建一个 tag 为 `<版本号>`（`0.1.0` 这样，�
       验过，用户数据不受影响）
 - [x] 面向使用者的说明（官网 `docs/` 上的「怎么装」）
 - [x] 官网：下载最新版和历史版本，Linux / macOS 的位置先留着
+- [x] 命令行：不开窗口的那一套用法（`list` / `new` / `add` / `remove` / `go` /
+      `model` / `use` / `doctor`），一个 tkinter 都不 import
 - [ ] 代码签名（不然转发出去会被 SmartScreen 拦）

@@ -20,8 +20,6 @@ from claude_tool.host import open_url
 from claude_tool.paths import (
     ILLEGAL_CHARS,
     ILLEGAL_FILE_CHARS,
-    PRESET_DIR,
-    SETTINGS_FILE,
     WORKPLACE_DIR,
 )
 from claude_tool.theme import (
@@ -46,8 +44,11 @@ from claude_tool.presets import (
     IMPORT_ALREADY,
     IMPORT_NO_ENV,
     IMPORT_NO_FILE,
+    bundle_names,
     discover_presets,
+    export_payload,
     host_of,
+    import_bundle,
     preset_path,
     probe_current_settings,
     read_env,
@@ -63,7 +64,7 @@ from claude_tool.providers import (
     query_with_ai,
     save_providers,
 )
-from claude_tool.config import path_key, save_config
+from claude_tool.config import new_workspace_entry, path_key, save_config
 from claude_tool.handoff import HANDOFF_FILE, READ_HANDOFF_PROMPT
 from claude_tool.widgets import (
     PillButton,
@@ -75,17 +76,33 @@ from claude_tool.widgets import (
 )
 
 
+def unbound_model_label(agent_id):
+    """没绑预设时，这一本用的是什么，一句话说清。
+
+    codebuddy 有自带默认模型（按它自己的积分倍率计费），没绑就用它；claude 没绑
+    就用全局那份 settings.json 里现在生效的预设。
+    """
+    return ("CodeBuddy 自带默认模型" if agents.get(agent_id).id == "codebuddy"
+            else "跟随全局")
+
+
 class LauncherDialogs:
 
-    def _open_model_dialog(self, edit=None):
-        """edit 传 (名称, 路径) 是编辑，传 None 是新增，两者共用一套表单。"""
+    def _open_model_dialog(self, edit=None, copy=None):
+        """edit 传 (名称, 路径) 是编辑，copy 传 (名称, 路径) 是照着源预设复制一份
+        新的，都不传是新增。三者共用一套表单。"""
         old_name, old_path = edit or (None, None)
         is_edit = old_path is not None
-        env = read_env(old_path) if is_edit else {}
+        seed_name, seed_path = copy or (None, None)
+        # 复制时读源预设把四个字段灌进来，但**存成新名字**（old_path 仍为 None，
+        # 走的是"新增"那条路，不会去动源文件）。
+        source_path = old_path if is_edit else seed_path
+        env = read_env(source_path) if source_path else {}
 
         dialog = tk.Toplevel(self)
         dialog.grab_set()
-        body = make_form(dialog, "编辑模型" if is_edit else "添加模型")
+        title = "编辑模型" if is_edit else ("复制模型" if seed_name else "添加模型")
+        body = make_form(dialog, title)
 
         # 每个字段除了术语本身，再带一句人话备注：懂的人看标签，不懂的看备注，
         # 谁也不必将就。
@@ -95,7 +112,8 @@ class LauncherDialogs:
             ("API Token", "你在这家后台拿到的密钥", "token", True),
             ("模型名", "具体用哪款，挑完供应商会自动填", "model", False),
         ]
-        values = {"name": old_name or "", "base_url": env.get("ANTHROPIC_BASE_URL", ""),
+        values = {"name": old_name or (seed_name + " 副本" if seed_name else ""),
+                  "base_url": env.get("ANTHROPIC_BASE_URL", ""),
                   "token": env.get("ANTHROPIC_AUTH_TOKEN", ""),
                   "model": env.get("ANTHROPIC_MODEL", "")}
 
@@ -197,8 +215,10 @@ class LauncherDialogs:
                  ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(6, 0))
         row += 1
 
-        # 改一个当前没在用的预设时，默认不去动正在生效的 settings.json
-        apply_now = tk.BooleanVar(value=(not is_edit) or old_name == self.active_name)
+        # 改一个当前没在用的预设时，默认不去动正在生效的 settings.json。
+        # 复制出来的那份也默认不立刻启用——复制通常是"拿来改改看"，不是"马上换过去"。
+        default_apply = False if seed_name else ((not is_edit) or old_name == self.active_name)
+        apply_now = tk.BooleanVar(value=default_apply)
         tk.Checkbutton(body, text="保存后立即启用" if is_edit else "添加后立即启用",
                        variable=apply_now, bg=PAGE_BG, fg=TEXT, font=font(10),
                        activebackground=PAGE_BG, selectcolor=PANEL_BG,
@@ -207,12 +227,13 @@ class LauncherDialogs:
         row += 1
 
         note = "改名会一并重命名那份配置文件；" if is_edit else "会存成一份配置文件；"
-        tk.Label(body, text=note + "就在 ~/.claude_tool/claude_settings/ 里，"
-                                  "以后想手改也行。",
+        tk.Label(body, text=note + "就在 {} 里，"
+                                  "以后想手改也行。".format(
+                                      agents.get(self.model_agent).preset_dir),
                  bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
                  ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
-        save = lambda: self._save_model(dialog, entries, apply_now, edit)
+        save = lambda: self._save_model(dialog, entries, apply_now, edit, seed_path)
         finish_form(dialog, [("保存", save, True), ("取消", dialog.destroy, False)])
         dialog.bind("<Return>", lambda e: save())
         dialog.bind("<Escape>", lambda e: dialog.destroy())
@@ -245,7 +266,7 @@ class LauncherDialogs:
 
         # 用哪个模型来查：默认当前生效那个。一个能用的都没有时 AI 那条路走不通，
         # 但社区清单那条不用模型，照样能点——所以只灰一边，不整块禁用。
-        usable = [name for name, path in discover_presets().items()
+        usable = [name for name, path in discover_presets(self.model_agent).items()
                   if all(read_env(path).get(key) for key in
                          ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
                           "ANTHROPIC_MODEL"))]
@@ -377,7 +398,7 @@ class LauncherDialogs:
             web_button.set_enabled(False)
             note.set("正在查…")
             if kind == "ai":
-                env = read_env(preset_path(query_var.get()))
+                env = read_env(preset_path(query_var.get(), self.model_agent))
                 worker = lambda: box.put(("done", query_with_ai(
                     env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_AUTH_TOKEN"),
                     env.get("ANTHROPIC_MODEL"), rows_now)))
@@ -414,7 +435,7 @@ class LauncherDialogs:
         return "；".join(changes)
 
 
-    def _save_model(self, dialog, entries, apply_now, edit):
+    def _save_model(self, dialog, entries, apply_now, edit, base_path=None):
         _old_name, old_path = edit or (None, None)
         name = entries["name"][0].get().strip()
         base_url = entries["base_url"][0].get().strip()
@@ -429,19 +450,24 @@ class LauncherDialogs:
                                  "名称不能包含 < > : \" / \\ | ? *。", parent=dialog)
             return
 
-        target = preset_path(name)
+        target = preset_path(name, self.model_agent)
         renamed = old_path is not None and os.path.normcase(target) != os.path.normcase(old_path)
         if (old_path is None or renamed) and os.path.exists(target):
             messagebox.showerror("名称冲突", "预设「{}」已存在。".format(name), parent=dialog)
             return
 
-        preset = self._preset_template()
-        if old_path is not None:
+        # env 之外那些公共设置从哪儿继承：编辑从自己那份，复制从源预设那份，
+        # 新增才退回模板。以前复制走的是模板，会把源预设的 language 之类丢掉。
+        preset = None
+        inherit = old_path or base_path
+        if inherit is not None:
             try:
-                with open(old_path, "r", encoding="utf-8") as f:
+                with open(inherit, "r", encoding="utf-8") as f:
                     preset = json.load(f)
             except Exception:
-                pass
+                preset = None
+        if not isinstance(preset, dict):
+            preset = self._preset_template()
         preset["env"] = {
             "ANTHROPIC_BASE_URL": base_url,
             "ANTHROPIC_AUTH_TOKEN": token,
@@ -449,7 +475,7 @@ class LauncherDialogs:
         }
 
         try:
-            os.makedirs(PRESET_DIR, exist_ok=True)
+            os.makedirs(agents.get(self.model_agent).preset_dir, exist_ok=True)
             with open(target, "w", encoding="utf-8") as f:
                 json.dump(preset, f, ensure_ascii=False, indent=2)
             if renamed:
@@ -469,7 +495,7 @@ class LauncherDialogs:
 
     def _preset_template(self):
         """从现有预设继承 env 之外的公共设置，作为新预设的模板。"""
-        presets = discover_presets()
+        presets = discover_presets(self.model_agent)
         candidates = []
         if self.active_name and self.active_name in presets:
             candidates.append(presets[self.active_name])
@@ -491,19 +517,26 @@ class LauncherDialogs:
     # ── 导入当前配置 ──
 
     def _import_current(self):
-        """把 Claude Code 正在用的那份配置一键存成预设。
+        """把当前 agent 正在用的那份配置一键存成预设。
 
         新手最常见的开局是"我已经在用 claude 了"，可让他到别处把 Base URL 和
         key 抄进表单纯属折腾——那两样本来就躺在 settings.json 里。全程只读那份
         文件；会写它的地方全项目只有 switch_model() 一处，而且是有意的覆盖。
+
+        读哪一份、往哪个预设目录存，都跟着设置窗顶那排选的 agent 走。
         """
-        status, payload = probe_current_settings()
+        profile = agents.get(self.model_agent)
+        status, payload = probe_current_settings(self.model_agent)
         if status == IMPORT_NO_FILE:
+            if profile.id == agents.DEFAULT_AGENT:
+                hint = ("先在别的地方用一次 claude（或者点顶上横幅那颗"
+                        "「帮我装 claude」），再回来点这里。")
+            else:
+                hint = "先在别的地方用一次它，再回来点这里。"
             messagebox.showinfo(
-                "还没用过 Claude Code",
-                "这台机器上还没有 Claude Code 的配置：\n{}\n\n"
-                "先在别的地方用一次 claude（或者点顶上横幅那颗「帮我装 claude」），"
-                "再回来点这里。".format(SETTINGS_FILE), parent=self)
+                "还没用过 {}".format(profile.label),
+                "这台机器上还没有 {} 的配置：\n{}\n\n{}".format(
+                    profile.label, profile.settings_file, hint), parent=self)
             return
         if status == IMPORT_NO_ENV:
             messagebox.showinfo(
@@ -557,12 +590,12 @@ class LauncherDialogs:
             if re.search(ILLEGAL_FILE_CHARS, name):
                 hint.set("名字里不能有 < > : \" / \\ | ? *。")
                 return
-            target = preset_path(name)
+            target = preset_path(name, self.model_agent)
             if os.path.exists(target):
                 hint.set("已经有一个叫「{}」的预设了，换个名字。".format(name))
                 return
             try:
-                os.makedirs(PRESET_DIR, exist_ok=True)
+                os.makedirs(agents.get(self.model_agent).preset_dir, exist_ok=True)
                 with open(target, "w", encoding="utf-8") as f:
                     json.dump(payload, f, ensure_ascii=False, indent=2)
             except Exception as e:
@@ -582,6 +615,140 @@ class LauncherDialogs:
         entry.focus_set()
         self._center(dialog)
 
+    # ── 导出 / 导入整档预设（备份、换机器）──
+
+    def _export_models(self):
+        """把这一档的预设收成一份 json 存出去。
+
+        导出的**含明文 key**，所以存完明说一句别随手传——这不是能拦的（用户自己
+        选存哪儿），但得让他知道手里这份是什么。
+        """
+        profile = agents.get(self.model_agent)
+        payload = export_payload(self.model_agent)
+        count = len(payload["presets"])
+        if not count:
+            messagebox.showinfo("没有可导的",
+                                "{} 这一档还没有模型预设。".format(profile.label),
+                                parent=self)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self, title="导出模型预设", defaultextension=".json",
+            initialfile="{}-模型预设.json".format(profile.id),
+            filetypes=[("模型预设", "*.json"), ("所有文件", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            messagebox.showerror("导出失败", "写不进 {}：\n{}".format(path, e),
+                                 parent=self)
+            return
+        self.feedback_var.set(
+            "导出了 {} 个预设到 {}。里面有 API key，别随手传出去。".format(
+                count, os.path.basename(path)))
+
+    def _import_models(self):
+        """从一份导出文件里把预设摊回这一档的目录。同名的不覆盖，只报有几个没动。"""
+        path = filedialog.askopenfilename(
+            parent=self, title="选一份模型预设导出文件",
+            filetypes=[("模型预设", "*.json"), ("所有文件", "*.*")])
+        if not path:
+            return
+        try:
+            names = bundle_names(path)
+        except Exception as e:
+            messagebox.showerror("这个文件读不了", str(e), parent=self)
+            return
+        try:
+            written, skipped = import_bundle(path, self.model_agent)
+        except Exception as e:
+            messagebox.showerror("导入失败", "{}: {}".format(type(e).__name__, e),
+                                 parent=self)
+            return
+        self.refresh_models()
+        note = "导入了 {} 个预设。".format(len(written))
+        if skipped:
+            note += " {} 个同名的已存在，没动它们。".format(len(skipped))
+        self.feedback_var.set(note)
+        if not written and skipped:
+            messagebox.showinfo(
+                "都跳过咯",
+                "这份文件里的 {} 个预设（{}）这台机器上都有了。\n\n"
+                "要拿它覆盖现有的，先把同名的那几个删掉再导。".format(
+                    len(skipped), "、".join(names[:6]) + ("…" if len(names) > 6 else "")),
+                parent=self)
+
+    def _open_preset_picker(self, item):
+        """挑这本工作区用哪个模型预设。
+
+        绑的是**预设名**（按这本当前档位的目录去找），开会话时它的 env 走 --settings
+        带下去、压过用户 settings.json，而**全局那份一个字节都不动**。选「不绑定」
+        就清掉绑定，回落到全局/自带默认模型。
+        """
+        agent_id = item.get("agent") or agents.DEFAULT_AGENT
+        profile = agents.get(agent_id)
+        presets = discover_presets(agent_id)
+        unbound = "不绑定（{}）".format(unbound_model_label(agent_id))
+        options = [unbound] + sorted(presets)
+        current = item.get("preset") or ""
+
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "这个工作区用哪个模型")
+
+        tk.Label(body, text="「{}」现在是 {}。".format(item["name"], profile.label),
+                 bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w", justify="left",
+                 wraplength=430).grid(row=0, column=0, columnspan=2, sticky="w")
+
+        combo = make_combo(body, options)
+        combo.current(options.index(current) if current in presets else 0)
+        combo.grid(row=1, column=0, columnspan=2, sticky="w", pady=(12, 0))
+
+        if not presets:
+            tk.Label(body, text="这一档还没有模型预设。先到设置窗「模型」页添加一个。",
+                     bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w", justify="left",
+                     wraplength=430).grid(row=2, column=0, columnspan=2, sticky="w",
+                                          pady=(8, 0))
+        elif current and current not in presets:
+            tk.Label(body, text="原来绑的「{}」找不到了，这次按不绑定算。".format(current),
+                     bg=PAGE_BG, fg=WARN, font=font(9), anchor="w", justify="left",
+                     wraplength=430).grid(row=2, column=0, columnspan=2, sticky="w",
+                                          pady=(8, 0))
+
+        hint = tk.Label(body, bg=PAGE_BG, fg=MUTED, font=font(9), justify="left",
+                        anchor="w", wraplength=470)
+        hint.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        def show(_event=None):
+            picked = options[max(combo.current(), 0)]
+            if picked == unbound:
+                hint.configure(text="不绑：开会话时不额外指定模型，用{}。".format(
+                    unbound_model_label(agent_id)))
+            else:
+                hint.configure(text="开会话时用「{}」，只在命令行里临时指定，"
+                                    "不动全局那份 settings.json。".format(picked))
+
+        show()
+        combo.bind("<<ComboboxSelected>>", show)
+
+        def save():
+            picked = options[max(combo.current(), 0)]
+            item["preset"] = "" if picked == unbound else picked
+            if item in self.config_data["workspaces"]:
+                save_config(self.config_data)
+            dialog.destroy()
+            self.refresh_detail()
+            if item["preset"]:
+                self.feedback_var.set(
+                    "「{}」开会话时用「{}」。".format(item["name"], item["preset"]))
+            else:
+                self.feedback_var.set("「{}」不再单独绑模型。".format(item["name"]))
+
+        finish_form(dialog, [("好", save, True), ("取消", dialog.destroy, False)])
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        dialog.bind("<Return>", lambda e: save())
+        self._center(dialog)
 
     def open_workspace(self, item, cont=None):
         """点工作区先问一句：新开一个还是接着上次聊，要不要先读交接文档。
@@ -1306,7 +1473,8 @@ class LauncherDialogs:
         name = name_var.get().strip() or folder
         known = {path_key(w["path"]) for w in self.config_data["workspaces"]}
         if path_key(target) not in known:
-            self.config_data["workspaces"].append({"name": name, "path": target})
+            self.config_data["workspaces"].append(
+                new_workspace_entry(name, target))
 
         self._set_workplace(base)
         save_config(self.config_data)
@@ -1376,7 +1544,7 @@ class LauncherDialogs:
             messagebox.showerror("重复添加", "这个目录已经在列表里了。", parent=dialog)
             return
 
-        self.config_data["workspaces"].append({"name": name, "path": path})
+        self.config_data["workspaces"].append(new_workspace_entry(name, path))
         save_config(self.config_data)
         dialog.destroy()
         self.refresh_workspaces()

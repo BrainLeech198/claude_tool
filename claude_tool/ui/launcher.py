@@ -166,6 +166,9 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             self.option_add(pattern, value)
 
         self.active_name = None
+        # 设置窗「模型」页现在在管哪个 agent 的预设（claude / codebuddy）。那页
+        # 顶上有排切换按钮改它（见 ui/settings.py）；默认 claude。
+        self.model_agent = agents.DEFAULT_AGENT
         self.embedded = None      # 当前塞在窗口里的那个 conhost
         self._pending = None      # 正在等窗口冒出来的那次启动
         self._placing = False
@@ -178,6 +181,12 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 「模型」那一区 0.4 起搬进了设置窗（见 ui/settings.py），窗口没开过时这个
         # 列表还不存在。凡是用它的地方都得先认 None（refresh_models 头一行就是）。
         self.model_list = None
+        # 「默认工作区」那一行的路径标签也是懒建的——它跟着设置窗的「工作区」页
+        # 一块儿出来（ui/workspaces.py 的 refresh_workplace_label 拿它）。设置窗没
+        # 开过时它是 None，那儿得先认一句。以前是裸引用，0.4 把这一行搬进设置窗
+        # 之后就忘了：没开过设置窗时点「新建工作区文件夹」的创建，会当场抛
+        # AttributeError，卡在保存之后、刷新列表之前——工作区落盘了但列表不刷新。
+        self.workplace_var = None
         # 设置窗只有一个，开过一次就留着（关是 withdraw 不是 destroy，见
         # ui/settings.py 的说明）。这三个格子在 _build_settings_window 里填。
         self._settings_win = None
@@ -229,6 +238,11 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self._self_pill = None       # 「下载最新版 X」那颗，查出落后才建
         self._self_release = None    # 那颗胶囊对应的清单记录，下载要用
         self._downloading = False    # 下载进行中：那颗胶囊点第二下不理它
+        # 启动时探一次当前生效的模型预设通不通，结果走这条队列回主线程（每项是
+        # (预设名, 通不通, 说明)）。连不上才在顶栏挂一颗「模型连不上」——**不弹框**，
+        # 免得每次开机都被一条网络问题拦一下。
+        self.health_queue = queue.Queue()
+        self._health_pill = None
         # 目录骨架和一次性迁移都在启动时做完，之后各处只管用，不必再判存在。
         for directory in (TOOL_DIR, PRESET_DIR):
             try:
@@ -291,6 +305,9 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 的官网，不是 npm，量很小。这条不依赖本机 claude 的版本号（问的是我们
         # 自己），所以不跟 claude 那条一起挂在 version_queue 上，直接起。
         self._start_self_check()
+        # 模型通不通也顺手探一次：开着启动器才发现 key 过期/被墙，比开完会话撞一脸
+        # 报错好。这条不联网查版本，是拿当前预设真打一次请求。
+        self._start_model_health_check()
         self.after(1000, self._poll_running)
         self.ws_filter.trace_add("write", lambda *_: self.refresh_workspaces())
         self.bind_all("<MouseWheel>", self._on_wheel)
