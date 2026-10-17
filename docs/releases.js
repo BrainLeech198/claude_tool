@@ -31,6 +31,18 @@ window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/down
 // 也拿官网上这个数当兜底（npm 问不到的时候用）——改它没用，那是打包时写死的。
 window.RELEASES = [
   {
+    "version": "0.7.0",
+    "date": "2026-10-17",
+    "notes": "这一版整的是外观。多了一套深色配色，设置里新开「外观」页，点一下当场换（不用重开），Windows 的系统标题栏也一起刷黑，选过的记在配置里，下次开窗还是那套。左栏每一行末尾多了一枚小方块，标着这本是 Claude Code 还是 CodeBuddy（橙 C / 蓝 B），右栏标题前面也有一枚标签；选中那行左边加了强调色竖条，各分区标题前面也加了短竖条，底部状态行文字提亮，「模型连不上」那颗从普通按钮改成了警告红。修了两处：直接以深色启动时左栏列表还是白的（颜色被 import 时的默认参数冻住了）；Win11 上深色标题栏不生效（窗口还没露出来时设的那一遍 DWM 不认，得等映射完再来一次）。",
+    "claude": "2.1.150",
+    "windows": {
+      "file": "ClaudeLauncher-0.7.0-Setup.exe",
+      "size": 10401612
+    },
+    "linux": null,
+    "macos": null
+  },
+  {
     "version": "0.6.0",
     "date": "2026-10-16",
     "notes": "这一版把启动器整个搬上了命令行：python -m claude_tool list／new／add／remove／go／model／use／doctor／version，一个 tkinter 都不 import，没界面的机器（服务器、SSH、CI）上也能跑，启动也快；装完包 claude_tool.exe 一样使。list 和 model 收 --json，方便脚本接；go 的序号就是左栏那个序号，--dry-run 先看命令再跑。模型这边：每本工作区可以绑一个预设，开会话时经 --settings 把环境变量注进去，全局 settings.json 一个字节不动，没绑的 CodeBuddy 就用它自带的模型；启动时后台体检当前预设连不连得上，连不上顶栏给颗提示，不弹窗；测试结果记了档，预设没改就不重测；预设还能整份复制、导入导出。修了两处：新建工作区文件夹点完没反应、要手动刷新列表；切工作区时顶栏的模型名不跟着变。",
