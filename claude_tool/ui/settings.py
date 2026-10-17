@@ -4,8 +4,8 @@
 重复。一个窗而不是每域一个窗，是为了以后加设置项不用再加窗口——0.4 之前"凌乱"
 的观感，恰恰是入口太多造成的。
 
-四页：模型 / 工作区 / 行为开关 这三页把原来平铺在主窗上的三块搬进来，「关于」
-那页收版本号、官网链接和手动查启动器新版。
+五页：模型 / 工作区 / 行为开关 这三页把原来平铺在主窗上的三块搬进来，「外观」
+那页挑深浅配色，「关于」那页收版本号、官网链接和手动查启动器新版。
 
 **关窗只是 withdraw，不是 destroy**：模型那页的「测试」是后台线程往队列里灌结果、
 主线程取出来回填到那几行卡片上的（见 ui/models.py 的 _drain_results）。窗口一销毁，
@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from claude_tool import __version__
-from claude_tool import agents
+from claude_tool import agents, theme
 from claude_tool import versions
 from claude_tool.host import EMBED_SUPPORTED, open_url
 from claude_tool.theme import MUTED, PAGE_BG, PANEL_BG, TEXT, font
@@ -24,11 +24,12 @@ from claude_tool.widgets import PillButton, Tip
 
 
 # 分页顺序就是这儿定的，_settings_rail 照着画。
-PAGES = ("模型", "工作区", "行为开关", "关于")
+PAGES = ("模型", "工作区", "外观", "行为开关", "关于")
 # 每个分页由哪个方法建。名字在这儿配一次，_settings_show_page 照着调。
 BUILDERS = {
     "模型": "_settings_page_models",
     "工作区": "_settings_page_workspaces",
+    "外观": "_settings_page_appearance",
     "行为开关": "_settings_page_switches",
     "关于": "_settings_page_about",
 }
@@ -71,6 +72,7 @@ class SettingsMixin:
         win.minsize(SETTINGS_W, SETTINGS_H)
         win.geometry("{}x{}".format(SETTINGS_W, SETTINGS_H))
         self._center(win)
+        theme.titlebar(win)
 
     def _close_settings(self):
         if self._settings_win is not None and self._settings_win.winfo_exists():
@@ -167,6 +169,36 @@ class SettingsMixin:
                       "对着选中的那一本做。",
                  bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
                  wraplength=SETTINGS_W - 200).pack(fill="x")
+
+    # ── 外观 ──
+
+    def _settings_page_appearance(self, parent):
+        tk.Label(parent, text="配色", bg=PAGE_BG, fg=TEXT,
+                 font=font(12, True), anchor="w").pack(fill="x")
+        tk.Label(parent, text="换完立刻生效，下次开窗也记着。",
+                 bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
+                 ).pack(fill="x", pady=(2, 12))
+        self._theme_choice = tk.Frame(parent, bg=PAGE_BG)
+        self._theme_choice.pack(fill="x")
+        self._render_theme_choice()
+        tk.Label(parent,
+                 text="深色那套是把底色压到近黑、文字提亮，强调色和两个 agent 的"
+                      "招牌色都单独调过，夜里看不刺眼。想换回来点「浅色」就行。",
+                 bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w", justify="left",
+                 wraplength=SETTINGS_W - 200).pack(fill="x", pady=(14, 0))
+
+    def _render_theme_choice(self):
+        """重画「浅色 / 深色」那两个胶囊。当前那套用强调色。"""
+        frame = getattr(self, "_theme_choice", None)
+        if frame is None or not frame.winfo_exists():
+            return
+        for child in frame.winfo_children():
+            child.destroy()
+        now = theme.current()
+        for name, label in (("light", "浅色"), ("dark", "深色")):
+            PillButton(frame, label, lambda n=name: self.apply_theme(n),
+                       primary=(name == now), bg=PAGE_BG,
+                       ).pack(side="left", padx=(0, 8))
 
     # ── 行为开关 ──
 
