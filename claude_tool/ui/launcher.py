@@ -49,7 +49,7 @@ from claude_tool.config import (
     merge_scanned,
     save_config,
 )
-from claude_tool import agents
+from claude_tool import agents, theme
 from claude_tool.agent import agent_path
 from claude_tool.host import (
     EMBED_SUPPORTED,
@@ -62,6 +62,7 @@ from claude_tool.widgets import (
     ScrollArea,
     Tip,
     make_entry,
+    section_title,
 )
 
 from claude_tool.ui.detail import DETAIL_MIN_WIDTH, DetailMixin
@@ -129,41 +130,6 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self.icon = tk.PhotoImage(master=self, file=ICON_FILE)
         # default=True：以后新开的 Toplevel（那几个对话框）跟着一起用这个图。
         self.iconphoto(True, self.icon)
-
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.layout("Slim.Vertical.TScrollbar", [
-            ("Vertical.Scrollbar.trough", {
-                "children": [("Vertical.Scrollbar.thumb",
-                              {"expand": "1", "sticky": "nswe"})],
-                "sticky": "ns"})])
-        style.configure("Slim.Vertical.TScrollbar", background="#cbd1da",
-                        troughcolor=PAGE_BG, bordercolor=PAGE_BG,
-                        darkcolor="#cbd1da", lightcolor="#cbd1da",
-                        arrowsize=0, width=8)
-        style.map("Slim.Vertical.TScrollbar", background=[("active", "#aab3c0")])
-        # 交接进度条：细一点，跟旁边那排小字一个量级；clam 默认那条太粗。
-        style.configure("Task.Horizontal.TProgressbar", background=ACCENT,
-                        troughcolor=HOVER_BG, bordercolor=HOVER_BG,
-                        lightcolor=ACCENT, darkcolor=ACCENT, thickness=6)
-
-        # clam 默认把只读下拉画成灰底，看着像禁用了。改成跟旁边的输入框一个样。
-        style.configure("TCombobox", fieldbackground=PANEL_BG, background=PANEL_BG,
-                        foreground=TEXT, arrowcolor=MUTED, bordercolor=BORDER,
-                        lightcolor=BORDER, darkcolor=BORDER, padding=4)
-        style.map("TCombobox",
-                  fieldbackground=[("readonly", PANEL_BG)],
-                  background=[("readonly", PANEL_BG)],
-                  foreground=[("readonly", TEXT)],
-                  arrowcolor=[("readonly", MUTED)])
-        # 下拉弹出来的列表是独立的 Listbox，样式不跟着 Combobox 走，得单独上色
-        for pattern, value in (
-                ("*TCombobox*Listbox.background", PANEL_BG),
-                ("*TCombobox*Listbox.foreground", TEXT),
-                ("*TCombobox*Listbox.selectBackground", ACCENT_SOFT),
-                ("*TCombobox*Listbox.selectForeground", TEXT),
-                ("*TCombobox*Listbox.font", font(10))):
-            self.option_add(pattern, value)
 
         self.active_name = None
         # 设置窗「模型」页现在在管哪个 agent 的预设（claude / codebuddy）。那页
@@ -266,6 +232,14 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
                 merge_scanned(self.config_data)
             save_config(self.config_data)
 
+        # 外观：先套主题，再建样式和界面。theme.apply 会把各模块已经 import 的
+        # 那批颜色常量重绑一遍（见 theme.py 开头），所以后面建出来的控件直接
+        # 就是选中的那套配色，不用建完再扫一遍。
+        theme.apply(self.config_data.get("theme") or "light")
+        self.configure(bg=theme.PAGE_BG)
+        theme.titlebar(self)
+        self._setup_styles()
+
         # 底下那几个勾的变量在这儿建：它们现在长在设置窗的「行为开关」页上
         # （见 ui/settings.py），但会话启动那几条路（launch_workspace 读
         # embed_var / auto_continue_var）跟设置窗开没开没关系，所以变量本身
@@ -322,6 +296,78 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 那个绑定管不着（量过）。
         self.bind("<Configure>", self._on_window_move)
         self._restore_geometry()
+
+    def _setup_styles(self):
+        """ttk 那几样原生控件的皮。
+
+        单独抽成方法、不留在 __init__ 里，是因为换主题要重跑一遍：ttk 的样式
+        表只认 configure 那一刻塞进去的颜色，theme 模块里的常量变了它不知道。
+        """
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.layout("Slim.Vertical.TScrollbar", [
+            ("Vertical.Scrollbar.trough", {
+                "children": [("Vertical.Scrollbar.thumb",
+                              {"expand": "1", "sticky": "nswe"})],
+                "sticky": "ns"})])
+        style.configure("Slim.Vertical.TScrollbar",
+                        background=theme.SCROLL_THUMB,
+                        troughcolor=theme.PAGE_BG, bordercolor=theme.PAGE_BG,
+                        darkcolor=theme.SCROLL_THUMB,
+                        lightcolor=theme.SCROLL_THUMB,
+                        arrowsize=0, width=8)
+        style.map("Slim.Vertical.TScrollbar",
+                  background=[("active", theme.SCROLL_THUMB_HOVER)])
+        # 交接进度条：细一点，跟旁边那排小字一个量级；clam 默认那条太粗。
+        style.configure("Task.Horizontal.TProgressbar", background=theme.ACCENT,
+                        troughcolor=theme.HOVER_BG, bordercolor=theme.HOVER_BG,
+                        lightcolor=theme.ACCENT, darkcolor=theme.ACCENT, thickness=6)
+
+        # clam 默认把只读下拉画成灰底，看着像禁用了。改成跟旁边的输入框一个样。
+        style.configure("TCombobox", fieldbackground=theme.PANEL_BG,
+                        background=theme.PANEL_BG, foreground=theme.TEXT,
+                        arrowcolor=theme.MUTED, bordercolor=theme.BORDER,
+                        lightcolor=theme.BORDER, darkcolor=theme.BORDER, padding=4)
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", theme.PANEL_BG)],
+                  background=[("readonly", theme.PANEL_BG)],
+                  foreground=[("readonly", theme.TEXT)],
+                  arrowcolor=[("readonly", theme.MUTED)])
+        # 下拉弹出来的列表是独立的 Listbox，样式不跟着 Combobox 走，得单独上色
+        for pattern, value in (
+                ("*TCombobox*Listbox.background", theme.PANEL_BG),
+                ("*TCombobox*Listbox.foreground", theme.TEXT),
+                ("*TCombobox*Listbox.selectBackground", theme.ACCENT_SOFT),
+                ("*TCombobox*Listbox.selectForeground", theme.TEXT),
+                ("*TCombobox*Listbox.font", font(10))):
+            self.option_add(pattern, value)
+
+    def apply_theme(self, name):
+        """换配色：立刻生效，并记进配置。
+
+        顺序不能反：先换调色板（之后新画的控件才是新色），再重设 ttk 那几条
+        样式，最后把已经摆在屏幕上的控件扫一遍重上色。设置窗里选配色那两颗
+        按钮的状态也要跟着重画，不然还停在旧的那一颗上。
+        """
+        if name == theme.current():
+            return
+        theme.apply(name)
+        self.config_data["theme"] = name
+        save_config(self.config_data)
+        self.configure(bg=theme.PAGE_BG)
+        theme.titlebar(self)
+        # 设置窗、插件窗这些独立窗口的标题栏也跟着刷；它们不在 recolor_tree
+        # 管辖的颜色表里（那是系统画的）。
+        for child in self.winfo_children():
+            if isinstance(child, tk.Toplevel):
+                theme.titlebar(child)
+        self._setup_styles()
+        theme.recolor_tree(self)
+        render = getattr(self, "_render_theme_choice", None)
+        if callable(render):
+            render()
+        self.feedback_var.set("配色换成{}了。".format(
+            "深色" if name == "dark" else "浅色"))
 
     def _apply_min_size(self):
         """窗口下限按内容量出来，别写死。
@@ -443,6 +489,18 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         line = tk.Frame(header, bg=PANEL_BG)
         line.pack(fill="x", padx=PAGE_GUTTER, pady=10)
         self.top_line = line
+        # 左边一枚小标 + 名字。顶栏原来整条是空的（只有右边两颗按钮），看着像
+        # 一块没画完的留白；有个 wordmark 才像"一个应用"。
+        brand = tk.Frame(line, bg=PANEL_BG)
+        brand.pack(side="left")
+        try:
+            # 256 的原图缩到 28：标题栏和状态栏都够用了，顶栏里不抢戏。
+            self._brand_icon = self.icon.subsample(9)
+            tk.Label(brand, image=self._brand_icon, bg=PANEL_BG).pack(side="left")
+        except tk.TclError:
+            pass  # 缩放不了就不摆图标，字照留
+        tk.Label(brand, text="Claude 启动器", bg=PANEL_BG, fg=TEXT,
+                 font=font(10, True)).pack(side="left", padx=(8, 0))
         # "配置目录"四个字对没上手的人等于没解释，得补一句这是哪儿。挂悬停提示，
         # 鼠标停上去才出——顶栏只留一条线，塞不下一句话。
         tool_dir = PillButton(line, "打开配置目录", self._open_tool_dir, bg=PANEL_BG)
@@ -480,7 +538,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             value="左边点一本，右边按「新会话」；行首那个数字按住 Ctrl 就能直接开，"
                   "Ctrl+F 跳到筛选框。")
         feedback = tk.Label(footer, textvariable=self.feedback_var, bg=PAGE_BG,
-                            fg=MUTED, font=font(9), anchor="w", justify="left")
+                            fg=TEXT, font=font(9), anchor="w", justify="left")
         feedback.pack(fill="x", padx=PAGE_GUTTER, pady=8)
         # 长消息（搬迁之后那条整路径之类）得能折行——不折就被横着裁掉半截。折到
         # 多宽跟着自己的实际宽度走：窗口拉宽拉窄都跟着变，不用去猜窗口尺寸。
@@ -572,7 +630,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         parent.pack_propagate(False)
         parent.configure(width=TERMINAL_MIN_WIDTH)
 
-        self.term_holder = tk.Frame(parent, bg="#1c1c1c", height=240)
+        self.term_holder = tk.Frame(parent, bg=theme.TERM_BG, height=240)
         self.term_holder.pack_propagate(False)
         self.term_holder.bind("<Configure>", self._on_term_resize)
 
@@ -580,8 +638,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
                        search=None, top=None):
         head = tk.Frame(parent, bg=PAGE_BG)
         head.pack(fill="x", pady=(16, 6))
-        tk.Label(head, text=title, bg=PAGE_BG, fg=TEXT,
-                 font=font(11, True)).pack(side="left")
+        section_title(head, title).pack(side="left")
         for text, command in reversed(actions):
             PillButton(head, text, command, bg=PAGE_BG).pack(side="right", padx=(6, 0))
         # 标题和筛选框中间那一条。搜索框得跟在标题后面、列表前面，不然 pack 顺序

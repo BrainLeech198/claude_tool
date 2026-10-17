@@ -51,6 +51,9 @@ def default_config():
         "roots": [WORKPLACE_DIR],
         "workspaces": [new_workspace_entry("默认", WORKPLACE_DIR)],
         "window": None,
+        # 外观："light" / "dark"。换的时候由 launcher.apply_theme 落盘，
+        # 下次开窗在读配置之后、建界面之前就套上（见 theme.apply）。
+        "theme": "light",
         # 左栏当前选中那一本（记路径不记名字：改名不影响选中）。
         # 老配置文件里没这个键，读的地方一律用 .get()，别用 []。
         "selected_workspace": None,
@@ -127,6 +130,8 @@ def load_config():
     config["auto_continue"] = bool(data.get("auto_continue"))
     config["embed"] = bool(data.get("embed"))
     config["auto_version_check"] = bool(data.get("auto_version_check"))
+    # 不认识的、老配置里没有的，一律回到浅色——深色是后来才有的键。
+    config["theme"] = data.get("theme") if data.get("theme") in ("light", "dark") else "light"
     # 档位是手改得坏的：写个 4、写个字符串，都当没写，回落到第 1 档。
     tier = data.get("autonomy")
     config["autonomy"] = tier if tier in (1, 2, 3) else 1

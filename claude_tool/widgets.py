@@ -6,20 +6,31 @@ Row 和 PillButton 都是 Canvas 而不是 Frame——圆角、悬停换色、�
 import tkinter as tk
 from tkinter import ttk
 
+from claude_tool import theme
 from claude_tool.theme import (
     ACCENT,
     ACCENT_HOVER,
     ACCENT_SOFT,
+    AGENT_CLAUDE,
+    AGENT_CLAUDE_BG,
+    AGENT_CODEBUDDY,
+    AGENT_CODEBUDDY_BG,
     BORDER,
     HOVER_BG,
     MUTED,
+    OK,
+    OK_HOVER,
     PAGE_BG,
     PANEL_BG,
+    PRIMARY_FG,
+    ROW_ACTION_HOVER,
     TEXT,
     WARN,
+    WARN_HOVER,
     ellipsize,
     font,
     measure,
+    resolve,
 )
 
 
@@ -34,22 +45,51 @@ def rounded_rect(canvas, x1, y1, x2, y2, radius, **kwargs):
     return canvas.create_polygon(points, smooth=True, **kwargs)
 
 
+def agent_style(agent_id):
+    """agent 徽标用的那套颜色和字母：claude 陶土橙 C，codebuddy 蓝 B。
+
+    字母是给 240 宽左栏用的——全名摆不下，拼音首字母又没人看得懂；右栏详情
+    那边地方宽裕，直接写全名（见 ui/detail.py）。
+    """
+    if agent_id == "codebuddy":
+        return AGENT_CODEBUDDY_BG, AGENT_CODEBUDDY, "B"
+    return AGENT_CLAUDE_BG, AGENT_CLAUDE, "C"
+
+
+def section_title(parent, text):
+    """分节标题：左边一条强调色小竖条 + 标题。
+
+    0.4 之前标题和正文一个色，扫一眼分不出"这是一节的头"还是"这是内容"。
+    竖条不占几个像素，但整页的层次立刻出来了。
+    """
+    box = tk.Frame(parent, bg=PAGE_BG)
+    tk.Frame(box, bg=ACCENT, width=3, height=13).pack(side="left")
+    tk.Label(box, text=text, bg=PAGE_BG, fg=TEXT,
+             font=font(11, True)).pack(side="left", padx=(7, 0))
+    return box
+
+
 class PillButton(tk.Canvas):
     """圆角胶囊按钮。可以置灰：画成灰底灰字、不吃悬停、点了也不回调。
 
     键盘也能用：takefocus 打开，Tab 走到它、回车或空格当按一下，聚焦时描一圈
     强调色的边。自绘控件默认进不了 Tab 顺序，不补这段的话纯键盘用户在主窗里
     除了 Ctrl+数字之外什么都按不了。
+
+    tone 用来表达"这颗按钮带着状况"：warn 是红底（模型连不上），ok 是绿底。
+    不传就是普通按钮/强调按钮，跟以前一样。
     """
 
-    def __init__(self, parent, text, command, primary=False, bg=PAGE_BG, height=28,
-                 enabled=True):
+    def __init__(self, parent, text, command, primary=False, bg=None, height=28,
+                 enabled=True, tone=None):
         width = measure(text, 10, primary) + 26
-        super().__init__(parent, width=width, height=height, bg=bg,
+        super().__init__(parent, width=width, height=height,
+                         bg=PAGE_BG if bg is None else bg,
                          highlightthickness=0, borderwidth=0, takefocus=1)
         self._text = text
         self._command = command
         self._primary = primary
+        self._tone = tone
         self._enabled = enabled
         self._hover = False
         self._focused = False
@@ -95,9 +135,13 @@ class PillButton(tk.Canvas):
         self.delete("all")
         if not self._enabled:
             fill, outline, fg = HOVER_BG, BORDER, MUTED
+        elif self._tone == "warn":
+            fill, outline, fg = (WARN_HOVER if self._hover else WARN), "", PRIMARY_FG
+        elif self._tone == "ok":
+            fill, outline, fg = (OK_HOVER if self._hover else OK), "", PRIMARY_FG
         elif self._primary:
             fill = ACCENT_HOVER if self._hover else ACCENT
-            outline, fg = "", "#ffffff"
+            outline, fg = "", PRIMARY_FG
         else:
             fill = HOVER_BG if self._hover else PANEL_BG
             outline, fg = BORDER, TEXT
@@ -119,9 +163,9 @@ class Row(tk.Canvas):
     ICON_W = 32
 
     def __init__(self, parent, title, subtitle="", on_click=None, actions=(),
-                 active=False, marker=False, warn="", warn_color=WARN,
-                 bg=PAGE_BG, height=52, badge=None):
-        super().__init__(parent, height=height, bg=bg,
+                 active=False, marker=False, warn="", warn_color=None,
+                 bg=None, height=52, badge=None, agent=None):
+        super().__init__(parent, height=height, bg=PAGE_BG if bg is None else bg,
                          highlightthickness=0, borderwidth=0)
         self.title = title
         self.subtitle = subtitle
@@ -131,7 +175,10 @@ class Row(tk.Canvas):
         self.marker = marker
         self.warn = warn
         self.badge = badge
-        self.warn_color = warn_color
+        # 这一行是哪一档 agent 的工作区。传了就在标题那行右端画个小徽标
+        # （左栏 240 宽摆不下全名，用 C / B 一个字母）。
+        self.agent = agent
+        self.warn_color = WARN if warn_color is None else warn_color
         self._hover = None
 
         self.bind("<Configure>", lambda e: self._draw())
@@ -181,9 +228,9 @@ class Row(tk.Canvas):
         elif isinstance(target, int):
             self.actions[target][1]()
 
-    def set_warn(self, text, color=WARN):
+    def set_warn(self, text, color=None):
         """换掉右侧那行小字；测试结果就是靠它落在卡片上的。"""
-        self.warn, self.warn_color = text, color
+        self.warn, self.warn_color = text, (WARN if color is None else color)
         self._draw()
 
     def _draw(self):
@@ -200,6 +247,11 @@ class Row(tk.Canvas):
             fill = PANEL_BG
         rounded_rect(self, 0, 0, width - 1, height - 1, 10,
                      fill=fill, outline=ACCENT_SOFT if self.active else BORDER)
+        if self.active:
+            # 选中那一行在最左边加一道强调色竖条。只靠浅色底的话，深色主题下
+            # 跟悬停底几乎分不出来。
+            rounded_rect(self, 6, 10, 9, height - 10, 1.5,
+                         fill=ACCENT, outline="")
 
         x = 16
         if self.badge is not None:
@@ -227,6 +279,21 @@ class Row(tk.Canvas):
         title_room = max(action_edge - x, 40)
         subtitle_room = title_room
 
+        # agent 徽标：标题那行右端一个小色块。先占位、再算标题的可用宽度，
+        # 不然标题会一直画到徽标底下。
+        chip_left = None
+        if self.agent:
+            cy = height / 2 - 9 if self.subtitle else height / 2
+            cx2 = width - 10
+            cx1 = cx2 - 20
+            chip_bg, chip_fg, letter = agent_style(self.agent)
+            rounded_rect(self, cx1, cy - 8, cx2, cy + 8, 5,
+                         fill=chip_bg, outline=chip_fg, width=1)
+            self.create_text((cx1 + cx2) / 2, cy + 1, text=letter,
+                             font=font(8, True), fill=chip_fg)
+            chip_left = cx1 - 6
+            title_room = max(min(title_room, chip_left - x), 40)
+
         # 备注靠右对齐、跟标题同一行。放下面那行会跟路径抢地方，把「D:\File\claude\kk」
         # 截成「D:\File\...」——正好是最活跃的几行最难认。标题这边空得很（名字普遍
         # 四五个字），拿标题那行的余量换路径的完整，划算得多。
@@ -234,12 +301,14 @@ class Row(tk.Canvas):
             # 备注最长只占到"给标题留 90px"为止。它的内容是外部来的（连不上的
             # 底层原因、异常类名），长度不可控；不封顶的话一条长错误就能把标题
             # 挤成一片省略号，那一行就认不出来了。
-            warn = ellipsize(self.warn, max(action_edge - x - 102, 60), 9)
+            edge = chip_left if chip_left is not None else action_edge
+            warn = ellipsize(self.warn, max(edge - x - 102, 60), 9)
             warn_width = measure(warn, 9)
             note_y = height / 2 - 9 if self.subtitle else height / 2
             title_room = max(title_room - warn_width - 12, 40)
-            self.create_text(action_edge, note_y, text=warn,
-                             anchor="e", fill=self.warn_color, font=font(9))
+            self.create_text(edge, note_y, text=warn,
+                             anchor="e", fill=resolve(self.warn_color),
+                             font=font(9))
 
         title_font = font(11, self.active)
         if self.subtitle:
@@ -260,7 +329,7 @@ class Row(tk.Canvas):
             cx, cy = (x1 + x2) / 2, height / 2
             if self._hover == index:
                 self.create_oval(x1 + 2, cy - 11, x2 - 2, cy + 11,
-                                 fill="#e6e9ef", outline="")
+                                 fill=ROW_ACTION_HOVER, outline="")
             # 悬停的时候字色压深一点，跟底下的浅灰圆一起把"这个能点"说清楚。
             self.create_text(cx, cy, text=glyph, font=font(11),
                              fill=TEXT if self._hover == index else MUTED)
@@ -269,7 +338,10 @@ class Row(tk.Canvas):
 class ScrollArea(tk.Frame):
     """带细滚动条的容器，内容都塞进 .inner。"""
 
-    def __init__(self, parent, max_height, bg=PAGE_BG):
+    # bg 不能写成 bg=PAGE_BG：默认参数在 import 那一刻就定死了，换主题时
+    # theme.apply 重绑的是模块里的名字，改不动已经存进默认参数里的那个值。
+    def __init__(self, parent, max_height, bg=None):
+        bg = PAGE_BG if bg is None else bg
         super().__init__(parent, bg=bg)
         self.max_height = max_height
         self.canvas = tk.Canvas(self, height=max_height, bg=bg,
@@ -393,6 +465,7 @@ def make_form(dialog, title):
     dialog.resizable(False, False)
     dialog.configure(bg=PAGE_BG)
     dialog.transient(dialog.master)
+    theme.titlebar(dialog)
 
     tk.Label(dialog, text=title, bg=PAGE_BG, fg=TEXT,
              font=font(13, True), anchor="w").pack(fill="x", padx=20, pady=(16, 10))

@@ -18,7 +18,7 @@ from claude_tool.config import humanize_ago, last_chat_time, save_config
 from claude_tool.handoff import HANDOFF_FILE
 from claude_tool.presets import discover_presets
 from claude_tool.theme import BORDER, HOVER_BG, MUTED, PAGE_BG, TEXT, font
-from claude_tool.widgets import PillButton, Tip
+from claude_tool.widgets import PillButton, Tip, agent_style
 
 
 # 右栏该有多宽。它不是"右栏就直接摆这么宽"——右栏是 fill="both" + expand，多宽
@@ -83,9 +83,19 @@ class DetailMixin:
         self.detail_title_var = tk.StringVar()
         self.detail_path_var = tk.StringVar()
         self.detail_meta_var = tk.StringVar()
-        tk.Label(parent, textvariable=self.detail_title_var, bg=PAGE_BG,
-                 fg=TEXT, font=font(15, True), anchor="w").pack(
-            fill="x", pady=(14, 2))
+
+        # 标题那行：左边一枚 agent 徽标（陶土橙 Claude / 蓝 CodeBuddy），右边标题。
+        # 左栏行上地方只够一个字母，这里是全名——"这一本到底用哪档"是打开
+        # 这一本之前最该一眼看清的事。
+        title_row = tk.Frame(parent, bg=PAGE_BG)
+        title_row.pack(fill="x", pady=(14, 2))
+        self.agent_chip = tk.Label(title_row, text="", bg=HOVER_BG, fg=MUTED,
+                                   font=font(9, True), padx=8, pady=2)
+        self.agent_chip.pack(side="left", padx=(0, 8))
+        self._detail_title_label = tk.Label(
+            title_row, textvariable=self.detail_title_var, bg=PAGE_BG,
+            fg=TEXT, font=font(15, True), anchor="w")
+        self._detail_title_label.pack(side="left", fill="x", expand=True)
         tk.Label(parent, textvariable=self.detail_path_var, bg=PAGE_BG,
                  fg=MUTED, font=font(9), anchor="w").pack(fill="x")
         tk.Label(parent, textvariable=self.detail_meta_var, bg=PAGE_BG,
@@ -186,11 +196,20 @@ class DetailMixin:
             self.detail_path_var.set("左边点一下，或者先去设置里添加一个")
             self.detail_meta_var.set("")
             self._preset_btn.set_text("跟随全局")
+            self.agent_chip.pack_forget()
             self._detail_set_enabled(False)
             return
         self.detail_title_var.set(item["name"])
         self.detail_path_var.set(item["path"])
         self.detail_meta_var.set(self._detail_note(item))
+        # agent 徽标：底色和字色各用各档的招牌色，换主题时 theme.recolor_tree
+        # 会把它们翻成新调色板里对应的那组（见 theme.resolve 那套）。
+        chip_bg, chip_fg, _letter = agent_style(item.get("agent"))
+        self.agent_chip.configure(text="● " + agents.get(item.get("agent")).label,
+                                  bg=chip_bg, fg=chip_fg)
+        if self.agent_chip.winfo_manager() != "pack":
+            self.agent_chip.pack(side="left", padx=(0, 8),
+                                 before=self._detail_title_label)
         self._agent_btn.set_text(agents.get(item.get("agent")).label)
         self._preset_btn.set_text(self._preset_button_text(item))
         self._detail_set_enabled(True)

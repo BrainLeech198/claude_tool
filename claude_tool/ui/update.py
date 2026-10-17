@@ -225,7 +225,7 @@ class UpdateMixin:
             self._health_pill.destroy()
         pill = PillButton(self.top_line, "模型连不上 " + name,
                           lambda: self.open_settings("模型"),
-                          primary=True, bg=PANEL_BG)
+                          tone="warn", bg=PANEL_BG)
         Tip(pill, "当前用的「{}」这次没打通（{}）。点开「模型」页测一测、换一个。"
                   .format(name, note or "原因没读出来"))
         pill.pack(side="left", padx=(10, 0))

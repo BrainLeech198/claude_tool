@@ -250,8 +250,9 @@ def test_host():
 
     fake = FakeApp()
     host = Host(app=fake)
+    from claude_tool import __version__
     check("身份：版本 / 接口版本",
-          (host.version, host.api_version), ("0.4.0", M.API_VERSION))
+          (host.version, host.api_version), (__version__, M.API_VERSION))
 
     undo = host.register_action("toolbar", "甲", lambda: None)
     host.register_action("workspace_detail", "乙", lambda: None)

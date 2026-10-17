@@ -13,7 +13,7 @@ import tkinter as tk
 
 from claude_tool.config import save_config
 from claude_tool.theme import MUTED, PAGE_BG, TEXT, font
-from claude_tool.widgets import PillButton, Row, ScrollArea, make_entry
+from claude_tool.widgets import PillButton, Row, ScrollArea, make_entry, section_title
 
 
 # 左栏宽度。定死，不参与 _apply_min_size 的"按内容量"那套——见上面那段。
@@ -54,8 +54,7 @@ class NavMixin:
 
         head = tk.Frame(parent, bg=PAGE_BG)
         head.pack(fill="x", pady=(16, 6))
-        tk.Label(head, text="工作区", bg=PAGE_BG, fg=TEXT,
-                 font=font(11, True)).pack(side="left")
+        section_title(head, "工作区").pack(side="left")
         box = tk.Frame(parent, bg=PAGE_BG)
         box.pack(fill="x", pady=(0, 6))
         tk.Label(box, text="筛选", bg=PAGE_BG, fg=MUTED,
@@ -143,6 +142,8 @@ class NavMixin:
                       # 行号就是 Ctrl+行号。9 以后没有号（按不到），但位置留着，
                       # 免得后几行的标题跟前面错开一格。
                       badge=str(position + 1) if position < 9 else "",
+                      # 这一本归哪一档管。徽标（C / B）摆在标题那行最右边。
+                      agent=item.get("agent"),
                       on_click=lambda it=item: self.select_workspace(it["path"]),
                       )
             row.pack(fill="x", pady=3)

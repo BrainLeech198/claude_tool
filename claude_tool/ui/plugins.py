@@ -33,6 +33,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+from claude_tool import theme
 from claude_tool.paths import USER_PLUGIN_DIR
 from claude_tool.theme import (
     ACCENT,
@@ -210,6 +211,7 @@ class PluginsMixin:
         win = tk.Toplevel(self)
         win.title("插件")
         win.configure(bg=PAGE_BG)
+        theme.titlebar(win)
         win.protocol("WM_DELETE_WINDOW", self._close_plugins)
         win.bind("<Escape>", lambda _e: self._close_plugins())
         self._plugins_win = win
