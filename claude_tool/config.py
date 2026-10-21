@@ -7,7 +7,7 @@ import os
 import re
 import time
 
-from claude_tool import agents
+from claude_tool import agents, history, theme
 from claude_tool.paths import (
     CLAUDE_DIR,
     CONFIG_FILE,
@@ -51,9 +51,10 @@ def default_config():
         "roots": [WORKPLACE_DIR],
         "workspaces": [new_workspace_entry("默认", WORKPLACE_DIR)],
         "window": None,
-        # 外观："light" / "dark"。换的时候由 launcher.apply_theme 落盘，
-        # 下次开窗在读配置之后、建界面之前就套上（见 theme.apply）。
-        "theme": "light",
+        # 外观：theme.PALETTES 里的名字（paper / clay / frost / midnight /
+        # abyss / plum）。换的时候由 launcher.apply_theme 落盘，下次开窗在读
+        # 配置之后、建界面之前就套上（见 theme.apply）。
+        "theme": "paper",
         # 左栏当前选中那一本（记路径不记名字：改名不影响选中）。
         # 老配置文件里没这个键，读的地方一律用 .get()，别用 []。
         "selected_workspace": None,
@@ -130,8 +131,9 @@ def load_config():
     config["auto_continue"] = bool(data.get("auto_continue"))
     config["embed"] = bool(data.get("embed"))
     config["auto_version_check"] = bool(data.get("auto_version_check"))
-    # 不认识的、老配置里没有的，一律回到浅色——深色是后来才有的键。
-    config["theme"] = data.get("theme") if data.get("theme") in ("light", "dark") else "light"
+    # 不认识的、老配置里没有的，一律回到默认那套。老配置里的 light / dark
+    # 由 theme.canonical 翻成新名字，升级后不会退回默认色。
+    config["theme"] = theme.canonical(data.get("theme")) or "paper"
     # 档位是手改得坏的：写个 4、写个字符串，都当没写，回落到第 1 档。
     tier = data.get("autonomy")
     config["autonomy"] = tier if tier in (1, 2, 3) else 1
@@ -158,29 +160,27 @@ def projects_dir_for(agent_id):
     return agents.get(agent_id).projects_dir
 
 
-def project_dir(path):
-    """工作目录 -> ~/.claude/projects 下面存这个项目会话记录的那个目录。
+def project_dir(path, agent_id=agents.DEFAULT_AGENT):
+    """工作目录 -> 这个 agent 的会话记录目录（claude 那一档的命名规则）。
+
+    移动工作区时用它算"新旧位置各自那份记录"（见 mover.project_paths），那边只
+    处理 claude 的目录。列会话不走这儿——两档的规则不一样，见 history.project_dirs。
 
     Claude Code 的命名规则是把路径里所有非字母数字的字符换成短横：D:\\Desktop
     变成 D--Desktop，D:\\File\\claude\\kk 变成 D--File-claude-kk。猜错了也只是
     显示成"还没聊过"，不会出错。
     """
-    return os.path.join(PROJECTS_DIR, re.sub(r"[^A-Za-z0-9]", "-", path))
+    return os.path.join(agents.get(agent_id).projects_dir,
+                        re.sub(r"[^A-Za-z0-9]", "-", path))
 
 
-def last_chat_time(path):
+def last_chat_time(path, agent_id=None):
     """这个工作区最近一次会话是什么时候。找不着就返回 None。
 
-    会话记录是目录里一个个 .jsonl，最大 mtime 就是最后一次动过的时间。只算
-    .jsonl：那目录里还可能有 memory 之类的子目录，不能一并算进去。
+    按这本当前用的档位去它自己的会话库里找：以前写死 `~/.claude/projects`，
+    切到 CodeBuddy 的工作区永远显示"没聊过"。
     """
-    folder = project_dir(path)
-    try:
-        stamps = [os.path.getmtime(os.path.join(folder, name))
-                  for name in os.listdir(folder) if name.endswith(".jsonl")]
-    except OSError:
-        return None
-    return max(stamps) if stamps else None
+    return history.latest_time(agent_id or agents.DEFAULT_AGENT, path)
 
 
 def humanize_ago(stamp):

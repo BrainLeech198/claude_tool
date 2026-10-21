@@ -5,7 +5,7 @@
 的观感，恰恰是入口太多造成的。
 
 五页：模型 / 工作区 / 行为开关 这三页把原来平铺在主窗上的三块搬进来，「外观」
-那页挑深浅配色，「关于」那页收版本号、官网链接和手动查启动器新版。
+那页挑一套配色（六选一），「关于」那页收版本号、官网链接和手动查启动器新版。
 
 **关窗只是 withdraw，不是 destroy**：模型那页的「测试」是后台线程往队列里灌结果、
 主线程取出来回填到那几行卡片上的（见 ui/models.py 的 _drain_results）。窗口一销毁，
@@ -18,16 +18,18 @@ from tkinter import messagebox
 from claude_tool import __version__
 from claude_tool import agents, theme
 from claude_tool import versions
+from claude_tool.agent import agent_path
 from claude_tool.host import EMBED_SUPPORTED, open_url
-from claude_tool.theme import MUTED, PAGE_BG, PANEL_BG, TEXT, font
-from claude_tool.widgets import PillButton, Tip
+from claude_tool.theme import MUTED, OK, PAGE_BG, PANEL_BG, TEXT, WARN, font
+from claude_tool.widgets import PaletteCard, PillButton, Tip
 
 
 # 分页顺序就是这儿定的，_settings_rail 照着画。
-PAGES = ("模型", "工作区", "外观", "行为开关", "关于")
+PAGES = ("模型", "命令行", "工作区", "外观", "行为开关", "关于")
 # 每个分页由哪个方法建。名字在这儿配一次，_settings_show_page 照着调。
 BUILDERS = {
     "模型": "_settings_page_models",
+    "命令行": "_settings_page_tools",
     "工作区": "_settings_page_workspaces",
     "外观": "_settings_page_appearance",
     "行为开关": "_settings_page_switches",
@@ -87,6 +89,10 @@ class SettingsMixin:
         for frame in self._settings_pages.values():
             frame.pack_forget()
         frame = self._settings_pages.get(name)
+        if frame is not None and name == "命令行":
+            # 这页写的是"现在装没装"，缓存的那份一装完就过时，每次进来重查。
+            frame.destroy()
+            frame = None
         if frame is None:
             frame = tk.Frame(self._settings_body, bg=PAGE_BG)
             self._settings_pages[name] = frame
@@ -152,6 +158,50 @@ class SettingsMixin:
         self._render_model_agent_bar()
         self.refresh_models()
 
+    # ── 命令行 ──
+
+    def _settings_page_tools(self, parent):
+        """每个 agent 一张卡：装没装、装在哪、一键装或修。
+
+        状态是现查的（这一页每次显示都重建，见 _settings_show_page），装完回来
+        看一眼就知道变没变。
+        """
+        tk.Label(parent, text="命令行", bg=PAGE_BG, fg=TEXT,
+                 font=font(13, True), anchor="w").pack(fill="x")
+        tk.Label(parent,
+                 text="每个 agent 都得先有自己的命令行，启动器才能替你开会话。"
+                      "「安装 / 修复」会走它自己的官方安装路线，跑完这页自己刷新。",
+                 bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w", justify="left",
+                 wraplength=SETTINGS_W - 200).pack(fill="x", pady=(2, 12))
+
+        for agent_id in agents.ids():
+            profile = agents.get(agent_id)
+            found = agent_path(profile)
+            card = tk.Frame(parent, bg=PANEL_BG)
+            card.pack(fill="x", pady=(0, 8))
+            inner = tk.Frame(card, bg=PANEL_BG)
+            inner.pack(fill="x", padx=12, pady=10)
+            PillButton(inner, "修复" if found else "安装",
+                       lambda p=profile: self._open_install_dialog(profile=p),
+                       bg=PANEL_BG, primary=not found).pack(side="right",
+                                                           padx=(10, 0))
+            text = tk.Frame(inner, bg=PANEL_BG)
+            text.pack(side="left", fill="x", expand=True)
+            tk.Label(text, text=profile.label, bg=PANEL_BG, fg=TEXT,
+                     font=font(10, True), anchor="w").pack(fill="x")
+            tk.Label(text,
+                     text=found or "没找到。装上它才能用这一档开会话。",
+                     bg=PANEL_BG, fg=OK if found else WARN, font=font(9),
+                     anchor="w", justify="left",
+                     wraplength=SETTINGS_W - 300).pack(fill="x", pady=(2, 0))
+
+    def _refresh_tools_page(self):
+        """装完回来把「命令行」那页重画一遍。没开着设置窗、或者不在这页就算了。"""
+        if self._settings_win is None or not self._settings_win.winfo_exists():
+            return
+        if self._settings_page == "命令行":
+            self._settings_show_page("命令行")
+
     # ── 工作区 ──
 
     def _settings_page_workspaces(self, parent):
@@ -174,31 +224,38 @@ class SettingsMixin:
 
     def _settings_page_appearance(self, parent):
         tk.Label(parent, text="配色", bg=PAGE_BG, fg=TEXT,
-                 font=font(12, True), anchor="w").pack(fill="x")
-        tk.Label(parent, text="换完立刻生效，下次开窗也记着。",
+                 font=font(13, True), anchor="w").pack(fill="x")
+        tk.Label(parent, text="六套配色，点一张就换。换完立刻生效，下次开窗也记着。",
                  bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
                  ).pack(fill="x", pady=(2, 12))
         self._theme_choice = tk.Frame(parent, bg=PAGE_BG)
         self._theme_choice.pack(fill="x")
         self._render_theme_choice()
         tk.Label(parent,
-                 text="深色那套是把底色压到近黑、文字提亮，强调色和两个 agent 的"
-                      "招牌色都单独调过，夜里看不刺眼。想换回来点「浅色」就行。",
+                 text="浅色三套压着饱和度，白天长时间看不刺眼；深色三套把底色"
+                      "压深、文字提亮，强调色也各自调过。卡片左边那块示意"
+                      "就是这套配色的样子。",
                  bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w", justify="left",
-                 wraplength=SETTINGS_W - 200).pack(fill="x", pady=(14, 0))
+                 wraplength=SETTINGS_W - 200).pack(fill="x", pady=(10, 0))
 
     def _render_theme_choice(self):
-        """重画「浅色 / 深色」那两个胶囊。当前那套用强调色。"""
+        """重画那六张配色卡，当前那套描一圈强调色。
+
+        卡片不缓存、整排重建：换主题之后卡片的边框和文字得跟着新配色走，
+        而色卡里面的示意块又必须保持各自那套的颜色，重建最简单也最不会错。
+        """
         frame = getattr(self, "_theme_choice", None)
         if frame is None or not frame.winfo_exists():
             return
         for child in frame.winfo_children():
             child.destroy()
         now = theme.current()
-        for name, label in (("light", "浅色"), ("dark", "深色")):
-            PillButton(frame, label, lambda n=name: self.apply_theme(n),
-                       primary=(name == now), bg=PAGE_BG,
-                       ).pack(side="left", padx=(0, 8))
+        for index, (name, info) in enumerate(theme.PALETTE_INFO.items()):
+            card = PaletteCard(
+                frame, name, theme.PALETTES[name], info["label"], info["dark"],
+                name == now, lambda n=name: self.apply_theme(n))
+            card.grid(row=index // 2, column=index % 2,
+                      sticky="w", padx=(0, 12), pady=(0, 10))
 
     # ── 行为开关 ──
 
@@ -264,7 +321,7 @@ class SettingsMixin:
         人传 True 了——留着的唯一去处就是这一页（见 ui/update.py 里那段说明）。
         """
         tk.Label(parent, text="Claude 启动器", bg=PAGE_BG, fg=TEXT,
-                 font=font(12, True), anchor="w").pack(fill="x")
+                 font=font(13, True), anchor="w").pack(fill="x")
         tk.Label(parent, text="版本 {}".format(__version__), bg=PAGE_BG,
                  fg=MUTED, font=font(10), anchor="w").pack(fill="x", pady=(2, 14))
 

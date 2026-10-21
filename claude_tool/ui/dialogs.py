@@ -13,7 +13,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from claude_tool import install
+from claude_tool import history, install
 from claude_tool import agents
 from claude_tool.agent import agent_path
 from claude_tool.host import open_url
@@ -64,10 +64,16 @@ from claude_tool.providers import (
     query_with_ai,
     save_providers,
 )
-from claude_tool.config import new_workspace_entry, path_key, save_config
+from claude_tool.config import (
+    humanize_ago,
+    new_workspace_entry,
+    path_key,
+    save_config,
+)
 from claude_tool.handoff import HANDOFF_FILE, READ_HANDOFF_PROMPT
 from claude_tool.widgets import (
     PillButton,
+    Row,
     ScrollArea,
     finish_form,
     make_combo,
@@ -79,11 +85,11 @@ from claude_tool.widgets import (
 def unbound_model_label(agent_id):
     """没绑预设时，这一本用的是什么，一句话说清。
 
-    codebuddy 有自带默认模型（按它自己的积分倍率计费），没绑就用它；claude 没绑
-    就用全局那份 settings.json 里现在生效的预设。
+    codebuddy 家族（国内/国际两档）有自带默认模型（按它自己的积分倍率计费），
+    没绑就用它；claude 没绑就用全局那份 settings.json 里现在生效的预设。
     """
-    return ("CodeBuddy 自带默认模型" if agents.get(agent_id).id == "codebuddy"
-            else "跟随全局")
+    return ("CodeBuddy 自带默认模型"
+            if agents.get(agent_id).family == "codebuddy" else "跟随全局")
 
 
 class LauncherDialogs:
@@ -750,13 +756,17 @@ class LauncherDialogs:
         dialog.bind("<Return>", lambda e: save())
         self._center(dialog)
 
-    def open_workspace(self, item, cont=None):
+    def open_workspace(self, item, cont=None, session_id=None):
         """点工作区先问一句：新开一个还是接着上次聊，要不要先读交接文档。
 
         cont 是"从哪儿点进来的"，不传就是老样子（不预选，回车当"接着上次聊"）：
         - 右栏「新会话」传 False：默认不读交接文档，回车=开新会话，主按钮也是它。
         - 右栏「接着上次」传 True：默认读交接文档，回车=接着上次聊。
         框子本身照旧摆出来——**权限等级只有这儿能改**（见 ui/detail.py 的说明）。
+
+        session_id 是"要续具体哪一条"（会话列表行尾的「⋯」走这条路）。给了它，
+        主按钮变成「接着这条」，go(True) 走 --resume 而不是 --continue；选「开新
+        会话」时它作废，照常开新的。
         """
         path = item["path"]
         if not os.path.isdir(path):
@@ -765,6 +775,10 @@ class LauncherDialogs:
 
         handoff = os.path.join(path, HANDOFF_FILE)
         has_handoff = os.path.isfile(handoff)
+        target = None
+        if session_id:
+            target = next((s for s in getattr(self, "_sessions", [])
+                           if s["id"] == session_id), None)
 
         dialog = tk.Toplevel(self)
         dialog.grab_set()
@@ -773,6 +787,15 @@ class LauncherDialogs:
         tk.Label(body, text=path, bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
                  justify="left", wraplength=430).grid(row=0, column=0, columnspan=2,
                                                       sticky="w")
+        if target is not None:
+            # 让用户确认点的是哪一条——列表里标题可能被截过，这里给全的。
+            tk.Label(body, text="接着：" + target["title"], bg=PAGE_BG, fg=TEXT,
+                     font=font(10, True), justify="left", anchor="w",
+                     wraplength=430,
+                     ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+            row_shift = 1
+        else:
+            row_shift = 0
 
         # 不传 cont 时照旧：有交接文档就勾上（老的默认值就是它）。
         if cont is None:
@@ -785,9 +808,9 @@ class LauncherDialogs:
                            variable=read_var, bg=PAGE_BG, fg=TEXT, font=font(10),
                            activebackground=PAGE_BG, selectcolor=PANEL_BG,
                            highlightthickness=0, bd=0, anchor="w",
-                           ).grid(row=1, column=0, columnspan=2, sticky="w",
+                           ).grid(row=1 + row_shift, column=0, columnspan=2, sticky="w",
                                   pady=(12, 0))
-        row_after = 2 if has_handoff else 1
+        row_after = (2 if has_handoff else 1) + row_shift
 
         # 权限等级：预选这个工作区上次用的那档，选了就记回工作区条目里。
         # 按下的永远是下拉里那一行的下标，真正的值（claude 要的那串英文）从
@@ -840,10 +863,12 @@ class LauncherDialogs:
         perm_combo.bind("<<ComboboxSelected>>", pick_permission)
         row_after += 3
 
-        tk.Label(body, text="第一次进这个目录，选「开新会话」。想接着上次那段聊，"
-                            "就选「接着上次聊」——它接的是这个话题里最近的那次会话。",
-                 bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
-                 wraplength=430,
+        hint = ("接着选中的这条会话继续聊。权限和交接文档在这儿改，改完再按「接着这条」。"
+                if session_id else
+                "第一次进这个目录，选「开新会话」。想接着上次那段聊，"
+                "就选「接着上次聊」——它接的是这个话题里最近的那次会话。")
+        tk.Label(body, text=hint, bg=PAGE_BG, fg=MUTED, font=font(9), justify="left",
+                 anchor="w", wraplength=430,
                  ).grid(row=row_after, column=0, columnspan=2, sticky="w",
                         pady=(12, 0))
 
@@ -856,12 +881,19 @@ class LauncherDialogs:
                 if item in self.config_data["workspaces"]:
                     save_config(self.config_data)
             dialog.destroy()
-            self.launch_workspace(item, cont=cont, prompt=prompt)
+            # 续指定会话时走 --resume；cont 那种"最近一条"才用 --continue。
+            self.launch_workspace(item, cont=bool(cont and not session_id),
+                                  prompt=prompt,
+                                  session_id=session_id if cont else None)
 
         # 主按钮跟着"从右栏哪个按钮点进来"走：点「新会话」进来的，回车/主按钮
         # 就该是开新会话，不然默认选中项和按钮上写的字是拧着的。
-        finish_form(dialog, [("接着上次聊", lambda: go(True), cont is not False),
-                             ("开新会话", lambda: go(False), cont is False)])
+        if session_id:
+            finish_form(dialog, [("接着这条", lambda: go(True), True),
+                                 ("开新会话", lambda: go(False), False)])
+        else:
+            finish_form(dialog, [("接着上次聊", lambda: go(True), cont is not False),
+                                 ("开新会话", lambda: go(False), cont is False)])
         dialog.bind("<Escape>", lambda e: dialog.destroy())
         dialog.bind("<Return>", lambda e: go(cont if cont is not None else True))
         self._center(dialog)
@@ -1130,7 +1162,7 @@ class LauncherDialogs:
         self._center(dialog)
 
     def _open_install_dialog(self, updating=False, profile=None):
-        """没找到 claude 时，那颗「帮我装 claude」开的面板；claude 旧了时，顶栏
+        """没找到某个 agent 时，那颗「帮我装 xxx」开的面板；claude 旧了时，顶栏
         那颗「有新版」开的也是它，只是 updating=True。
 
         三块，从上到下：这台机器上是什么（体检表）、能走哪几条路（全列出来，
@@ -1139,11 +1171,12 @@ class LauncherDialogs:
         窗口，做完了也不知道该看哪儿。
 
         两种模式共用一套控件，差在措辞、差在默认选中哪条：装的时候默认是第一条
-        能走的（官方原生脚本）；升级的时候默认是"这份 claude 当初就是用这条装
-        的"那条（见 install.installed_via），认不出来才退回第一条能走的。
+        能走的；升级的时候默认是"这份当初就是用这条装的"那条（见
+        install.installed_via），认不出来才退回第一条能走的。
 
-        路那份清单在 install.routes() 里，这层只管画。codebuddy 的路线是空的
-        （它没有一键装），这时不摆单选和命令格，只说一句「请从官网装」。
+        路那份清单在 install.routes() 里，这层只管画。档位要是真没有能走的路
+        （没有 npm 包、也没有原生脚本），就不摆单选和命令格，只说一句「请从
+        官网装」——不拿别的 agent 的命令凑数。
         """
         profile = profile or agents.get(agents.DEFAULT_AGENT)
         dialog = tk.Toplevel(self)
@@ -1169,7 +1202,7 @@ class LauncherDialogs:
         head = len(table) + 2
 
         if not routes:
-            # codebuddy 这轮不提供一键装——不摆假路线，老实说去官网装。
+            # 一条能走的路都没有——不摆假路线，老实说去官网装。
             tk.Label(body, text="怎么" + what, bg=PAGE_BG, fg=TEXT,
                      font=font(10, True), anchor="w").grid(
                          row=head, column=0, columnspan=2, sticky="w",
@@ -1200,8 +1233,9 @@ class LauncherDialogs:
                                   pady=(14, 2))
 
         # 选中那条的下标。先看有没有哪条是 routes() 标了 pick 的（升级模式下那
-        # 就是"你现在这份 claude 用的那条"）；没标就落在第一条能走的路上——第一
-        # 条是官方推荐的原生脚本，Windows 上它不需要任何前提，所以几乎总是它。
+        # 就是"你现在这份 agent 用的那条"）；没标就落在第一条能走的路上——
+        # claude 的第一条是官方原生脚本，Windows 上它不需要任何前提，所以几乎
+        # 总是它；codebuddy 的第一条是 npm。
         picked = tk.IntVar(value=next(
             (i for i, r in enumerate(routes) if r["pick"] and r["ready"]),
             next((i for i, r in enumerate(routes) if r["ready"]), 0)))
@@ -1233,7 +1267,7 @@ class LauncherDialogs:
                        pady=(8 if index else 4, 0))
             if route["ready"]:
                 usable.append(radio)
-            # 说明、前提、"这条是不是你那份 claude"，合成一行小字。前提不满足的
+            # 说明、前提、"这条是不是你那份 agent"，合成一行小字。前提不满足的
             # 那条，理由就在这儿——灰着不说为什么，用户只能猜。升级模式下选错
             # 一条会在旁边多装一份，那句话也得摆在这儿，不能只写在别处。
             note = "{}　·　{}".format(route["why"], route["needs"])
@@ -1341,15 +1375,20 @@ class LauncherDialogs:
             # 检测」。升级完还要再问一次网上是哪版：顶栏那颗「有新版」得靠这个
             # 掉下去，不然升完了它还杵在那儿。那条自动查的勾没开也得问这一次
             # ——用户是手动点的「有新版」过来的，勾没开也该看到结果。
-            if updating and code == 0:
-                self._force_version_check = True
-            self._recheck_claude()
+            # 顶栏的「有新版」和那条问候横幅都只认默认档位（claude），装
+            # codebuddy 不该去动它们。
+            if profile.id == agents.DEFAULT_AGENT:
+                if updating and code == 0:
+                    self._force_version_check = True
+                self._recheck_claude()
             fresh = agent_path(profile)
             if fresh:
                 put("{}好了，{} 在 {}。".format(what, profile.label, fresh), OK)
             else:
                 put("还是没找到。上面那几行里有报错的话，照它说的来看看；"
                     "也可以点「打开官网说明」。", WARN)
+            # 设置窗正停在「命令行」页的话，把状态和按钮文案换过来。
+            self._refresh_tools_page()
 
         def start():
             if running[0]:
@@ -1613,6 +1652,133 @@ class LauncherDialogs:
         dialog.bind("<Return>", lambda e: go())
         dialog.bind("<Escape>", lambda e: dialog.destroy())
         to_entry.focus_set()
+        self._center(dialog)
+
+    def rename_session(self, item, session, on_done=None, owner=None):
+        """给一条会话改名：填个新名字，往记录文件末尾补一条 ai-title。
+
+        `on_done` 给「查看全部」用——它手里那份列表得重画一遍。`owner` 是开这
+        扇窗的那扇对话框（会话记录列表）：Tk 的 grab 不排队，改名这扇一销毁，
+        它的模态就跟着没了，得手动还给 owner。
+        """
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "给会话改名")
+        tk.Label(body, text="现在叫", bg=PAGE_BG, fg=MUTED, font=font(9),
+                 anchor="w").pack(fill="x")
+        tk.Label(body, text=session["title"], bg=PAGE_BG, fg=TEXT, font=font(10),
+                 anchor="w", justify="left", wraplength=420,
+                 ).pack(fill="x", pady=(2, 10))
+        name_var = tk.StringVar(value=session["title"])
+        entry = make_entry(body, name_var, width=40)
+        entry.pack(fill="x")
+
+        def close():
+            dialog.destroy()
+            if owner is not None and owner.winfo_exists():
+                owner.grab_set()
+
+        def save():
+            title = " ".join(name_var.get().split())
+            if not title:
+                messagebox.showerror("没填名字", "会话名不能是空的。",
+                                     parent=dialog)
+                return
+            if not history.rename_session(item.get("agent"), item["path"],
+                                          session["id"], title):
+                messagebox.showerror("没改成", "记录文件可能已经被别处挪走了。",
+                                     parent=dialog)
+                return
+            session["title"] = title
+            close()
+            self.refresh_sessions()
+            if on_done is not None:
+                on_done()
+            self.feedback_var.set("会话改名为「{}」。".format(title))
+
+        finish_form(dialog, [("保存", save, True), ("取消", close, False)])
+        dialog.bind("<Return>", lambda e: save())
+        dialog.bind("<Escape>", lambda e: close())
+        entry.focus_set()
+        entry.selection_range(0, "end")
+        self._center(dialog)
+
+    def open_session_picker(self, item, sessions=None):
+        """「查看全部」：把这一本的会话整份列出来，点一条就续上。
+
+        右栏只摆得下 6 条，这里不封顶（最多读 200 条，再老的翻出来也没人挑）。
+        行尾的「⋯」跟右栏那个是同一个意思：带着这条去改权限 / 读交接文档。
+        """
+        path = item["path"]
+        if sessions is None:
+            try:
+                sessions = history.list_sessions(item.get("agent"), path, limit=200)
+            except Exception:
+                sessions = []
+        # 复制一份：调用方给的是右栏那份列表，删一条只改这里的，右栏由
+        # refresh_sessions 自己重读重画。
+        sessions = list(sessions)
+
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "会话记录 · " + item["name"])
+        tk.Label(body, text=path, bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
+                 justify="left", wraplength=500).pack(fill="x")
+
+        area = ScrollArea(body, max_height=440)
+        area.pack(fill="x", pady=(10, 0))
+        empty = tk.Label(body, text="这个工作区还没有会话", bg=PAGE_BG, fg=MUTED,
+                         font=font(9), anchor="w")
+
+        def pick(session):
+            dialog.destroy()
+            self._open_session(session)
+
+        def options(session):
+            dialog.destroy()
+            self._session_options(session)
+
+        def remove(session):
+            if self.running_session(path, session["id"]) is not None:
+                messagebox.showinfo("还没关", "这条会话还开着，先关掉再删。",
+                                    parent=dialog)
+                return
+            if not messagebox.askyesno(
+                    "删除会话",
+                    "删除「{}」？\n\n记录文件会直接删掉，不进回收站。".format(
+                        session["title"]), parent=dialog):
+                return
+            if not history.delete_session(item.get("agent"), path,
+                                          session["id"]):
+                messagebox.showwarning(
+                    "没删成", "记录文件可能已经被别处挪走了。", parent=dialog)
+                return
+            sessions.remove(session)
+            self.refresh_sessions()
+            render()
+
+        def rename(session):
+            self.rename_session(item, session, on_done=render, owner=dialog)
+
+        def render():
+            area.clear()
+            for session in sessions:
+                row = Row(area.inner, title=session["title"],
+                          subtitle=humanize_ago(session["updated"]), height=46,
+                          on_click=lambda s=session: pick(s),
+                          actions=[("⋯", lambda s=session: options(s)),
+                                   ("删除", lambda s=session: remove(s)),
+                                   ("改名", lambda s=session: rename(s))])
+                row.pack(fill="x", pady=3)
+            area.fit()
+            if sessions:
+                empty.pack_forget()
+            else:
+                empty.pack(fill="x", pady=(4, 0))
+
+        render()
+        finish_form(dialog, [("关闭", dialog.destroy, False)])
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
         self._center(dialog)
 
     def _center(self, dialog):

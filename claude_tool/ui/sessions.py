@@ -13,12 +13,13 @@ import subprocess
 import tempfile
 import time
 import tkinter as tk
+import uuid
 from tkinter import messagebox, ttk
 
 from claude_tool import versions
 from claude_tool import agents
 from claude_tool import shared_memory
-from claude_tool.agent import CREATE_NO_WINDOW, agent_exe
+from claude_tool.agent import CREATE_NO_WINDOW, agent_exe, agent_path
 from claude_tool.config import save_config
 from claude_tool.handoff import (
     HANDOFF_FILE,
@@ -33,6 +34,7 @@ from claude_tool.host import (
     WINDOW_CONTROL,
     bring_next_to,
     close_window,
+    focus_window,
     fresh_terminal,
     spawn_terminal,
     terminal_windows,
@@ -272,31 +274,42 @@ class SessionsMixin:
             self._render_running()
             if gone:
                 self.feedback_var.set("有会话关掉了，正在跑的那块已经跟着更新。")
+                # 关掉之后那条记录才算写完，列表的时间和标题该跟着变。
+                self.refresh_sessions()
         if self.embedded is not None and self.embedded.process.poll() is not None:
             # 里面那个 claude 自己退了（敲了 /exit，或者刚被「关掉」掐掉），那
             # 右边就只剩一块黑着的死终端占地方，收回去。
             self.embedded = None
             self._hide_terminal()
+            self.refresh_sessions()
         self.after(1000, self._poll_running)
 
-    def track_running(self, name, path, process, hwnd=None, agent=None):
+    def track_running(self, name, path, process, hwnd=None, agent=None,
+                      session_id=None):
         """把一个刚开出去的会话记进名单，界面立刻多出一行。返回那一行。
 
         agent 是这个会话用的档位 id（claude / codebuddy）。换模型时那条"接着聊"
         流水线靠它挑出该问哪些会话——改的是某一档的 settings.json，另一档开着的
         窗口不受影响，重开时也得用回它自己那档。
+
+        session_id 是这条会话对应哪个 jsonl。同一个工作区可以同时开好几条会话，
+        所以"是不是同一行"得按 (目录, 会话 id) 认，不能再只按目录——以前一个目录
+        只留一行，开第二条就把第一条的运行状态顶掉了。没给 id 的（--continue 那
+        种"最近一条"，事先不知道是哪条）还是按目录就地改，保持老行为。
         """
         item = None
         for known in self.running:
-            if known["path"] == path:
-                # 同一个目录又开了一个，只留最新那个，免得同一行重复
+            same = (known.get("session_id") == session_id
+                    if session_id else not known.get("session_id"))
+            if known["path"] == path and same:
                 known.update({"name": name, "proc": process, "hwnd": hwnd,
-                              "watched": False, "agent": agent})
+                              "watched": False, "agent": agent,
+                              "session_id": session_id})
                 item = known
                 break
         if item is None:
             item = {"name": name, "path": path, "proc": process, "hwnd": hwnd,
-                    "watched": False, "agent": agent}
+                    "watched": False, "agent": agent, "session_id": session_id}
             self.running.append(item)
         self._render_running()
         return item
@@ -374,6 +387,28 @@ class SessionsMixin:
         self._render_running()
         self.feedback_var.set("已让「{}」的窗口关闭。".format(item["name"]))
 
+    def running_session(self, path, session_id):
+        """这条会话是不是正开着一个窗口；是就返回「正在跑」那一行。
+
+        只认启动器自己开出去的（名单里有 Popen 句柄）。在别的终端里手敲的
+        claude 看不见——那种情况宁可再开一个窗口，也不假装知道它在哪。
+        """
+        for item in self.running:
+            if (item["path"] == path and item.get("session_id") == session_id
+                    and item["proc"].poll() is None):
+                return item
+        return None
+
+    def focus_running(self, item):
+        """把已经开着的那扇窗口提到前台。认不出句柄就如实说一句。"""
+        hwnd = item.get("hwnd")
+        if hwnd and window_alive(hwnd) and focus_window(hwnd):
+            self.feedback_var.set("「{}」已经开着，切到那个窗口了。".format(item["name"]))
+            return True
+        self.feedback_var.set(
+            "「{}」已经开着（窗口还没认出来，看看任务栏）。".format(item["name"]))
+        return False
+
     def _bound_preset_env(self, item, profile):
         """这本工作区绑的模型预设的 env；没绑、或者那份预设不在盘上，返回 None。
 
@@ -389,7 +424,7 @@ class SessionsMixin:
         return read_env(path) or None
 
     def launch_workspace(self, item, cont=False, prompt=None, autopilot=False,
-                         hook_flags=None):
+                         hook_flags=None, session_id=None):
         """真正把 claude 拉起来，新窗口还是塞进本窗口看那个勾。
 
         autopilot=True 是「AI 托管」那条路：这次会话无条件挂上 hook，不看底下那个
@@ -399,10 +434,23 @@ class SessionsMixin:
         start_autonomy 按档位算好传进来。**不能在这儿另算一份**：底下那个勾只代表
         "挂上自动继续"，托管选了第 2、3 档时它算不出该多挂什么，再写一次配置就把
         刚写好的那份覆盖回第 1 档了。
+
+        session_id 给了就续那一条（`--resume`）；没给且不是 cont，就自己生成一个
+        uuid 当新会话的 id（`--session-id`）——这样窗口一开就知道它对应哪条记录，
+        "运行中"和防双开都靠它。
         """
         path = item["path"]
         permission = workspace_permission(item)
         profile = agents.get(item.get("agent"))
+        # 没装就别硬开：裸名字塞进命令行，用户只会看到一扇闪一下就没的窗口，
+        # 报的还是"不是内部或外部命令"。这儿直接把那个档位的安装面板端出来。
+        if agent_path(profile) is None:
+            self.feedback_var.set(
+                "没找到 {}，先把它的命令行装上。".format(profile.label))
+            self._open_install_dialog(profile=profile)
+            return None
+        resume_id = session_id or None
+        new_id = None if (resume_id or cont) else str(uuid.uuid4())
         # 有共享记忆就建互链、算注入文本；没有就什么都不做（老项目行为不变）。
         try:
             shared_memory.ensure_pointers(path)
@@ -432,7 +480,9 @@ class SessionsMixin:
         if self.embed_var.get():
             self.embed_workspace(item, cont, prompt, settings, permission,
                                  profile=profile,
-                                 append_system_prompt=preamble)
+                                 append_system_prompt=preamble,
+                                 resume_id=resume_id, new_session_id=new_id)
+            self.after(1500, self.refresh_sessions)
             return None
         # 拍快照得赶在启动之前：窗口是 claude 那边异步建出来的，等它冒出来再
         # 去数，就分不清哪扇是这次新开的、哪扇是上一轮留下的了。
@@ -447,18 +497,26 @@ class SessionsMixin:
         try:
             process = spawn_terminal(path, cont, prompt, settings, permission,
                                      beside=beside, profile=profile,
-                                     append_system_prompt=preamble)
+                                     append_system_prompt=preamble,
+                                     resume_id=resume_id, new_session_id=new_id)
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return
-        entry = self.track_running(item["name"], path, process, agent=profile.id)
+        entry = self.track_running(item["name"], path, process, agent=profile.id,
+                                   session_id=resume_id or new_id)
         self._watch_terminal(entry, known)
+        # 会话文件是 CLI 那边异步写的，过一会儿再刷新列表，让新开/续上的那条
+        # 马上出现在右栏里。
+        self.after(1500, self.refresh_sessions)
         if autopilot:
             self.feedback_var.set(
                 "已托管「{}」（{}）：它停下问你话时会自己接上，权限 {}。关掉那扇"
                 "窗口就结束。".format(item["name"],
                                   autonomy_caption(hook_flags),
                                   permission_option(permission)))
+        elif resume_id:
+            self.feedback_var.set("已接着这条会话（权限：{}）：{}".format(
+                permission_option(permission), path))
         else:
             self.feedback_var.set("已在新窗口启动{}（权限：{}）：{}".format(
                 "（接着上次聊）" if cont else "", permission_option(permission), path))

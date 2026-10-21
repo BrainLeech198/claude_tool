@@ -1,6 +1,6 @@
 """配色、字体、间距，以及量文字宽度的那两个工具。
 
-颜色不是一张常量表，而是一组调色板（light / dark）。这么写是为了让主题能在
+颜色不是一张常量表，而是六套调色板（三浅三深，见下面的 PALETTES）。这么写是为了让主题能在
 运行时换：`apply()` 把本模块里这批名字换成新调色板的值，**同时**把已经
 `from claude_tool.theme import PAGE_BG` 的那些模块里的同名全局也换掉——界面
 模块都是这么导入的，不换它们，换完主题只有之后新画的控件跟着变，已经摆在
@@ -21,29 +21,40 @@ from tkinter import font as tkfont
 
 # ── 调色板 ────────────────────────────────────────────────────────────────
 #
-# 两个调色板必须同键同名，apply() 按 SLOTS 逐个搬。同一张调色板里背景那组
-# 颜色不能重复，跨调色板也不行——recolor_tree 是拿颜色值反查槽位的，两个槽
-# 同色就分不清该往哪儿换。前景那组同理。
+# 六套配色，三浅三深。每套必须同键同名、一样齐全——apply() 按 SLOTS 逐个搬，
+# 缺一项换完就会留下旧色。
+#
+# 约束：**同一个颜色值不能出现在两套配色的不同槽位里**。recolor_tree 是拿颜色
+# 值反查槽位的；不同槽撞了值，就分不清该往哪儿换。同一个槽在多套里用同一个值
+# 没问题（比如几套浅色的面板都是纯白）——反查落到同一个槽，换过去还是它。
+#
+# 浅色那一组刻意压住饱和度：这是天天开着的启动器，不是海报。深色那一组的
+# 强调色都提亮过，PRIMARY_FG 相应换成近墨色，实心按钮才是深字。
 
-LIGHT = {
-    "PAGE_BG": "#f3f4f6",
+PAPER = {
+    # 底色从冷灰换成微暖的纸色：长时间看不刺眼，也跟 Claude 的陶土橙、
+    # CodeBuddy 的蓝都压得住。面板仍旧纯白，靠一点暖差分层。
+    "PAGE_BG": "#f4f3ef",
     "PANEL_BG": "#ffffff",
-    "HOVER_BG": "#eef0f4",
-    "BORDER": "#e3e6eb",
-    "TEXT": "#1e2329",
-    "MUTED": "#7d8590",
-    "ACCENT": "#4a6cf7",
-    "ACCENT_HOVER": "#3b5ce0",
-    "ACCENT_SOFT": "#e9eeff",
-    "WARN": "#d05a56",
-    "WARN_HOVER": "#b94a46",
-    "OK": "#2f9e6b",
-    "OK_HOVER": "#268557",
-    "ALERT_BG": "#fdf3f2",
+    "HOVER_BG": "#ebe9e3",
+    "BORDER": "#dedbd3",
+    "TEXT": "#1d211f",
+    # 辅助文字。白底约 5.6:1、纸色底约 5.2:1，9pt 说明文字过 AA 的 4.5:1。
+    "MUTED": "#636b67",
+    # 强调色从亮靛蓝换成深青绿：跟 CodeBuddy 的蓝拉开距离，又跟 Claude 的
+    # 陶土橙成互补。白字压在上面约 5:1。
+    "ACCENT": "#0f766e",
+    "ACCENT_HOVER": "#0b5d57",
+    "ACCENT_SOFT": "#e2f0ed",
+    "WARN": "#c0524b",
+    "WARN_HOVER": "#a8453f",
+    "OK": "#2c8a5f",
+    "OK_HOVER": "#247350",
+    "ALERT_BG": "#fbefec",
     "PRIMARY_FG": "#ffffff",
-    "ROW_ACTION_HOVER": "#e6e9ef",
-    "SCROLL_THUMB": "#cbd1da",
-    "SCROLL_THUMB_HOVER": "#aab3c0",
+    "ROW_ACTION_HOVER": "#e4e2db",
+    "SCROLL_THUMB": "#c7c6bf",
+    "SCROLL_THUMB_HOVER": "#a8a7a0",
     "TERM_BG": "#1c1c1c",
     # 两个 agent 的招牌色。claude 是那家的陶土橙，codebuddy 是蓝。
     "AGENT_CLAUDE": "#b5542f",
@@ -52,25 +63,83 @@ LIGHT = {
     "AGENT_CODEBUDDY_BG": "#e3ecff",
 }
 
-DARK = {
-    "PAGE_BG": "#14161a",
-    "PANEL_BG": "#1c1f25",
-    "HOVER_BG": "#242832",
-    "BORDER": "#2e333d",
-    "TEXT": "#e8ebf0",
-    "MUTED": "#8a93a2",
-    "ACCENT": "#6b87ff",
-    "ACCENT_HOVER": "#8299ff",
-    "ACCENT_SOFT": "#232a3f",
-    "WARN": "#e57373",
-    "WARN_HOVER": "#f08a84",
-    "OK": "#4cbf8b",
-    "OK_HOVER": "#63cf9c",
-    "ALERT_BG": "#2b1d1f",
+CLAY = {
+    # 奶油底 + 陶土橙强调。跟 Claude 的招牌色是一家人，但比 PAPER 更暖、
+    # 更"纸张发黄"一点，适合全天开着当工作台。
+    "PAGE_BG": "#f8f2e9",
+    "PANEL_BG": "#fffaf2",
+    "HOVER_BG": "#efe6d8",
+    "BORDER": "#e2d6c4",
+    "TEXT": "#2b211a",
+    "MUTED": "#75614e",
+    "ACCENT": "#a14a1c",
+    "ACCENT_HOVER": "#853b13",
+    "ACCENT_SOFT": "#f4e4d3",
+    "WARN": "#b23a34",
+    "WARN_HOVER": "#942c27",
+    "OK": "#387146",
+    "OK_HOVER": "#2c5c3a",
+    "ALERT_BG": "#fbe9e0",
     "PRIMARY_FG": "#ffffff",
-    "ROW_ACTION_HOVER": "#2f3542",
-    "SCROLL_THUMB": "#3a4150",
-    "SCROLL_THUMB_HOVER": "#4b5466",
+    "ROW_ACTION_HOVER": "#eaddcb",
+    "SCROLL_THUMB": "#d6c8b5",
+    "SCROLL_THUMB_HOVER": "#bfae97",
+    "TERM_BG": "#201a15",
+    "AGENT_CLAUDE": "#8f3b1c",
+    "AGENT_CLAUDE_BG": "#f6e3d7",
+    "AGENT_CODEBUDDY": "#2a5fbd",
+    "AGENT_CODEBUDDY_BG": "#e5ecf8",
+}
+
+FROST = {
+    # 冷雾蓝灰底 + 靛蓝强调。最"办公软件"的一套：白面板、低饱和底，
+    # 长时间看字不累，跟暖色那两套放在一起也不会认错。
+    "PAGE_BG": "#f2f4f8",
+    "PANEL_BG": "#ffffff",
+    "HOVER_BG": "#e8ecf3",
+    "BORDER": "#d9dfea",
+    "TEXT": "#1a2333",
+    "MUTED": "#5a667c",
+    "ACCENT": "#3457c4",
+    "ACCENT_HOVER": "#2a47a5",
+    "ACCENT_SOFT": "#e3e9fa",
+    "WARN": "#c43f49",
+    "WARN_HOVER": "#a6323c",
+    "OK": "#2f7c6a",
+    "OK_HOVER": "#256457",
+    "ALERT_BG": "#fbeaec",
+    "PRIMARY_FG": "#ffffff",
+    "ROW_ACTION_HOVER": "#e1e6ef",
+    "SCROLL_THUMB": "#c6cddc",
+    "SCROLL_THUMB_HOVER": "#adb6c9",
+    "TERM_BG": "#151a24",
+    "AGENT_CLAUDE": "#a34a28",
+    "AGENT_CLAUDE_BG": "#f3e5de",
+    "AGENT_CODEBUDDY": "#2f5fc7",
+    "AGENT_CODEBUDDY_BG": "#e4ebfa",
+}
+
+MIDNIGHT = {
+    "PAGE_BG": "#141716",
+    "PANEL_BG": "#1c201e",
+    "HOVER_BG": "#262b29",
+    "BORDER": "#333a37",
+    "TEXT": "#e9edea",
+    "MUTED": "#98a19c",
+    # 深色下强调色得提亮才看得见；提亮之后白字压不住，所以 PRIMARY_FG 换成
+    # 近黑的墨色。深色主题里实心按钮一律深字，对比反而更稳（约 10:1）。
+    "ACCENT": "#5fd3c4",
+    "ACCENT_HOVER": "#7ce0d3",
+    "ACCENT_SOFT": "#1f3431",
+    "WARN": "#e07a72",
+    "WARN_HOVER": "#ef938b",
+    "OK": "#55b98a",
+    "OK_HOVER": "#6fcb9d",
+    "ALERT_BG": "#2c1e1b",
+    "PRIMARY_FG": "#0d1513",
+    "ROW_ACTION_HOVER": "#2f3532",
+    "SCROLL_THUMB": "#3d4441",
+    "SCROLL_THUMB_HOVER": "#4f5753",
     "TERM_BG": "#0e0f12",
     "AGENT_CLAUDE": "#e08a6d",
     "AGENT_CLAUDE_BG": "#3a2a24",
@@ -78,8 +147,86 @@ DARK = {
     "AGENT_CODEBUDDY_BG": "#22304a",
 }
 
-PALETTES = {"light": LIGHT, "dark": DARK}
-SLOTS = tuple(LIGHT)
+ABYSS = {
+    # 偏蓝的深海黑 + 亮靛蓝强调。比 MIDNIGHT 冷、比它更"屏幕感"，
+    # 夜里看跟编辑器深色主题更接近。
+    "PAGE_BG": "#0f141c",
+    "PANEL_BG": "#171e29",
+    "HOVER_BG": "#212a38",
+    "BORDER": "#2e3a4c",
+    "TEXT": "#e6ecf5",
+    "MUTED": "#8f9bad",
+    "ACCENT": "#7aa2ff",
+    "ACCENT_HOVER": "#9bb9ff",
+    "ACCENT_SOFT": "#1b2b45",
+    "WARN": "#e5827e",
+    "WARN_HOVER": "#ef9a96",
+    "OK": "#5cbd9b",
+    "OK_HOVER": "#78cdb0",
+    "ALERT_BG": "#2b1b1e",
+    "PRIMARY_FG": "#0b1017",
+    "ROW_ACTION_HOVER": "#28323f",
+    "SCROLL_THUMB": "#394657",
+    "SCROLL_THUMB_HOVER": "#4d5b6e",
+    "TERM_BG": "#090c11",
+    "AGENT_CLAUDE": "#e0916f",
+    "AGENT_CLAUDE_BG": "#3a2a23",
+    "AGENT_CODEBUDDY": "#79b0ff",
+    "AGENT_CODEBUDDY_BG": "#1f2c44",
+}
+
+PLUM = {
+    # 深梅紫。给"想换换口味"的那天用：强调色是淡紫，正文仍是暖白，
+    # 不靠高饱和抢视线。
+    "PAGE_BG": "#18141b",
+    "PANEL_BG": "#211b25",
+    "HOVER_BG": "#2c2431",
+    "BORDER": "#3b3041",
+    "TEXT": "#f0e9f3",
+    "MUTED": "#a595ad",
+    "ACCENT": "#c99ae8",
+    "ACCENT_HOVER": "#dbb4f5",
+    "ACCENT_SOFT": "#33263d",
+    "WARN": "#e88a92",
+    "WARN_HOVER": "#f2a2a9",
+    "OK": "#6cc39b",
+    "OK_HOVER": "#86d2b0",
+    "ALERT_BG": "#2f1d22",
+    "PRIMARY_FG": "#1a1220",
+    "ROW_ACTION_HOVER": "#362c3b",
+    "SCROLL_THUMB": "#453a4a",
+    "SCROLL_THUMB_HOVER": "#594c5f",
+    "TERM_BG": "#100c12",
+    "AGENT_CLAUDE": "#e69a7a",
+    "AGENT_CLAUDE_BG": "#3d2a26",
+    "AGENT_CODEBUDDY": "#8fa8ff",
+    "AGENT_CODEBUDDY_BG": "#262c47",
+}
+
+PALETTES = {
+    "paper": PAPER,
+    "clay": CLAY,
+    "frost": FROST,
+    "midnight": MIDNIGHT,
+    "abyss": ABYSS,
+    "plum": PLUM,
+}
+
+# 「外观」页画色卡要用的那点元数据。label 也用在状态行那句"配色换成…了"。
+PALETTE_INFO = {
+    "paper": {"label": "暖纸青绿", "dark": False},
+    "clay": {"label": "奶油陶土", "dark": False},
+    "frost": {"label": "冷雾靛蓝", "dark": False},
+    "midnight": {"label": "暖黑青绿", "dark": True},
+    "abyss": {"label": "深海靛蓝", "dark": True},
+    "plum": {"label": "深梅紫", "dark": True},
+}
+
+# 0.7 之前配置里只记着 light / dark。老配置读进来先翻成新名字，免得升级
+# 之后一开窗退回默认色。
+ALIASES = {"light": "paper", "dark": "midnight"}
+
+SLOTS = tuple(PAPER)
 
 # 换色时按用途查不同的对照表（理由见文件开头）。
 _BG_SLOTS = ("PAGE_BG", "PANEL_BG", "HOVER_BG", "ACCENT_SOFT", "ALERT_BG",
@@ -92,15 +239,22 @@ _BORDER_SLOTS = ("BORDER",)
 _BG_MAP = {}
 _FG_MAP = {}
 _BORDER_MAP = {}
-_current = "light"
+_current = "paper"
 
-# 初始把人名先绑成浅色——模块 import 完、apply() 还没调的那一小段，
+# 初始先把名字绑到默认那套——模块 import 完、apply() 还没调的那一小段，
 # 界面模块里的 `from ... import PAGE_BG` 拿到的得是个能用的颜色。
-globals().update(LIGHT)
+globals().update(PAPER)
 
 
 def current():
     return _current
+
+
+def canonical(name):
+    """配置里的名字 → 调色板名。认不出来返回 None。"""
+    if name in PALETTES:
+        return name
+    return ALIASES.get(name)
 
 
 def _translation(target, slots):
@@ -115,10 +269,11 @@ def _translation(target, slots):
 
 
 def apply(name):
-    """换一套调色板。name 认不出来就当 light。"""
+    """换一套调色板。认不出来（含老名字 light / dark）就按别名或默认处理。"""
     global _current
-    palette = PALETTES.get(name) or LIGHT
-    _current = name if name in PALETTES else "light"
+    name = canonical(name)
+    palette = PALETTES[name] if name else PAPER
+    _current = name or "paper"
 
     _BG_MAP.clear()
     _BG_MAP.update(_translation(palette, _BG_SLOTS))
@@ -206,7 +361,11 @@ def titlebar(window, dark=None):
     """
     if sys.platform != "win32":
         return
-    value = 1 if (dark is None and _current == "dark") or dark else 0
+    # 深浅不再看名字，看这套配色自己的 dark 标记——现在有六套，名字里带不带
+    # "dark" 都不能说明问题。
+    if dark is None:
+        dark = PALETTE_INFO[_current]["dark"]
+    value = 1 if dark else 0
 
     def paint():
         try:
@@ -252,6 +411,11 @@ SIDE_GAP = 14
 # 跟 SIDE_GAP 的分工：那个是"两栏之间"的缝（还会被内嵌终端拿去算外挂宽度），
 # 这个是"内容离窗口边"的缝，两件事。
 PAGE_GUTTER = 20
+
+# 圆角尺度：卡片一档、小徽标一档。胶囊按钮按高度自己算（height/2），不在这儿。
+# 两档分开是为了让"大块"和"小标记"的弧度看起来是一家人，而不是各写各的数。
+RADIUS_CARD = 12
+RADIUS_CHIP = 6
 
 
 def font(size=11, bold=False):

@@ -54,7 +54,8 @@ class TerminalMixin:
 
     def embed_workspace(self, item, cont=False, prompt=None, settings=None,
                         permission=None, profile=None,
-                        append_system_prompt=None):
+                        append_system_prompt=None, resume_id=None,
+                        new_session_id=None):
         """把 claude 塞进本窗口。已经有一个的话先把它放出去，不打断它。"""
         if self._pending:
             self.feedback_var.set("上一个还在启动，稍等一下。")
@@ -63,7 +64,9 @@ class TerminalMixin:
         try:
             process, known = spawn_console(item["path"], cont, prompt, settings,
                                            permission, profile=profile,
-                                           append_system_prompt=append_system_prompt)
+                                           append_system_prompt=append_system_prompt,
+                                           resume_id=resume_id,
+                                           new_session_id=new_session_id)
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return

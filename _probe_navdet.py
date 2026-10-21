@@ -240,11 +240,11 @@ def main():
         soak(app, 0.8)
         win = app._settings_win
         check("设置窗开出来了", win is not None and win.winfo_exists(), True)
-        check("五个分页都在", [name for name in PAGES],
-              ["模型", "工作区", "外观", "行为开关", "关于"])
-        # 栏宽是按最宽那个分页名算的，五个都得摆得下、别被窗口裁掉。
+        check("六个分页都在", [name for name in PAGES],
+              ["模型", "命令行", "工作区", "外观", "行为开关", "关于"])
+        # 栏宽是按最宽那个分页名算的，六个都得摆得下、别被窗口裁掉。
         rail_pills = ours(app._settings_rail, "PillButton")
-        check("分页栏里就那五颗、顺序对",
+        check("分页栏里就那六颗、顺序对",
               [p._text for p in rail_pills], list(PAGES))
         win_right = win.winfo_rootx() + win.winfo_width()
         check("分页名没顶出窗口",

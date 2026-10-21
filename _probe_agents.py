@@ -40,7 +40,9 @@ def main():
     # ── 1. 表本身 ──
     print("--- 1. 档位表 ---")
     check("默认档位是 claude", agents.DEFAULT_AGENT == "claude")
-    check("两条内置档位", set(agents.ids()) == {"claude", "codebuddy"}, agents.ids())
+    check("三条内置档位",
+          set(agents.ids()) == {"claude", "codebuddy", "codebuddy-intl"},
+          agents.ids())
     check("认不出来的 id 回落 claude", agents.get("nope").id == "claude")
     check("None / 空串也回落 claude",
           agents.get(None).id == "claude" and agents.get("").id == "claude")
@@ -75,7 +77,23 @@ def main():
           codebuddy.settings_file == os.path.join(codebuddy.config_dir,
                                                   "settings.json"))
     check("codebuddy 要 node（没 shim 的 node 脚本）", codebuddy.needs_node is True)
-    check("codebuddy 没有 npm 包（不提供一键装）", codebuddy.npm_package is None)
+    check("codebuddy 的 npm 包是腾讯那个",
+          codebuddy.npm_package == "@tencent-ai/codebuddy-code",
+          codebuddy.npm_package)
+    check("claude 有原生脚本 / winget / brew 三样装法",
+          claude.native_install.get("win32") == "https://claude.ai/install.ps1"
+          and claude.native_install.get("darwin") == "https://claude.ai/install.sh"
+          and claude.winget_id == "Anthropic.ClaudeCode"
+          and claude.brew_cask == "claude-code",
+          (claude.native_install, claude.winget_id, claude.brew_cask))
+    check("codebuddy 不借 claude 的原生脚本 / winget / brew",
+          not codebuddy.native_install and not codebuddy.winget_id
+          and not codebuddy.brew_cask,
+          (codebuddy.native_install, codebuddy.winget_id, codebuddy.brew_cask))
+    check("codebuddy 的 search_dirs 也认便携 Node 目录",
+          os.path.normcase(paths.NODE_DIR) in
+          {os.path.normcase(d) for d in codebuddy.search_dirs()},
+          codebuddy.search_dirs())
     check("两个档位的权限取值都覆盖 default/acceptEdits/plan/bypassPermissions",
           all({"default", "acceptEdits", "plan", "bypassPermissions"}
               <= set(a.permission_modes) for a in agents.AGENTS.values()))
@@ -83,6 +101,46 @@ def main():
           "dontAsk" in codebuddy.permission_modes
           and "dontAsk" not in claude.permission_modes)
     check("两档的预设目录不重样", claude.preset_dir != codebuddy.preset_dir)
+
+    # ── 3b. codebuddy 国际版那一档 ──
+    print("--- 3b. codebuddy-intl 档位 ---")
+    intl = agents.CODEBUDDY_INTL
+    check("国际档 id / label 分得清国内",
+          intl.id == "codebuddy-intl" and intl.label != codebuddy.label,
+          intl.label)
+    check("国际档的家目录独立于国内档",
+          intl.config_dir == os.path.join(os.path.expanduser("~"),
+                                          ".codebuddy-intl"),
+          intl.config_dir)
+    check("国际档的 settings 在它自己家里",
+          intl.settings_file == os.path.join(intl.config_dir, "settings.json"))
+    check("国际档同样走 CODEBUDDY_CONFIG_DIR",
+          intl.config_dir_env == "CODEBUDDY_CONFIG_DIR")
+    check("国际档钉死 external 环境",
+          intl.launch_env.get("CODEBUDDY_INTERNET_ENVIRONMENT") == "external",
+          intl.launch_env)
+    check("国际档预设目录又是单独一份",
+          len({a.preset_dir for a in agents.AGENTS.values()}) == 3)
+    check("国际档的 search_dirs 认的是 WorkBuddyAI 那个安装名",
+          all(isinstance(d, str) for d in intl.search_dirs())
+          and intl.search_dirs() != codebuddy.search_dirs(),
+          intl.search_dirs()[:1])
+    check("国际档也把便携 Node 目录垫在后面",
+          os.path.normcase(paths.NODE_DIR) in
+          {os.path.normcase(d) for d in intl.search_dirs()},
+          intl.search_dirs()[-1:])
+    env = intl.spawn_environ({"HOME": "/sandbox", "PATH": "/bin"})
+    check("spawn_environ 叠上配置家目录和环境",
+          env["CODEBUDDY_CONFIG_DIR"] == intl.config_dir
+          and env["CODEBUDDY_INTERNET_ENVIRONMENT"] == "external"
+          and env["PATH"] == "/bin", env.get("PATH"))
+    overrides = intl.launch_overrides({"PATH": "/bin"})
+    check("launch_overrides 只给要改的键（给 cmd /k 用）",
+          set(overrides) == {"CODEBUDDY_CONFIG_DIR",
+                             "CODEBUDDY_INTERNET_ENVIRONMENT"}
+          and "HOME" not in overrides, sorted(overrides))
+    check("claude 档什么覆盖都没有",
+          agents.CLAUDE.launch_overrides({"PATH": "/bin"}) == {})
 
     # ── 4. 找法 ──
     print("--- 4. find() ---")

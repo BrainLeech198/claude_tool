@@ -26,6 +26,7 @@ WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_APPWINDOW = 0x00040000
 WM_CLOSE = 0x0010
 SW_HIDE = 0
+SW_RESTORE = 9
 HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
 WS_VISIBLE, WS_POPUP = 0x10000000, 0x80000000
 WS_BORDER, WS_CAPTION, WS_THICKFRAME = 0x00800000, 0x00C00000, 0x00040000
@@ -122,7 +123,7 @@ def fresh_terminal(known):
 
 def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
                    permission=None, beside=None, profile=None,
-                   append_system_prompt=None):
+                   append_system_prompt=None, resume_id=None, new_session_id=None):
     """在新控制台窗口里跑 claude，返回那个进程对象。
 
     直接把 argv 列表交给 Popen，不套 cmd /k：cmd 那层的引号规则会把
@@ -132,15 +133,23 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
 
     beside 是"把窗口摆到启动器旁边"的坐标提示，非 Windows 上要靠终端的
     -geometry 参数实现；这边本来就有一套按句柄挪窗口的办法（bring_next_to），
-    不用它。profile 是 agents.Agent 档位；不传走默认（claude）。
+    不用它。profile 是 agents.Agent 档位；不传走默认（claude）。它带的
+    launch_env / config_dir_env 一并注进子进程环境（国际档 codebuddy 靠这个
+    分开账号）。
+
+    resume_id / new_session_id 见 agent.agent_args：前者续指定会话，后者给新
+    会话预先钉死 id。
 
     那个进程对象调用方留着轮询 poll()，就知道这个会话还开没开着。
     """
+    profile = profile or agents.get(agents.DEFAULT_AGENT)
     return subprocess.Popen(
         agent_args(profile, cont=cont, prompt=prompt, settings=settings,
-                   permission=permission, append_system_prompt=append_system_prompt),
+                   permission=permission, append_system_prompt=append_system_prompt,
+                   resume_id=resume_id, new_session_id=new_session_id),
         cwd=workdir,
         creationflags=CREATE_NEW_CONSOLE,
+        env=profile.spawn_environ(),
     )
 
 
@@ -180,6 +189,20 @@ def bring_next_to(owner_window, target, gap=16):
     return True
 
 
+def focus_window(target):
+    """把一扇已经开着的窗口提到前台；最小化过就先还原。
+
+    跟 bring_next_to 的区别：那个会顺手把窗口挪到启动器旁边（"移过来"那个
+    动作用的），这个只动焦点，窗口原来摆哪儿还摆哪儿。
+    """
+    if not target or not _user32.IsWindow(target):
+        return False
+    if _user32.IsIconic(target):
+        _user32.ShowWindow(target, SW_RESTORE)
+    _user32.SetForegroundWindow(target)
+    return True
+
+
 def toggle_topmost(target):
     """压顶层开关，返回压完之后的状态：True 是已经置顶。窗口没了返回 None。"""
     if not _user32.IsWindow(target):
@@ -201,18 +224,27 @@ def close_window(target):
 
 
 def spawn_console(workdir, cont=False, prompt=None, settings=None,
-                  permission=None, profile=None, append_system_prompt=None):
+                  permission=None, profile=None, append_system_prompt=None,
+                  resume_id=None, new_session_id=None):
     """开一个老式 conhost 跑 claude。
 
     返回 (进程, 启动前就存在的窗口句柄集合)——窗口是控制台那边异步建的，
     调用方得拿这份旧名单去比对，才知道哪个是新冒出来的。
+
+    环境变量走 set 前缀：cmd /k 那条路没有 env= 可用，profile 带来的覆盖项
+    （CODEBUDDY_CONFIG_DIR 之类）拼成 `set "K=V" && ` 打头。引号包着写是
+    cmd 认的写法，值里带空格也不会断；这里注入的都是配置家路径和环境名，
+    不带 % 和 &，不必再折腾延迟展开。
     """
+    profile = profile or agents.get(agents.DEFAULT_AGENT)
     known = {hwnd for hwnd, _ in console_windows()}
-    command = "title {} & {}".format(
-        title_tag(profile.id if profile else None),
-        agent_command(profile, cont=cont, prompt=prompt, settings=settings,
-                      permission=permission,
-                      append_system_prompt=append_system_prompt))
+    command = "title {} & ".format(title_tag(profile.id))
+    for key, value in sorted(profile.launch_overrides().items()):
+        command += 'set "{}={}" & '.format(key, value)
+    command += agent_command(profile, cont=cont, prompt=prompt,
+                             settings=settings, permission=permission,
+                             append_system_prompt=append_system_prompt,
+                             resume_id=resume_id, new_session_id=new_session_id)
     # 同样得整条给字符串：塞进列表 Python 会重包一遍引号，开场白就断在空格上。
     process = subprocess.Popen(
         "conhost.exe cmd /k " + command,

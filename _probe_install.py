@@ -216,6 +216,54 @@ def versions():
           and I.platform_name("linux") == "Linux")
 
 
+def other_profiles():
+    print("--- 换档位：codebuddy 不借 claude 的装法 ---")
+    cb = agents.get("codebuddy")
+    win = I.routes("win32", which_maker("winget", "npm"), node=(20, 11, 0),
+                   profile=cb)
+    mac = I.routes("darwin", which_maker("brew", "npm"), node=(20, 11, 0),
+                   profile=cb)
+    linux = I.routes("linux", which_maker("curl", "npm"), node=(20, 11, 0),
+                     profile=cb)
+    check("codebuddy 在 Windows 上只有 npm / 便携 Node 两条",
+          names(win) == ["npm", "便携版 Node + npm"], names(win))
+    check("macOS 上也不摆 brew", names(mac) == ["npm", "便携版 Node + npm"],
+          names(mac))
+    check("Linux 上一样", names(linux) == ["npm", "便携版 Node + npm"],
+          names(linux))
+    check("npm 装的是 codebuddy 自己的包",
+          by_name(win)["npm"]["argv"] ==
+          ["npm", "install", "-g", "@tencent-ai/codebuddy-code"],
+          by_name(win)["npm"]["argv"])
+    setup_ps = I.node_setup("win32", package=cb.npm_package, name=cb.exe_names[0])
+    setup_sh = I.node_setup("linux", package=cb.npm_package, name=cb.exe_names[0])
+    check("便携 Node 那条装完提示写的是 codebuddy",
+          "装好了：$root\\codebuddy.cmd" in setup_ps
+          and "装好了：$root/bin/codebuddy" in setup_sh,
+          flat(setup_ps)[:70])
+    check("它装的是 codebuddy 那个包",
+          "@tencent-ai/codebuddy-code" in setup_ps
+          and "@tencent-ai/codebuddy-code" in setup_sh)
+    check("第一条能走的是 npm（codebuddy 没有原生脚本）",
+          win[0]["name"] == "npm" and win[0]["pick"] is True, win[0]["name"])
+    check("没人拿 Anthropic.ClaudeCode / claude.ai 去装它",
+          all("Anthropic.ClaudeCode" not in route["show"]
+              and "claude.ai" not in route["show"] for route in win),
+          [route["show"] for route in win])
+
+    table = dict((row[0], row[1]) for row in
+                 I.checkup("win32", which_maker("winget", "npm"),
+                           node=(20, 11, 0), profile=cb))
+    check("体检表不摆 winget 那一行", "winget" not in table, list(table))
+    check("体检表有 npm 和 Node", "npm" in table and "Node" in table, list(table))
+    check("体检表那行写的是 codebuddy", "codebuddy" in table, list(table))
+
+    intl = agents.get("codebuddy-intl")
+    check("国际档也只走 npm 那两条",
+          names(I.routes("win32", which_maker("npm"), node=(20, 11, 0),
+                         profile=intl)) == ["npm", "便携版 Node + npm"])
+
+
 def finder():
     print("--- 装完当场认不认得出来 ---")
     check("PATH 里有就直接返回它",
@@ -884,6 +932,8 @@ def main():
     upgrade()
     print()
     checkup_rows()
+    print()
+    other_profiles()
     print()
     streaming()
     print()

@@ -12,13 +12,15 @@
 """
 import os
 import tkinter as tk
+from tkinter import messagebox
 
-from claude_tool import agents
+from claude_tool import agents, history
 from claude_tool.config import humanize_ago, last_chat_time, save_config
 from claude_tool.handoff import HANDOFF_FILE
 from claude_tool.presets import discover_presets
-from claude_tool.theme import BORDER, HOVER_BG, MUTED, PAGE_BG, TEXT, font
-from claude_tool.widgets import PillButton, Tip, agent_style
+from claude_tool.theme import (BORDER, HOVER_BG, MUTED, OK, PAGE_BG, TEXT,
+                               font)
+from claude_tool.widgets import PillButton, Row, ScrollArea, Tip, agent_style
 
 
 # 右栏该有多宽。它不是"右栏就直接摆这么宽"——右栏是 fill="both" + expand，多宽
@@ -39,15 +41,20 @@ from claude_tool.widgets import PillButton, Tip, agent_style
 # 不随数据变的数。
 DETAIL_MIN_WIDTH = 620
 
+# 右栏会话列表：最多摆几条、一行多高。行高比左栏工作区卡片（52）矮一点——
+# 这里只有标题和时间两行，不需要那么厚；6 条正好填满默认窗口那块空白。
+SESSION_ROWS = 6
+SESSION_ROW_H = 46
+
 
 def _unbound_model_label(agent_id):
     """没绑预设时这一本用什么（说明见 dialogs.unbound_model_label）。
 
     文案在两个模块各留一份，是有意的：这是各管一摊的界面文案，为一行字把两个
-    mixin 模块勾在一起不值当。
+    mixin 模块勾在一起不值当。codebuddy 家族（国内/国际）都算"自带默认模型"。
     """
-    return ("CodeBuddy 自带默认模型" if agents.get(agent_id).id == "codebuddy"
-            else "跟随全局")
+    return ("CodeBuddy 自带默认模型"
+            if agents.get(agent_id).family == "codebuddy" else "跟随全局")
 
 
 class DetailMixin:
@@ -94,7 +101,7 @@ class DetailMixin:
         self.agent_chip.pack(side="left", padx=(0, 8))
         self._detail_title_label = tk.Label(
             title_row, textvariable=self.detail_title_var, bg=PAGE_BG,
-            fg=TEXT, font=font(15, True), anchor="w")
+            fg=TEXT, font=font(16, True), anchor="w")
         self._detail_title_label.pack(side="left", fill="x", expand=True)
         tk.Label(parent, textvariable=self.detail_path_var, bg=PAGE_BG,
                  fg=MUTED, font=font(9), anchor="w").pack(fill="x")
@@ -167,6 +174,34 @@ class DetailMixin:
         self._handoff_btn = PillButton(manage, "删交接文档", self._detail_remove_handoff,
                                        bg=PAGE_BG, height=26)
 
+        # ── 会话 ──
+        # 「管理」下面本来是空的，这块正好填进去：这一本聊过哪几条、各自多久以前。
+        # 列表直接读 CLI 落盘的会话文件（见 history），不另存一份索引——用户在
+        # 启动器外面开的会话也得能看见，自己维护一份迟早对不上。
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(18, 0))
+        session_head = tk.Frame(parent, bg=PAGE_BG)
+        session_head.pack(fill="x", pady=(10, 6))
+        tk.Label(session_head, text="会话", bg=PAGE_BG, fg=TEXT,
+                 font=font(11, True)).pack(side="left")
+        self.session_count_var = tk.StringVar(value="")
+        tk.Label(session_head, textvariable=self.session_count_var, bg=PAGE_BG,
+                 fg=MUTED, font=font(9)).pack(side="left", padx=(8, 0))
+        # 右边那句是操作提示，不占按钮位置。会话多了以后下面还有「查看全部」。
+        tk.Label(session_head, text="点一条接着聊", bg=PAGE_BG, fg=MUTED,
+                 font=font(9)).pack(side="right")
+
+        self.session_area = ScrollArea(parent, max_height=SESSION_ROWS * SESSION_ROW_H)
+        self.session_area.pack(fill="x")
+        self.session_empty = tk.Label(parent, text="这个工作区还没有会话",
+                                      bg=PAGE_BG, fg=MUTED, font=font(9),
+                                      anchor="w")
+        self.session_more = PillButton(parent, "查看全部", self._open_session_picker,
+                                       bg=PAGE_BG, height=26)
+        self._sessions = []
+        self._session_agent = None
+        # 窗口矮的时候列表得跟着收，不能把底下的插件区顶出可视范围。
+        parent.bind("<Configure>", self._fit_sessions, add="+")
+
         # 插件挂载区：宿主自己的东西在上面，插件注册的排在下面这条分隔线之后
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(18, 0))
         self.detail_plugin_area = tk.Frame(parent, bg=PAGE_BG)
@@ -180,6 +215,134 @@ class DetailMixin:
         """
         for index, button in enumerate(self._detail_daily):
             button.pack(side="left", padx=(0 if index == 0 else 6, 0))
+
+    # ── 会话列表 ──
+
+    def refresh_sessions(self):
+        """重读一遍选中那本的会话记录，重画列表。
+
+        直接读文件而不是查缓存：会话是在 CLI 那边写的，这中间可能刚开过、刚关过。
+        读的是最近 60 条，够右栏和「查看全部」用；再老的翻出来也没人挑。
+        """
+        if not hasattr(self, "session_area"):
+            return
+        item = self.selected_entry()
+        if item is None or not os.path.isdir(item["path"]):
+            self._sessions = []
+            self._session_agent = None
+            self._render_sessions()
+            return
+        agent_id = item.get("agent")
+        try:
+            sessions = history.list_sessions(agent_id, item["path"], limit=60)
+        except Exception:
+            # 会话文件是外部数据，读坏一条不该把整个右栏带塌。
+            sessions = []
+        self._sessions = sessions
+        self._session_agent = agent_id
+        self._render_sessions()
+
+    def _render_sessions(self):
+        self.session_area.clear()
+        item = self.selected_entry()
+        shown = self._sessions[:SESSION_ROWS]
+        for session in shown:
+            running = (item is not None and
+                       self.running_session(item["path"], session["id"]) is not None)
+            row = Row(self.session_area.inner,
+                      title=session["title"],
+                      subtitle=humanize_ago(session["updated"]),
+                      height=SESSION_ROW_H,
+                      warn="运行中" if running else "",
+                      warn_color=OK,
+                      on_click=lambda s=session: self._open_session(s),
+                      actions=[("⋯", lambda s=session: self._session_options(s)),
+                               ("删除", lambda s=session: self._delete_session(s)),
+                               ("改名", lambda s=session: self._rename_session(s))])
+            row.pack(fill="x", pady=3)
+
+        total = len(self._sessions)
+        self.session_count_var.set(str(total) if total else "")
+        if shown:
+            self.session_empty.pack_forget()
+        else:
+            self.session_empty.pack(fill="x", pady=(2, 4))
+        if total > SESSION_ROWS:
+            self.session_more.pack(anchor="w", pady=(6, 0))
+        else:
+            self.session_more.pack_forget()
+        self.session_area.fit()
+        self._fit_sessions()
+
+    def _fit_sessions(self, _event=None):
+        """列表高度跟着右栏剩下的空间走。
+
+        默认窗口下 6 条摆得下；窗口缩到下限（660 高）时只剩一两行的位置，这时
+        让列表自己出滚动条，而不是把插件区顶出去。
+        """
+        if not hasattr(self, "session_area"):
+            return
+        room = self.detail_area.winfo_height() - self.session_area.winfo_y() - 8
+        want = max(SESSION_ROW_H, min(SESSION_ROWS * SESSION_ROW_H, room))
+        if abs(want - self.session_area.max_height) > 4:
+            self.session_area.max_height = want
+            self.session_area.fit()
+
+    def _open_session(self, session):
+        """点一条会话：没开着就续上；开着就把那扇窗口提到前台。
+
+        单击直连（跟 Trae / WorkBuddy 一致），权限沿用这本工作区存的那档。要改
+        权限、或者想先读交接文档，走行尾那个「⋯」——它打开的还是原来那个对话框。
+        """
+        item = self.selected_entry()
+        if item is None:
+            return
+        running = self.running_session(item["path"], session["id"])
+        if running is not None:
+            self.focus_running(running)
+            return
+        self.launch_workspace(item, cont=False, session_id=session["id"])
+
+    def _session_options(self, session):
+        """行尾「⋯」：带着这条会话去开原来的对话框（权限 / 交接文档都能改）。"""
+        item = self.selected_entry()
+        if item is not None:
+            self.open_workspace(item, cont=True, session_id=session["id"])
+
+    def _open_session_picker(self):
+        item = self.selected_entry()
+        if item is not None:
+            self.open_session_picker(item, self._sessions)
+
+    def _rename_session(self, session):
+        """给一条会话改名：新名字写进记录文件里的 ai-title。"""
+        item = self.selected_entry()
+        if item is not None:
+            self.rename_session(item, session)
+
+    def _delete_session(self, session):
+        """删一条会话记录。开着的不让删，删之前问一句。
+
+        删的是 CLI 落盘的那份文件（见 history.delete_session），不进回收站，
+        所以确认框里把话说明白。
+        """
+        item = self.selected_entry()
+        if item is None:
+            return
+        if self.running_session(item["path"], session["id"]) is not None:
+            self.feedback_var.set("这条会话还开着，先关掉再删。")
+            return
+        if not messagebox.askyesno(
+                "删除会话",
+                "删除「{}」？\n\n记录文件会直接删掉，不进回收站。".format(
+                    session["title"]), parent=self):
+            return
+        if history.delete_session(item.get("agent"), item["path"],
+                                  session["id"]):
+            self.feedback_var.set("删掉了会话「{}」。".format(session["title"]))
+        else:
+            self.feedback_var.set("没删成，记录文件可能已经被别处挪走了。")
+        self.refresh_sessions()
 
     # ── 跟着选中态走 ──
 
@@ -198,6 +361,7 @@ class DetailMixin:
             self._preset_btn.set_text("跟随全局")
             self.agent_chip.pack_forget()
             self._detail_set_enabled(False)
+            self.refresh_sessions()
             return
         self.detail_title_var.set(item["name"])
         self.detail_path_var.set(item["path"])
@@ -213,6 +377,7 @@ class DetailMixin:
         self._agent_btn.set_text(agents.get(item.get("agent")).label)
         self._preset_btn.set_text(self._preset_button_text(item))
         self._detail_set_enabled(True)
+        self.refresh_sessions()
 
     def _preset_button_text(self, item):
         """绑定按钮上那行字：绑了写预设名，没绑写"跟随全局/自带默认"。
@@ -264,7 +429,7 @@ class DetailMixin:
         has_handoff = os.path.isfile(os.path.join(path, HANDOFF_FILE))
         if has_handoff:
             parts.append("有交接文档 " + HANDOFF_FILE)
-        stamp = last_chat_time(path)
+        stamp = last_chat_time(path, item.get("agent"))
         if stamp is not None:
             parts.append("上次聊 " + humanize_ago(stamp))
         self._sync_handoff_button(has_handoff)
@@ -315,12 +480,22 @@ class DetailMixin:
         self._with_selected(self._open_preset_picker)
 
     def _detail_switch_agent(self):
-        """在这本工作区上翻一下用哪个 agent（claude ↔ CodeBuddy）。"""
+        """在这本工作区上翻一下用哪个 agent（挨个档位轮）。"""
         self._with_selected(self._switch_agent)
 
     def _switch_agent(self, item):
+        """在这本工作区上翻一下用哪个 agent。
+
+        原来是 claude ↔ CodeBuddy 两档对翻；加了国际档之后挨个档位轮：
+        claude → CodeBuddy → CodeBuddy 国际版 → 回到 claude，顺序跟
+        agents.AGENTS 的声明一致。
+        """
+        order = list(agents.ids())
         current = item.get("agent") or agents.DEFAULT_AGENT
-        new_id = "codebuddy" if current != "codebuddy" else "claude"
+        try:
+            new_id = order[(order.index(current) + 1) % len(order)]
+        except ValueError:
+            new_id = agents.DEFAULT_AGENT
         item["agent"] = new_id
         # 预设名是**分档**存的，换档后原来那个名字多半对不上新档的目录；留着的话
         # 这本会"看着绑了个模型、开着其实是默认"。松开，让用户按新档重挑。

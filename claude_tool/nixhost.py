@@ -133,7 +133,7 @@ def _geometry_arg(geometry, x, y):
     return "{} +{}+{}".format(geometry, int(x), int(y))
 
 
-def _spawn_x11(argv, workdir, beside):
+def _spawn_x11(argv, workdir, beside, env=None):
     exe, extra, geometry = _pick_terminal()
     if exe is None:
         raise RuntimeError(
@@ -146,12 +146,13 @@ def _spawn_x11(argv, workdir, beside):
             command.append(arg)
     command += ["sh", "-c", _script(argv)]
     # start_new_session：让终端独占一个进程组，关窗口时整组一起走（见 close_window）。
-    process = subprocess.Popen(command, cwd=workdir, start_new_session=True)
+    process = subprocess.Popen(command, cwd=workdir, start_new_session=True,
+                               env=env)
     _SESSIONS[process.pid] = process
     return process
 
 
-def _spawn_macos(argv, workdir):
+def _spawn_macos(argv, workdir, env=None):
     """macOS：Terminal.app 要的是一个脚本文件，不吃"命令加参数"那一套。
 
     写一份临时脚本交给它，脚本第一件事就是把 $$ 写出来——Terminal.app 开的那扇
@@ -164,7 +165,10 @@ def _spawn_macos(argv, workdir):
     pidfile = os.path.join(holder, "session.pid")
     script = os.path.join(holder, "launch.command")
     with open(script, "w", encoding="utf-8") as f:
-        f.write("#!/bin/sh\necho $$ > {}\nexec {}\n".format(
+        f.write("#!/bin/sh\n")
+        for key, value in sorted((env or {}).items()):
+            f.write("export {}={}\n".format(key, shlex.quote(value)))
+        f.write("echo $$ > {}\nexec {}\n".format(
             shlex.quote(pidfile),
             " ".join(shlex.quote(item) for item in argv)))
     os.chmod(script, 0o700)
@@ -175,7 +179,7 @@ def _spawn_macos(argv, workdir):
 
 def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
                    permission=None, beside=None, profile=None,
-                   append_system_prompt=None):
+                   append_system_prompt=None, resume_id=None, new_session_id=None):
     """在一个新终端窗口里跑 claude，返回那个进程对象。
 
     命令用 claude 的绝对路径（find_claude 刚找到的那个），argv 一项一项过
@@ -184,14 +188,19 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
 
     beside 是"摆到启动器旁边"的坐标，只有认 -geometry 的终端吃这一口，别的照旧
     由窗口管理器随便摆——这边没有 Windows 那种事后再挪的办法。
+
+    profile 带的 launch_env / config_dir_env 一并注进子进程环境（国际档
+    codebuddy 靠这个分开账号）；X11 那条靠 Popen env=，macOS 那条靠脚本里
+    逐条 export（见 _spawn_macos）。
     """
     profile = profile or agents.get(agents.DEFAULT_AGENT)
     argv = agent_args(profile, cont=cont, prompt=prompt, settings=settings,
                       permission=permission, exe=agent_exe(profile),
-                      append_system_prompt=append_system_prompt)
+                      append_system_prompt=append_system_prompt,
+                      resume_id=resume_id, new_session_id=new_session_id)
     if sys.platform == "darwin":
-        return _spawn_macos(argv, workdir)
-    return _spawn_x11(argv, workdir, beside)
+        return _spawn_macos(argv, workdir, env=profile.spawn_environ())
+    return _spawn_x11(argv, workdir, beside, env=profile.spawn_environ())
 
 
 def _pid_of(handle):
@@ -288,6 +297,15 @@ def bring_next_to(owner_window, target, gap=16):
     压根没这回事（谁也不能去指挥别人的窗口）。所以非 Windows 上界面上不摆这个
     按钮（见 host.WINDOW_CONTROL），这个函数留着只是为了让 host.py 的名字表
     两个平台一样。真想要的话有半个办法：起终端时用 -geometry 摆好，见 spawn_terminal。
+    """
+    return False
+
+
+def focus_window(target):
+    """把一扇已经开着的窗口提到前台——非 Windows 上做不到，返回 False。
+
+    同 bring_next_to：没有可以按句柄指挥别人窗口的通路。界面上据此退化成
+    一句"会话已经在另一个窗口里开着"。
     """
     return False
 
