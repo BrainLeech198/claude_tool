@@ -28,6 +28,7 @@ else:
 EmbeddedConsole = _host.EmbeddedConsole
 bring_next_to = _host.bring_next_to
 close_window = _host.close_window
+focus_window = _host.focus_window
 fresh_console = _host.fresh_console
 fresh_terminal = _host.fresh_terminal
 open_path = _host.open_path

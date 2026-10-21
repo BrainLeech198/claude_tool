@@ -30,27 +30,18 @@ class NavMixin:
         # 底下那条必须**先** pack：pack 是按调用顺序抢位置的，先摆底部这条，
         # 后面 expand 的列表才会把剩下的空间全吃掉而不压到它。
         self.rail_footer = tk.Frame(parent, bg=PAGE_BG)
-        self.rail_footer.pack(side="bottom", fill="x", pady=(0, 12))
-        # 列表级的两个动作（不是某一本上的动作）跟列表同栏摆着最顺：加一本、
-        # 重扫一遍，说的都是"这张列表里有什么"。
-        #
-        # 分两行：240 宽摆不下「＋ 添加工作区」和「重新扫描」并排（量出来 194
-        # 像素，只剩十几个像素余量，换个字体就顶出去了）。
-        first = tk.Frame(self.rail_footer, bg=PAGE_BG)
-        first.pack(fill="x")
-        PillButton(first, "＋ 添加工作区", self._open_add_workspace_picker,
-                   bg=PAGE_BG).pack(side="left")
-        second = tk.Frame(self.rail_footer, bg=PAGE_BG)
-        second.pack(fill="x", pady=(6, 0))
-        PillButton(second, "重新扫描", self.rescan, bg=PAGE_BG).pack(side="left")
-        # 设置入口只此一处（右栏和顶栏都不再重复），见 设计说明-0.4.md 第二节。
-        PillButton(second, "⚙ 设置", self.open_settings, bg=PAGE_BG,
-                   ).pack(side="right")
-        # 插件入口单独占一行：240 宽下把「插件」塞进上面任何一行都顶出去了
-        # （「重新扫描」和「⚙ 设置」那一行实测已经快贴边，见本方法开头那段）。
-        third = tk.Frame(self.rail_footer, bg=PAGE_BG)
-        third.pack(fill="x", pady=(6, 0))
-        PillButton(third, "插件", self.open_plugins, bg=PAGE_BG).pack(side="left")
+        self.rail_footer.pack(side="bottom", fill="x", pady=(6, 6))
+        # 四个动作一律撑满左栏、等宽往下排。以前是「添加工作区」一行、
+        # 「重新扫描 + 设置」一行、「插件」一行，每行宽度都不一样，左边缘和
+        # 右边缘都是参差的；统一成整宽之后跟上面整宽的工作区卡片也对得上。
+        for text, command in (
+                ("＋ 添加工作区", self._open_add_workspace_picker),
+                ("重新扫描", self.rescan),
+                ("插件", self.open_plugins),
+                # 设置入口只此一处（右栏和顶栏都不再重复），见 设计说明-0.4.md 第二节。
+                ("⚙ 设置", self.open_settings)):
+            PillButton(self.rail_footer, text, command, bg=PAGE_BG,
+                       width=NAV_WIDTH).pack(fill="x", pady=(0, 6))
 
         head = tk.Frame(parent, bg=PAGE_BG)
         head.pack(fill="x", pady=(16, 6))

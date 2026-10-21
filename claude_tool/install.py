@@ -6,9 +6,10 @@
 **参数都能塞假的进来**（platform / which / node）：探针靠这个在三种平台上各撞
 一遍，不用真装一次 claude。
 
-装法全照官方那套（见 DOCS_URL）：官方现在推**原生安装脚本**——不依赖 Node、
-装完自己管更新；winget / brew / npm 是备选，装完更新归各自的包管理器管。这一点
-在面板上得跟用户说清楚，不然它跟启动器里「查更新」看到的口径会对不上。
+装法全照各家档位自己那套（字段在 agents.Agent 上）：claude 官方现在推**原生
+安装脚本**——不依赖 Node、装完自己管更新，winget / brew / npm 是备选；codebuddy
+没有原生脚本也没有 winget，能给的只有 npm 和便携版 Node 那两条。这一点在面板上
+得跟用户说清楚，不然它跟启动器里「查更新」看到的口径会对不上。
 """
 import os
 import re
@@ -21,12 +22,13 @@ from claude_tool import agents
 from claude_tool.agent import CREATE_NO_WINDOW
 from claude_tool.paths import LOCAL_BIN, LOCAL_NAMES, NODE_DIR
 
-DOCS_URL = "https://code.claude.com/docs/en/setup"
-NATIVE_PS1 = "https://claude.ai/install.ps1"
-NATIVE_SH = "https://claude.ai/install.sh"
-WINGET_ID = "Anthropic.ClaudeCode"
-BREW_CASK = "claude-code"
-# 默认那条（claude）的 npm 包名。真要拼命令时从 profile.npm_package 取，不写死。
+# 这几个常量是 claude 那一档的值，探针和默认参数还按它们对；真拼路线时一律从
+# profile 上取（native_install / winget_id / brew_cask），不再写死某个 agent。
+DOCS_URL = agents.CLAUDE.install_docs
+NATIVE_PS1 = agents.CLAUDE.native_install["win32"]
+NATIVE_SH = agents.CLAUDE.native_install["linux"]
+WINGET_ID = agents.CLAUDE.winget_id
+BREW_CASK = agents.CLAUDE.brew_cask
 NPM_PACKAGE = agents.CLAUDE.npm_package
 
 # 便携版 Node 那条路从哪儿拿包。先官方，不通再退 npmmirror（国内那个 Node 镜像，
@@ -183,7 +185,7 @@ exit $code
 """.strip().replace("__URL__", url)
 
 
-def node_setup(platform=None, bases=NODE_DIST, package=None):
+def node_setup(platform=None, bases=NODE_DIST, package=None, name=None):
     """便携版 Node + npm 那条路要跑的东西。
 
     **为什么要有这条路**：前面几条各有各的门槛，实机上撞见过前两条一起走不通
@@ -201,17 +203,20 @@ def node_setup(platform=None, bases=NODE_DIST, package=None):
     把那个目录加进 PATH——脚本最后会把路径打出来，但不会替他改。
 
     bases 是包的来源，探针靠它指到本地那个小服务上，不真去下 Node。
-    package 是 npm 包名，不传走默认（claude 那个）。
+    package 是 npm 包名，name 是装完那个可执行文件叫什么（输出提示里用），
+    不传就走 claude 默认那一套。
     """
     platform = platform or sys.platform
     package = package or NPM_PACKAGE
+    name = name or "claude"
     listing = ", ".join("'{}'".format(base) for base in bases)
     template = _NODE_PS if platform == "win32" else _NODE_SH
     return (template
             .replace("__BASES__",
                      "@(" + listing + ")" if platform == "win32"
                      else " ".join(bases))
-            .replace("__PACKAGE__", package))
+            .replace("__PACKAGE__", package)
+            .replace("__NAME__", name))
 
 
 # Windows 那份。分号、花括号、$ 都是 PowerShell 自己的语法，所以整段做成模板、
@@ -267,10 +272,10 @@ Remove-Item -Force $zip -ErrorAction SilentlyContinue
 [Console]::WriteLine("Node 解好了：$root")
 
 & (Join-Path $root 'npm.cmd') install -g --prefix $root --no-fund --no-audit '__PACKAGE__'
-if ($LASTEXITCODE -ne 0) { [Console]::WriteLine('npm 没装上 claude。'); exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) { [Console]::WriteLine('npm 没装上 __NAME__。'); exit $LASTEXITCODE }
 
-[Console]::WriteLine("装好了：$root\claude.cmd")
-[Console]::WriteLine("想在自己终端里也敲得出 claude，就把这个目录加进 PATH：$root")
+[Console]::WriteLine("装好了：$root\__NAME__.cmd")
+[Console]::WriteLine("想在自己终端里也敲得出 __NAME__，就把这个目录加进 PATH：$root")
 [Console]::WriteLine('（不改也没关系，启动器自己认得这个位置。）')
 """.strip()
 
@@ -325,12 +330,12 @@ rm -f "$tgz"
 echo "Node 解好了：$root"
 
 "$root/bin/npm" install -g --prefix "$root" --no-fund --no-audit '__PACKAGE__' || {
-    echo 'npm 没装上 claude。'
+    echo 'npm 没装上 __NAME__。'
     exit 1
 }
 
-echo "装好了：$root/bin/claude"
-echo "想在自己终端里也敲得出 claude，就把这个目录加进 PATH：$root/bin"
+echo "装好了：$root/bin/__NAME__"
+echo "想在自己终端里也敲得出 __NAME__，就把这个目录加进 PATH：$root/bin"
 echo '（不改也没关系，启动器自己认得这个位置。）'
 """.strip()
 
@@ -394,9 +399,10 @@ def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
 
     platform / which / node 传进来就是"照这个模拟"，不传就照本机真实情况。
     node 传 None 表示"没装"，传 UNSET（默认）表示自己去问机器。
-    profile 是 agents.Agent 档位；不传走默认（claude）。**codebuddy 这轮不提供
-    安装路线**——它没有 npm 包、也没有我们认识的安装脚本，返回空表，面板那边
-    据此显示「CodeBuddy 请从官网装」，别假装能一键装。
+    profile 是 agents.Agent 档位；不传走默认（claude）。**各家能走哪几条由档位
+    表决定**：claude 有原生脚本 / winget / brew / npm / 便携 Node，codebuddy 只有
+    npm 和便携 Node 两条——它没有原生安装脚本，也没上 winget / brew，不能拿 claude
+    的命令去凑数。
 
     **upgrade=True 是干嘛的**：顶栏那颗「有新版」点开时用。命令换成各家升级用的
     那一条——winget 是 upgrade 子命令、brew 是 brew upgrade；原生脚本和 npm 那两
@@ -417,120 +423,125 @@ def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
       pick    面板一打开默认选它
       note    附在 why 后面的一句补充，升级模式下才有内容
 
-    第一条永远是原生脚本——官方推荐它，而且它不需要任何前提。顺序就是面板上
-    从上到下的顺序。
+    面板上从上到下的顺序跟这里一致：能走的那几条里，第一条是档位自己的官方
+    装法（claude 是原生脚本；codebuddy 没有这一条，就从 npm 起）。
     """
     profile = profile or agents.get(agents.DEFAULT_AGENT)
-    if not profile.npm_package:
-        return []
     platform = platform or sys.platform
     if node is UNSET:
         node = node_version(which)
     found = []
+    label = profile.id
 
-    if platform == "win32":
-        # irm 是 PowerShell 自带的，Windows 上这条不需要前提。
-        found.append(_route(
-            "官方原生脚本",
-            ("再跑一遍官方那条就是升级——那份脚本自己写着 always download "
-             "latest，跑一次就把本机这份换成最新的。"
-             if upgrade else
-             "官方推荐的那条，装完它自己会更新，不用你管。")
-            + "跑之前会先验一眼取回来的是不是脚本。",
-            "不需要装别的东西",
-            True,
-            ["powershell", "-NoProfile", "-Command", ps_guard()],
-            "irm {} | iex".format(NATIVE_PS1),
-            key="native"))
-    else:
-        # install.sh 自己就是 curl 拉下来的，所以 curl 是这条唯一的前提。
-        have_curl = which("curl") is not None
-        found.append(_route(
-            "官方原生脚本",
-            ("再跑一遍官方那条就是升级——那份脚本自己写着 always download "
-             "latest，跑一次就把本机这份换成最新的。"
-             if upgrade else
-             "官方推荐的那条，装完它自己会更新，不用你管。")
-            + "跑之前会先验一眼取回来的是不是脚本。",
-            "不需要装别的东西" if have_curl else "没找到 curl，这条走不了",
-            have_curl,
-            ["bash", "-c", sh_guard()],
-            "curl -fsSL {} | bash".format(NATIVE_SH),
-            key="native"))
+    native_url = profile.native_install.get(platform)
+    if native_url:
+        if platform == "win32":
+            # irm 是 PowerShell 自带的，Windows 上这条不需要前提。
+            found.append(_route(
+                "官方原生脚本",
+                ("再跑一遍官方那条就是升级——那份脚本自己写着 always download "
+                 "latest，跑一次就把本机这份换成最新的。"
+                 if upgrade else
+                 "官方推荐的那条，装完它自己会更新，不用你管。")
+                + "跑之前会先验一眼取回来的是不是脚本。",
+                "不需要装别的东西",
+                True,
+                ["powershell", "-NoProfile", "-Command", ps_guard(native_url)],
+                "irm {} | iex".format(native_url),
+                key="native"))
+        else:
+            # install.sh 自己就是 curl 拉下来的，所以 curl 是这条唯一的前提。
+            have_curl = which("curl") is not None
+            found.append(_route(
+                "官方原生脚本",
+                ("再跑一遍官方那条就是升级——那份脚本自己写着 always download "
+                 "latest，跑一次就把本机这份换成最新的。"
+                 if upgrade else
+                 "官方推荐的那条，装完它自己会更新，不用你管。")
+                + "跑之前会先验一眼取回来的是不是脚本。",
+                "不需要装别的东西" if have_curl else "没找到 curl，这条走不了",
+                have_curl,
+                ["bash", "-c", sh_guard(native_url)],
+                "curl -fsSL {} | bash".format(native_url),
+                key="native"))
 
-    if platform == "win32":
+    if platform == "win32" and profile.winget_id:
         have_winget = which("winget") is not None
         verb = "upgrade" if upgrade else "install"
         found.append(_route(
             "winget",
-            ("这份 claude 是 winget 管的，升级就走 winget upgrade——"
-             "它跟 claude 自己的自动更新不是一条路，各管各的。"
+            ("这份 {} 是 winget 管的，升级就走 winget upgrade——"
+             "它跟它自己的自动更新不是一条路，各管各的。".format(label)
              if upgrade else
              "Windows 自带的包管理器。装完更新得靠 winget upgrade，"
-             "它跟 claude 自己的自动更新不是一条路。"),
+             "它跟它自己的自动更新不是一条路。"),
             "这台机器有 winget" if have_winget else "这台机器上没有 winget",
             have_winget,
-            ["winget", verb, "--id", WINGET_ID,
+            ["winget", verb, "--id", profile.winget_id,
              "--accept-package-agreements", "--accept-source-agreements"],
             "winget {} --id {} --accept-package-agreements "
-            "--accept-source-agreements".format(verb, WINGET_ID),
+            "--accept-source-agreements".format(verb, profile.winget_id),
             key="winget"))
 
-    if platform == "darwin":
+    if platform == "darwin" and profile.brew_cask:
         have_brew = which("brew") is not None
         verb = "upgrade" if upgrade else "install"
         found.append(_route(
             "Homebrew",
-            ("这份 claude 是 Homebrew 管的，升级就走 brew upgrade。"
+            ("这份 {} 是 Homebrew 管的，升级就走 brew upgrade。".format(label)
              if upgrade else
              "macOS 上最顺手的一条。装完更新走 brew upgrade。"),
             "这台机器有 brew" if have_brew else "这台机器上没有 brew",
             have_brew,
-            ["brew", verb, "--cask", BREW_CASK],
-            "brew {} --cask {}".format(verb, BREW_CASK),
+            ["brew", verb, "--cask", profile.brew_cask],
+            "brew {} --cask {}".format(verb, profile.brew_cask),
             key="brew"))
 
-    # npm 三个平台都摆——Linux 上它往往是唯一一条现成的路。
+    # npm 三个平台都摆——Linux 上它往往是唯一一条现成的路；codebuddy 也是从
+    # 这条起（它没有原生脚本，官方给的装法本来就只有 npm）。
     package = profile.npm_package
-    have_npm = which("npm") is not None
-    if not have_npm:
-        node_note, node_ready = "没装 Node/npm，这条走不了", False
-    elif node is None:
-        # npm 在、node 问不出来：少见（nvm 的 shim 有时这样），当作能用，
-        # 别为一句读不到的话把唯一一条路堵死。
-        node_note, node_ready = "有 npm", True
-    elif node < MIN_NODE:
-        node_note = "Node 太旧（{}），要 18 以上".format(version_text(node))
-        node_ready = False
-    else:
-        node_note, node_ready = "Node {}".format(version_text(node)), True
-    found.append(_route(
-        "npm",
-        ("这份 claude 是 npm 装的，升级就把这个包再装一遍——npm 会换成最新那版。"
-         if upgrade else
-         "要有 Node 才行。装完更新走 npm，跟 claude 自己的自动更新不是一条路。"),
-        node_note,
-        node_ready,
-        ["npm", "install", "-g", package],
-        "npm install -g {}".format(package),
-        key="npm"))
+    if package:
+        have_npm = which("npm") is not None
+        if not have_npm:
+            node_note, node_ready = "没装 Node/npm，这条走不了", False
+        elif node is None:
+            # npm 在、node 问不出来：少见（nvm 的 shim 有时这样），当作能用，
+            # 别为一句读不到的话把唯一一条路堵死。
+            node_note, node_ready = "有 npm", True
+        elif node < MIN_NODE:
+            node_note = "Node 太旧（{}），要 18 以上".format(version_text(node))
+            node_ready = False
+        else:
+            node_note, node_ready = "Node {}".format(version_text(node)), True
+        found.append(_route(
+            "npm",
+            ("这份 {} 是 npm 装的，升级就把这个包再装一遍——"
+             "npm 会换成最新那版。".format(label)
+             if upgrade else
+             "要有 Node 才行。装完更新走 npm，跟它自己的自动更新不是一条路。"),
+            node_note,
+            node_ready,
+            ["npm", "install", "-g", package],
+            "npm install -g {}".format(package),
+            key="npm"))
 
-    # 便携版 Node：留给"前几条都走不通、机器上又没有 Node"那种情况——实机上
-    # 撞见过原生脚本和 winget 一起失败、npm 又因为没 Node 灰着，用户就卡住了。
-    found.append(_route(
-        "便携版 Node + npm",
-        "上一条得先有 Node。这条把官方那个 Node 便携包整个下到启动器自己的"
-        "目录（~/.claude_tool/node）里，再用它自带的 npm 装 claude——不用你先"
-        "自己去折腾一个 Node。只写 ~/.claude_tool 里面，不动系统的 PATH，"
-        "卸载就是把这个目录删掉。",
-        "需要能连上 nodejs.org，连不上自动换 npmmirror",
-        True,
-        (["powershell", "-NoProfile", "-Command",
-          node_setup(platform, package=package)]
-         if platform == "win32"
-         else ["bash", "-c", node_setup(platform, package=package)]),
-        _node_show(platform, package),
-        key="node", timeout=NODE_TIMEOUT))
+        # 便携版 Node：留给"前几条都走不通、机器上又没有 Node"那种情况——实机上
+        # 撞见过原生脚本和 winget 一起失败、npm 又因为没 Node 灰着，用户就卡住了。
+        name = profile.exe_names[0]
+        found.append(_route(
+            "便携版 Node + npm",
+            "上一条得先有 Node。这条把官方那个 Node 便携包整个下到启动器自己的"
+            "目录（~/.claude_tool/node）里，再用它自带的 npm 装 {}——不用你先"
+            "自己去折腾一个 Node。只写 ~/.claude_tool 里面，不动系统的 PATH，"
+            "卸载就是把这个目录删掉。".format(label),
+            "需要能连上 nodejs.org，连不上自动换 npmmirror",
+            True,
+            (["powershell", "-NoProfile", "-Command",
+              node_setup(platform, package=package, name=name)]
+             if platform == "win32"
+             else ["bash", "-c", node_setup(platform, package=package, name=name)]),
+            _node_show(platform, package),
+            key="node", timeout=NODE_TIMEOUT))
 
     if upgrade:
         who = installed_via(claude_path)
@@ -539,7 +550,7 @@ def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
                 route["pick"] = route["key"] == who
                 route["note"] = ("你现在这份就是这条装的。" if route["pick"] else
                                  "不是这条装的，选它会再装一份。")
-    else:
+    elif found:
         found[0]["pick"] = True
 
     return found
@@ -562,19 +573,24 @@ def checkup(platform=None, which=shutil.which, node=UNSET, claude_path=None,
         rows.append((profile.id, claude_path, True))
     else:
         rows.append((profile.id, "还没找到", False))
-        # 装到 PATH 外面那种：硬盘上有、`claude` 这五个字母敲不出来。这一条
-        # 正是启动器能帮上忙的地方，得单独说。
-        came_out = local_bin_claude(bin_dir)
+        # 装到 PATH 外面那种：硬盘上有、命令敲不出来。只有带原生脚本的档位
+        # （claude）才会落在 ~/.local/bin，别的档位不去翻这个目录。
+        came_out = local_bin_claude(bin_dir) if profile.native_install else None
         if came_out:
             rows.append(("~/.local/bin", "有 claude，只是 PATH 里还没有", True))
 
-    if platform == "win32":
+    # 体检表只摆这个档位真用得上的那几行：codebuddy 没有 winget / brew，
+    # 摆一行「有 winget」只会让人以为能拿它装 codebuddy。
+    if platform == "win32" and profile.winget_id:
         rows.append(("winget", "有" if which("winget") else "没有",
                      bool(which("winget"))))
-    if platform == "darwin":
+    if platform == "darwin" and profile.brew_cask:
         rows.append(("brew", "有" if which("brew") else "没有", bool(which("brew"))))
-    rows.append(("npm", "有" if which("npm") else "没有", bool(which("npm"))))
-    rows.append(("Node", version_text(node) if node else "没装", node is not None))
+    if profile.npm_package:
+        rows.append(("npm", "有" if which("npm") else "没有", bool(which("npm"))))
+    if profile.npm_package or profile.needs_node:
+        rows.append(("Node", version_text(node) if node else "没装",
+                     node is not None))
     return rows
 
 

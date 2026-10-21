@@ -41,7 +41,8 @@ def _split_prefix(prefix):
 
 
 def agent_args(profile=None, cont=False, prompt=None, settings=None,
-               permission=None, append_system_prompt=None, exe=None):
+               permission=None, append_system_prompt=None, exe=None,
+               resume_id=None, new_session_id=None):
     """给 agent 的参数表，一项一个元素，头几项是程序名。
 
     cont        接着该目录里最近一次会话聊。
@@ -52,6 +53,11 @@ def agent_args(profile=None, cont=False, prompt=None, settings=None,
     append_system_prompt  追加到系统提示后面的内容（记忆互通靠它注入）。
     exe         命令行前缀。不传就自己去找（agent_exe）；找不到退回裸名字。要
                 塞假的（探针）就从这儿塞，可以是列表也可以是单个字符串。
+    resume_id   续指定的那条会话（`--resume <id>`）。给了它就不再带 --continue：
+                两个一起给是自相矛盾的，"最近一条"和"这一条"谁说了算说不清。
+    new_session_id  新会话预先钉死 id（`--session-id <uuid>`）。启动器自己生成
+                uuid 传进来，好处是窗口一开就知道它对应哪条会话——运行中标记、
+                防止同一条双开，都靠这个。
 
     Linux/macOS 那条路要的是这种形态：一个参数一个元素，交给终端模拟器，谁也
     不用猜哪里该断开。
@@ -60,8 +66,12 @@ def agent_args(profile=None, cont=False, prompt=None, settings=None,
     mode = permission if permission in profile.permission_modes else DEFAULT_PERMISSION
     argv = _split_prefix(exe if exe is not None else agent_exe(profile))
     argv += ["--permission-mode", mode]
-    if cont:
+    if resume_id:
+        argv += ["--resume", str(resume_id)]
+    elif cont:
         argv.append("--continue")
+    elif new_session_id:
+        argv += ["--session-id", str(new_session_id)]
     if settings:
         argv += ["--settings", settings]
     if append_system_prompt:
@@ -84,7 +94,8 @@ def _quote_for_cmd(token):
 
 
 def agent_command(profile=None, cont=False, prompt=None, settings=None,
-                  permission=None, append_system_prompt=None, exe=None):
+                  permission=None, append_system_prompt=None, exe=None,
+                  resume_id=None, new_session_id=None):
     """拼给 cmd /k 的那条命令行（Windows 那条路用的）。
 
     参数的意思见 agent_args——两边是同一份参数表，这边只是把它渲染成一条
@@ -100,7 +111,7 @@ def agent_command(profile=None, cont=False, prompt=None, settings=None,
     """
     argv = agent_args(profile, cont=cont, prompt=prompt, settings=settings,
                       permission=permission, append_system_prompt=append_system_prompt,
-                      exe=exe)
+                      exe=exe, resume_id=resume_id, new_session_id=new_session_id)
     return " ".join(_quote_for_cmd(item) for item in argv)
 
 

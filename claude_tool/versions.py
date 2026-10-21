@@ -154,7 +154,10 @@ def check(local, profile=None):
     local 是启动器已经拿到的那串（"claude 2.1.150"，就是顶栏显示的那个）。
     profile 不传走默认（claude）。npm 优先，它答不上来（没网、被墙）才回头问
     官网——官网那份是"打包时测过的版本"，比 npm 的实时值旧，只能当兜底。
-    codebuddy 的 npm_package 是 None，没有 npm 这条源，直接走官网。
+
+    npm 那条源问的是 **claude 的包**（npm_version 钉死了）。顶栏那颗查更新目前
+    只查 claude（见 ui/update.py 里写死的 DEFAULT_AGENT），codebuddy 不搭这趟车；
+    哪天真要给它也查，得先把 npm_version 改成按 profile 取包名。
 
     返回 (最新版号文本, 拿的是哪个源, 本机是否落后)，查不到返回 None。
     本机版本读不出来时 stale 给 False：宁可不提示，也不要拿一个没读到的东西

@@ -6,7 +6,7 @@ Row 和 PillButton 都是 Canvas 而不是 Frame——圆角、悬停换色、�
 import tkinter as tk
 from tkinter import ttk
 
-from claude_tool import theme
+from claude_tool import agents, theme
 from claude_tool.theme import (
     ACCENT,
     ACCENT_HOVER,
@@ -23,6 +23,8 @@ from claude_tool.theme import (
     PAGE_BG,
     PANEL_BG,
     PRIMARY_FG,
+    RADIUS_CARD,
+    RADIUS_CHIP,
     ROW_ACTION_HOVER,
     TEXT,
     WARN,
@@ -50,8 +52,11 @@ def agent_style(agent_id):
 
     字母是给 240 宽左栏用的——全名摆不下，拼音首字母又没人看得懂；右栏详情
     那边地方宽裕，直接写全名（见 ui/detail.py）。
+
+    国内/国际两个 codebuddy 档同族同徽标（family=codebuddy）：同一套 CLI 的
+    两个账号，徽标再分就认不出了；区分靠右栏全名和设置页的档位按钮。
     """
-    if agent_id == "codebuddy":
+    if agents.get(agent_id).family == "codebuddy":
         return AGENT_CODEBUDDY_BG, AGENT_CODEBUDDY, "B"
     return AGENT_CLAUDE_BG, AGENT_CLAUDE, "C"
 
@@ -65,7 +70,7 @@ def section_title(parent, text):
     box = tk.Frame(parent, bg=PAGE_BG)
     tk.Frame(box, bg=ACCENT, width=3, height=13).pack(side="left")
     tk.Label(box, text=text, bg=PAGE_BG, fg=TEXT,
-             font=font(11, True)).pack(side="left", padx=(7, 0))
+             font=font(12, True)).pack(side="left", padx=(7, 0))
     return box
 
 
@@ -81,11 +86,15 @@ class PillButton(tk.Canvas):
     """
 
     def __init__(self, parent, text, command, primary=False, bg=None, height=28,
-                 enabled=True, tone=None):
-        width = measure(text, 10, primary) + 26
-        super().__init__(parent, width=width, height=height,
+                 enabled=True, tone=None, width=None):
+        # width 传了就把胶囊撑到那个宽度（左栏底部那排等宽按钮用）；不传还是
+        # 按文字量出来的自然宽度。
+        canvas_width = (width if width is not None
+                        else measure(text, 10, primary) + 26)
+        super().__init__(parent, width=canvas_width, height=height,
                          bg=PAGE_BG if bg is None else bg,
                          highlightthickness=0, borderwidth=0, takefocus=1)
+        self._fixed_width = width
         self._text = text
         self._command = command
         self._primary = primary
@@ -93,7 +102,7 @@ class PillButton(tk.Canvas):
         self._enabled = enabled
         self._hover = False
         self._focused = False
-        self._cw, self._ch = width, height
+        self._cw, self._ch = canvas_width, height
 
         self.bind("<Enter>", lambda e: self._set_hover(True))
         self.bind("<Leave>", lambda e: self._set_hover(False))
@@ -122,8 +131,9 @@ class PillButton(tk.Canvas):
 
     def set_text(self, text):
         self._text = text
-        self._cw = measure(text, 10, self._primary) + 26
-        self.configure(width=self._cw)
+        if self._fixed_width is None:
+            self._cw = measure(text, 10, self._primary) + 26
+            self.configure(width=self._cw)
         self._draw()
 
     def _set_hover(self, value):
@@ -245,7 +255,7 @@ class Row(tk.Canvas):
             fill = HOVER_BG
         else:
             fill = PANEL_BG
-        rounded_rect(self, 0, 0, width - 1, height - 1, 10,
+        rounded_rect(self, 0, 0, width - 1, height - 1, RADIUS_CARD,
                      fill=fill, outline=ACCENT_SOFT if self.active else BORDER)
         if self.active:
             # 选中那一行在最左边加一道强调色竖条。只靠浅色底的话，深色主题下
@@ -259,7 +269,7 @@ class Row(tk.Canvas):
             # 空串是"这行超过 9 了、没有号"——照样占着这块地，几行标题才对得齐。
             cy = height / 2
             if self.badge:
-                rounded_rect(self, x, cy - 9, x + 20, cy + 9, 5,
+                rounded_rect(self, x, cy - 9, x + 20, cy + 9, RADIUS_CHIP,
                              fill=HOVER_BG, outline=BORDER)
                 self.create_text(x + 10, cy + 1, text=self.badge, fill=MUTED,
                                  font=font(9, True))
@@ -287,7 +297,7 @@ class Row(tk.Canvas):
             cx2 = width - 10
             cx1 = cx2 - 20
             chip_bg, chip_fg, letter = agent_style(self.agent)
-            rounded_rect(self, cx1, cy - 8, cx2, cy + 8, 5,
+            rounded_rect(self, cx1, cy - 8, cx2, cy + 8, RADIUS_CHIP,
                          fill=chip_bg, outline=chip_fg, width=1)
             self.create_text((cx1 + cx2) / 2, cy + 1, text=letter,
                              font=font(8, True), fill=chip_fg)
@@ -333,6 +343,82 @@ class Row(tk.Canvas):
             # 悬停的时候字色压深一点，跟底下的浅灰圆一起把"这个能点"说清楚。
             self.create_text(cx, cy, text=glyph, font=font(11),
                              fill=TEXT if self._hover == index else MUTED)
+
+
+class PaletteCard(tk.Canvas):
+    """「外观」页的一张配色卡：左边一块示意，右边名字和深浅。
+
+    示意里的颜色是**这张卡代表的那套配色自己的**，不是当前主题的——所以都用
+    create_* 画成图元；recolor_tree 只改控件选项，碰不到图元。换主题时设置页
+    会把整排卡重建一遍（见 settings._render_theme_choice）。
+    """
+
+    W, H = 220, 66
+
+    def __init__(self, parent, name, palette, label, dark, selected, command):
+        super().__init__(parent, width=self.W, height=self.H, bg=PAGE_BG,
+                         highlightthickness=0, borderwidth=0, takefocus=1)
+        self.name = name
+        self.palette = palette
+        self.label = label
+        self.dark = dark
+        self.selected = selected
+        self._command = command
+        self._hover = False
+        self._focused = False
+
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<Button-1>", lambda e: self._click())
+        self.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.bind("<FocusOut>", lambda e: self._set_focus(False))
+        self.bind("<Return>", lambda e: self._click())
+        self.bind("<space>", lambda e: self._click())
+        self._draw()
+
+    def _set_hover(self, value):
+        self._hover = value
+        self.configure(cursor="hand2" if value else "arrow")
+        self._draw()
+
+    def _set_focus(self, value):
+        self._focused = value
+        self._draw()
+
+    def _click(self):
+        self._command()
+
+    def _draw(self):
+        self.delete("all")
+        width, height = self.W, self.H
+        # 卡片本身跟着当前主题走；只有左边那块示意用的是目标配色的颜色。
+        fill = HOVER_BG if self._hover else PANEL_BG
+        marked = self.selected or self._focused
+        rounded_rect(self, 1, 1, width - 2, height - 2, RADIUS_CARD,
+                     fill=fill, outline=ACCENT if marked else BORDER,
+                     width=2 if marked else 1)
+
+        x, y, size = 10, 11, 44
+        rounded_rect(self, x, y, x + size, y + size, RADIUS_CHIP,
+                     fill=self.palette["PAGE_BG"],
+                     outline=self.palette["BORDER"])
+        rounded_rect(self, x + 5, y + 5, x + size - 5, y + size - 5, 4,
+                     fill=self.palette["PANEL_BG"], outline="")
+        rounded_rect(self, x + 10, y + 11, x + size - 10, y + 16, 2.5,
+                     fill=self.palette["ACCENT"], outline="")
+        rounded_rect(self, x + 10, y + 21, x + size - 14, y + 25, 1.5,
+                     fill=self.palette["TEXT"], outline="")
+        rounded_rect(self, x + 10, y + 29, x + size - 20, y + 33, 1.5,
+                     fill=self.palette["MUTED"], outline="")
+
+        if self.selected:
+            self.create_text(width - 18, 17, text="✓", fill=ACCENT,
+                             font=font(10, True))
+        self.create_text(66, height / 2 - 9, anchor="w", text=self.label,
+                         fill=TEXT, font=font(10, True))
+        self.create_text(66, height / 2 + 10, anchor="w",
+                         text="深色配色" if self.dark else "浅色配色",
+                         fill=MUTED, font=font(9))
 
 
 class ScrollArea(tk.Frame):

@@ -235,7 +235,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 外观：先套主题，再建样式和界面。theme.apply 会把各模块已经 import 的
         # 那批颜色常量重绑一遍（见 theme.py 开头），所以后面建出来的控件直接
         # 就是选中的那套配色，不用建完再扫一遍。
-        theme.apply(self.config_data.get("theme") or "light")
+        theme.apply(self.config_data.get("theme") or "paper")
         self.configure(bg=theme.PAGE_BG)
         theme.titlebar(self)
         self._setup_styles()
@@ -346,9 +346,11 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         """换配色：立刻生效，并记进配置。
 
         顺序不能反：先换调色板（之后新画的控件才是新色），再重设 ttk 那几条
-        样式，最后把已经摆在屏幕上的控件扫一遍重上色。设置窗里选配色那两颗
-        按钮的状态也要跟着重画，不然还停在旧的那一颗上。
+        样式，最后把已经摆在屏幕上的控件扫一遍重上色。设置窗里那排配色卡
+        也要跟着重画，不然选中的还是旧的那一张。
         """
+        # 老名字（light / dark）也认，统一翻成调色板名再比、再存。
+        name = theme.canonical(name) or "paper"
         if name == theme.current():
             return
         theme.apply(name)
@@ -366,8 +368,8 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         render = getattr(self, "_render_theme_choice", None)
         if callable(render):
             render()
-        self.feedback_var.set("配色换成{}了。".format(
-            "深色" if name == "dark" else "浅色"))
+        self.feedback_var.set("配色换成「{}」了。".format(
+            theme.PALETTE_INFO[name]["label"]))
 
     def _apply_min_size(self):
         """窗口下限按内容量出来，别写死。
@@ -702,15 +704,16 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         widget = self.winfo_containing(event.x_root, event.y_root)
         if widget is None:
             return
-        # 绑的是 bind_all，所以滚轮事件是整进程的——在设置窗里滚也走这儿。
-        # 模型列表要看设置窗开没开过；没开过它还不存在，跳过。工作区那张在
-        # 左栏，一直在。
-        targets = [target for target in (self.model_list, self.ws_list)
-                   if target is not None]
-        for target in targets:
-            if target.contains(widget):
+        # 绑的是 bind_all，所以滚轮事件是整进程的——设置窗、对话框里滚也走这儿。
+        # 从光标底下那个控件往上找**最近的** ScrollArea：左栏工作区、右栏会话、
+        # 设置窗模型列表、会话记录对话框，全走这一条。以前只认写死的那两块，
+        # 右栏会话列表滚上去只会干瞪眼；每加一块列表就往名单里补一行也迟早漏。
+        target = widget
+        while target is not None:
+            if isinstance(target, ScrollArea):
                 target.scroll(-int(event.delta / 120))
                 return
+            target = getattr(target, "master", None)
 
     # 光标落在这些控件里时一律当"用户在打字"，全局快捷键让路。
     _TYPING_CLASSES = ("Entry", "TEntry", "Text", "TCombobox", "Spinbox",
