@@ -78,29 +78,33 @@ def for_agent(agent_id):
 ILLEGAL_FILE_CHARS = r'[<>:"/\\|?*]'
 
 
-# 插件目录。跟 ICON_FILE 一样两条路：源码跑的时候在包自己的 plugins/ 底下，
-# 打包之后 PyInstaller 把 datas 摊在 sys._MEIPASS（onedir 就是 exe 旁边那个
-# _internal/）里。
+# 随启动器附带的插件源码。跟 ICON_FILE 一样两条路：源码跑的时候在包自己的
+# plugins/ 底下，打包之后 PyInstaller 把 datas 摊在 sys._MEIPASS（onedir 就是
+# exe 旁边那个 _internal/）里。
+#
+# **运行时不再从这里加载**：启动时由 plugins/seed.py 把这里的插件播种到
+# USER_PLUGIN_DIR，之后一律只认用户目录。这样"启用了哪份、改的是哪份、备份的是
+# 哪份"永远是同一个地方，不用再解释"内置的看不见、用户的能看见"。
 #
 # **不要用 hiddenimports 收插件**（spec 里那份是手工维护的清单）：加一个插件就得
 # 改一次 spec，而插件本来就是"往目录里丢一个文件夹"的东西。当 datas 收源码、
-# 运行时用 importlib 加载。
+# 播种时复制过去。
 PLUGIN_DIR = (
     os.path.join(sys._MEIPASS, "plugins")
     if getattr(sys, "frozen", False)
     else os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
 )
 
-# 用户自己导入的插件落在这儿。**必须跟上面那个分开**：上面那个是"随启动器一起
-# 发出去的内置插件"，打包之后在 `_internal/` 里——那地方跟着安装包走，升级一次
-# 覆盖一次，用户的插件放进去就没了。用户导入的插件是**用户数据**，跟 launcher.json
-# 一样该待在自己的数据目录里，升级、卸载重装都不受影响（卸干净才一起走）。
-#
-# 两处都扫，**同名时用户那份优先**（见 plugins/registry.discover）——这样用户能
-# 用一个自己改过的版本盖掉内置的同名插件，而不用去动安装目录。
+# 插件唯一的运行目录。附带的那几份会被播种到这里，用户导入的也落在这里。
+# 它是**用户数据**，跟 launcher.json 一样待在自己的数据目录里，升级、卸载重装
+# 都不受影响（卸干净才一起走）。用户能直接打开、改、备份，所见即所得。
 USER_PLUGIN_DIR = os.path.join(TOOL_DIR, "plugins")
 
 # 插件在启动器这边的状态（信没信过、启没启用）。**跟 launcher.json 分开放**：
 # 那份是用户的工作区配置，这份是"我信任过哪些插件的哪个版本"，混在一起以后两边
 # 的迁移会互相拖累——用户想重置工作区不该顺带把信任记录也清了。
 PLUGIN_STATE_FILE = os.path.join(TOOL_DIR, "plugins.json")
+
+# 附带插件播种到用户目录的账本：哪些 id 已经播过、当时每个文件的哈希是多少。
+# 跟信任记录分开：这本账管"要不要复制/能不能安全覆盖"，那份管"敢不敢跑"。
+PLUGIN_SEED_FILE = os.path.join(TOOL_DIR, "plugin_seeds.json")

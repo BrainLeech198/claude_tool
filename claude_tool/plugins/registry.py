@@ -43,7 +43,9 @@ class Plugin:
     def __init__(self, path, folder_name, builtin=False):
         self.path = path
         self.folder_name = folder_name
-        self.builtin = builtin     # 随启动器发出去的那份；用户自己导入的是 False
+        # 多目录注入时"排在第一的那个"标成内置；默认单目录下大家都是用户目录里
+        # 的普通文件，这个字段不再参与界面（见 discover）。
+        self.builtin = builtin
         self.manifest = None
         self.error = None          # 坏插件的原因（清单层）
         self.blocked = None        # 门禁不过的原因
@@ -84,7 +86,10 @@ class Plugin:
 class Registry:
     """扫插件目录、记住信过谁、把启用过的加载起来。
 
-    **扫两个目录**（见 paths）：随启动器发出去的内置插件，加上用户自己导入的那份。
+    **运行时只扫一个目录**：`paths.USER_PLUGIN_DIR`（见 paths）。随启动器附带的
+    插件在启动时由 `plugins/seed.py` 播种到那儿，之后跟用户导入的插件没有区别。
+    不直接从安装包里加载——"能看见、能改、能备份"和"正在跑"必须是同一份文件。
+
     `plugin_dir` / `plugin_dirs` / `state_file` 可注入是为了让探针跑在沙箱里——
     **不注入就是用户的真目录**，探针用之前务必看 `_probe_common.sandbox`。
     """
@@ -96,10 +101,10 @@ class Registry:
             # 单目录注入（老调用点与探针走这条）。
             self.plugin_dirs = [plugin_dir]
         else:
-            # 内置那份排前、用户那份排后——后扫到的盖掉先扫到的，于是"用户用一个
-            # 自己改过的版本顶掉内置的同名插件"天然生效（见 discover）。
-            self.plugin_dirs = [paths.PLUGIN_DIR, paths.USER_PLUGIN_DIR]
-        self.plugin_dir = self.plugin_dirs[0] if self.plugin_dirs else paths.PLUGIN_DIR
+            # 只有这一个来处。附带插件由 seed.sync() 在启动时复制到这里，所以
+            # 插件管理里看到的路径就是真正加载的路径。
+            self.plugin_dirs = [paths.USER_PLUGIN_DIR]
+        self.plugin_dir = self.plugin_dirs[0] if self.plugin_dirs else paths.USER_PLUGIN_DIR
         self.state_file = (state_file if state_file is not None
                            else paths.PLUGIN_STATE_FILE)
         self.plugins = []
@@ -179,10 +184,10 @@ class Registry:
         for index, base in enumerate(self.plugin_dirs):
             if not os.path.isdir(base):
                 continue
-            # `plugin_dirs` 的第一项＝"随启动器发出去的内置那份"（见 __init__）。
-            # 这个标记只用来在插件管理里分「内置」和「用户导入」，不影响加载，也不
-            # 影响信任——用户自己导入的插件一样要过一遍启用。
-            builtin = index == 0
+            # 只有显式注入多个目录时才分"内置/用户"；默认单目录下附带的插件已经
+            # 播种成用户文件，再贴"内置"标签就跟"所见即所得"自相矛盾了。
+            # 这个标记不影响加载，也不影响信任——所有插件一样要过一遍启用。
+            builtin = len(self.plugin_dirs) > 1 and index == 0
             for folder_name in sorted(os.listdir(base)):
                 path = os.path.join(base, folder_name)
                 if not os.path.isdir(path):

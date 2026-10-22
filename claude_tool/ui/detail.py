@@ -174,38 +174,56 @@ class DetailMixin:
         self._handoff_btn = PillButton(manage, "删交接文档", self._detail_remove_handoff,
                                        bg=PAGE_BG, height=26)
 
-        # ── 会话 ──
-        # 「管理」下面本来是空的，这块正好填进去：这一本聊过哪几条、各自多久以前。
-        # 列表直接读 CLI 落盘的会话文件（见 history），不另存一份索引——用户在
-        # 启动器外面开的会话也得能看见，自己维护一份迟早对不上。
+        # ── 会话 / 插件：两个标签页 ──
+        # 以前会话列表和插件面板上下摞着，小说工程一选中，插件就被顶到屏幕外。
+        # 现在两块只占同一片地方，用胶囊切页；默认停在「会话历史」。
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(18, 0))
-        session_head = tk.Frame(parent, bg=PAGE_BG)
-        session_head.pack(fill="x", pady=(10, 6))
-        tk.Label(session_head, text="会话", bg=PAGE_BG, fg=TEXT,
-                 font=font(11, True)).pack(side="left")
+        self.detail_tab = "sessions"
+        self._tabs_available = None
+        self._packed_tab = None
+        self.detail_tab_bar = tk.Frame(parent, bg=PAGE_BG)
+        self.detail_tab_bar.pack(fill="x", pady=(10, 8))
+        self.detail_tab_body = tk.Frame(parent, bg=PAGE_BG)
+        self.detail_tab_body.pack(fill="both", expand=True)
+        self.sessions_tab = tk.Frame(self.detail_tab_body, bg=PAGE_BG)
+        self.plugins_tab = tk.Frame(self.detail_tab_body, bg=PAGE_BG)
+
+        # 会话页头：数量靠左，「会话中心」和提示靠右。标题交给标签栏，不再重复。
+        session_head = tk.Frame(self.sessions_tab, bg=PAGE_BG)
+        session_head.pack(fill="x", pady=(0, 6))
         self.session_count_var = tk.StringVar(value="")
         tk.Label(session_head, textvariable=self.session_count_var, bg=PAGE_BG,
-                 fg=MUTED, font=font(9)).pack(side="left", padx=(8, 0))
-        # 右边那句是操作提示，不占按钮位置。会话多了以后下面还有「查看全部」。
+                 fg=MUTED, font=font(9)).pack(side="left")
+        # 右边那颗进「会话中心」：跨工作区找会话，不在这本里翻。提示摆在它左边。
+        center = PillButton(session_head, "会话中心", self.open_session_center,
+                            bg=PAGE_BG, height=24)
+        center.pack(side="right")
         tk.Label(session_head, text="点一条接着聊", bg=PAGE_BG, fg=MUTED,
-                 font=font(9)).pack(side="right")
+                 font=font(9)).pack(side="right", padx=(0, 8))
 
-        self.session_area = ScrollArea(parent, max_height=SESSION_ROWS * SESSION_ROW_H)
+        self.session_area = ScrollArea(self.sessions_tab,
+                                       max_height=SESSION_ROWS * SESSION_ROW_H)
         self.session_area.pack(fill="x")
-        self.session_empty = tk.Label(parent, text="这个工作区还没有会话",
+        self.session_empty = tk.Label(self.sessions_tab, text="这个工作区还没有会话",
                                       bg=PAGE_BG, fg=MUTED, font=font(9),
                                       anchor="w")
-        self.session_more = PillButton(parent, "查看全部", self._open_session_picker,
-                                       bg=PAGE_BG, height=26)
+        self.session_more = PillButton(self.sessions_tab, "查看全部",
+                                       self._open_session_picker, bg=PAGE_BG,
+                                       height=26)
         self._sessions = []
         self._session_agent = None
-        # 窗口矮的时候列表得跟着收，不能把底下的插件区顶出可视范围。
+        # 窗口矮的时候列表得跟着收，不能把标签栏顶出可视范围。
         parent.bind("<Configure>", self._fit_sessions, add="+")
 
-        # 插件挂载区：宿主自己的东西在上面，插件注册的排在下面这条分隔线之后
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(18, 0))
-        self.detail_plugin_area = tk.Frame(parent, bg=PAGE_BG)
-        self.detail_plugin_area.pack(fill="x", pady=(10, 0))
+        # 插件页：标题由标签栏负责，这里只留插件自己画的面板。
+        self.detail_plugin_area = tk.Frame(self.plugins_tab, bg=PAGE_BG)
+        self.detail_plugin_area.pack(fill="x")
+        # 没有可画的面板时说一句，不要给用户一页白板。
+        self.plugin_empty = tk.Label(self.plugins_tab, bg=PAGE_BG, fg=MUTED,
+                                     font=font(9), anchor="w", justify="left",
+                                     wraplength=380)
+
+        self._refresh_tabs()
 
     def _pack_detail_daily(self):
         """把三颗日常动作按钮摆进 `detail_daily_row`。
@@ -216,13 +234,98 @@ class DetailMixin:
         for index, button in enumerate(self._detail_daily):
             button.pack(side="left", padx=(0 if index == 0 else 6, 0))
 
+    # ── 会话 / 插件标签页 ──
+
+    def _plugin_tab_available(self):
+        """有插件给右栏注册过面板/动作吗。没有就不摆标签栏，别多一排空胶囊。"""
+        host = getattr(self, "plugin_host", None)
+        if host is None:
+            return False
+        try:
+            return bool(host.views("workspace_detail")
+                        or host.actions("workspace_detail"))
+        except Exception:                                  # noqa: BLE001
+            return False
+
+    def _render_detail_tabs(self, available):
+        """按可用性重画标签栏。只在"有没有插件"变了时调——换工作区别重建。"""
+        for child in self.detail_tab_bar.winfo_children():
+            child.destroy()
+        self._detail_tabs = {}
+        if not available:
+            if self.detail_tab_bar.winfo_manager() == "pack":
+                self.detail_tab_bar.pack_forget()
+            return
+        if self.detail_tab_bar.winfo_manager() != "pack":
+            # 之前 pack_forget 过：用 before 塞回标签页体的前面，别跑到下面去。
+            self.detail_tab_bar.pack(fill="x", pady=(10, 8),
+                                     before=self.detail_tab_body)
+        for key, caption in (("sessions", "会话历史"), ("plugins", "插件")):
+            button = PillButton(self.detail_tab_bar, caption,
+                                lambda k=key: self._set_detail_tab(k),
+                                primary=self.detail_tab == key,
+                                bg=PAGE_BG, height=28)
+            button.pack(side="left", padx=(0, 6))
+            self._detail_tabs[key] = button
+
+    def _refresh_tabs(self):
+        """插件挂载点变了（启用/停用插件）之后同步标签栏和当前页。
+
+        换工作区也会走到这儿（插件面板重画之后），所以"可用性没变就只确保当前
+        页摆着"，不做任何重建——否则每点一下左栏，标签栏闪一次。
+        """
+        if not hasattr(self, "detail_tab_bar"):
+            return
+        available = self._plugin_tab_available()
+        if not available and self.detail_tab == "plugins":
+            self.detail_tab = "sessions"
+        if available != self._tabs_available:
+            self._tabs_available = available
+            self._render_detail_tabs(available)
+        self._pack_detail_tab()
+
+    def _pack_detail_tab(self):
+        """只把当前那一页摆出来。已经在摆就不动——会话列表的滚动位置要留住。"""
+        if self._packed_tab == self.detail_tab:
+            return
+        self.sessions_tab.pack_forget()
+        self.plugins_tab.pack_forget()
+        page = (self.plugins_tab if self.detail_tab == "plugins"
+                else self.sessions_tab)
+        page.pack(fill="both", expand=True)
+        self._packed_tab = self.detail_tab
+        self._fit_sessions()
+
+    def _set_detail_tab(self, key):
+        if key not in ("sessions", "plugins") or key == self.detail_tab:
+            return
+        self.detail_tab = key
+        # 选中态在胶囊上，得重画一排。插件页的内容在注册/换工作区时已经画好了，
+        # 这里只负责摆出来——不重复调插件的 build（小说面板读一遍 fs 不便宜）。
+        self._render_detail_tabs(self._tabs_available)
+        self._pack_detail_tab()
+        self._fit_sessions()
+
+    def _show_plugin_empty(self, text):
+        """插件页的空白提示：有内容就收掉，没内容才说一句。"""
+        label = getattr(self, "plugin_empty", None)
+        if label is None:
+            return
+        if text:
+            label.configure(text=text)
+            if label.winfo_manager() != "pack":
+                label.pack(fill="x", pady=(8, 0))
+        elif label.winfo_manager() == "pack":
+            label.pack_forget()
+
     # ── 会话列表 ──
 
     def refresh_sessions(self):
         """重读一遍选中那本的会话记录，重画列表。
 
         直接读文件而不是查缓存：会话是在 CLI 那边写的，这中间可能刚开过、刚关过。
-        读的是最近 60 条，够右栏和「查看全部」用；再老的翻出来也没人挑。
+        右栏读最近 60 条，全部画进滚动区（一屏露 6 条，其余滚下去看）；「查看全部」
+        不拿这份，它自己按 200 条重读。
         """
         if not hasattr(self, "session_area"):
             return
@@ -245,12 +348,14 @@ class DetailMixin:
     def _render_sessions(self):
         self.session_area.clear()
         item = self.selected_entry()
-        shown = self._sessions[:SESSION_ROWS]
+        # 一屏摆 6 条，但不是只画 6 条：多出来的都塞进滚动区，滚下去就能看，
+        # 免得明明记着「会话 15」却只露 6 行、以为历史丢了。
+        shown = self._sessions
         for session in shown:
             running = (item is not None and
                        self.running_session(item["path"], session["id"]) is not None)
             row = Row(self.session_area.inner,
-                      title=session["title"],
+                      title=("★ " if session.get("favorite") else "") + session["title"],
                       subtitle=humanize_ago(session["updated"]),
                       height=SESSION_ROW_H,
                       warn="运行中" if running else "",
@@ -262,7 +367,7 @@ class DetailMixin:
             row.pack(fill="x", pady=3)
 
         total = len(self._sessions)
-        self.session_count_var.set(str(total) if total else "")
+        self.session_count_var.set("{} 条会话".format(total) if total else "")
         if shown:
             self.session_empty.pack_forget()
         else:
@@ -282,7 +387,10 @@ class DetailMixin:
         """
         if not hasattr(self, "session_area"):
             return
-        room = self.detail_area.winfo_height() - self.session_area.winfo_y() - 8
+        if self.detail_tab != "sessions" or self.sessions_tab.winfo_manager() != "pack":
+            return
+        # session_area 现在挂在会话页里，y 是相对页面的——拿页面的高度算剩余空间。
+        room = self.sessions_tab.winfo_height() - self.session_area.winfo_y() - 8
         want = max(SESSION_ROW_H, min(SESSION_ROWS * SESSION_ROW_H, room))
         if abs(want - self.session_area.max_height) > 4:
             self.session_area.max_height = want
@@ -312,7 +420,9 @@ class DetailMixin:
     def _open_session_picker(self):
         item = self.selected_entry()
         if item is not None:
-            self.open_session_picker(item, self._sessions)
+            # 不把右栏那份（最多 60 条）递过去：对话框自己按 200 条重读一遍，
+            # 否则「查看全部」看到的还是右栏那一截。
+            self.open_session_picker(item)
 
     def _rename_session(self, session):
         """给一条会话改名：新名字写进记录文件里的 ai-title。"""

@@ -70,6 +70,7 @@ from claude_tool.ui.dialogs import LauncherDialogs
 from claude_tool.ui.models import ModelsMixin
 from claude_tool.ui.nav import NAV_WIDTH, NavMixin
 from claude_tool.ui.plugins import PluginsMixin
+from claude_tool.ui.session_center import SessionCenterMixin
 from claude_tool.ui.sessions import SessionsMixin
 from claude_tool.ui.settings import SettingsMixin
 from claude_tool.ui.terminal import TerminalMixin
@@ -114,8 +115,8 @@ def default_window_size(screen_w, screen_h):
 
 
 class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
-               WorkspacesMixin, SessionsMixin, TerminalMixin, PluginsMixin,
-               LauncherDialogs, tk.Tk):
+               WorkspacesMixin, SessionsMixin, SessionCenterMixin, TerminalMixin,
+               PluginsMixin, LauncherDialogs, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Claude 启动器")
@@ -287,6 +288,9 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self.bind_all("<MouseWheel>", self._on_wheel)
         self.bind_all("<Control-f>", self._focus_filter)
         self.bind_all("<Control-F>", self._focus_filter)
+        # 会话中心：哪本工作区都行，Ctrl+K 直接把所有会话摊开找。
+        self.bind_all("<Control-k>", lambda _e: self.toggle_session_center())
+        self.bind_all("<Control-K>", lambda _e: self.toggle_session_center())
         for number in range(1, 10):
             self.bind_all("<Control-Key-{}>".format(number),
                           lambda _e, n=number: self._launch_nth_shortcut(n))

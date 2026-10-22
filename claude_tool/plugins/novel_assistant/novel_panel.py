@@ -11,7 +11,7 @@
 
 `register_action("workspace_detail", …)` 挂出来的按钮是**全局**的：不管当前选中的
 是不是小说工程，它都排在右栏那一行。而这两个动作只对"一本书"成立，所以跟面板一起
-画——选中别的工程时整块一起消失（空面板宿主会连标题一起收掉）。
+画——选中别的文件夹时面板换成「初始化小说工程」入口，按钮也跟着换，插件页不留白板。
 """
 import tkinter as tk
 
@@ -236,6 +236,57 @@ def build_collection_panel(parent, books, root, host):
                        bg=bg, height=28).pack(side="left")
 
     area.fit()
+
+
+# ── 还不是小说的文件夹 ────────────────────────────────────────────────────
+
+def build_init_panel(parent, path, host, on_init, empty=True):
+    """选中的文件夹还不是小说工程：说清楚，并给一颗初始化按钮。
+
+    非小说文件夹也画这一块（`empty=False` 换一句说明）。以前这里什么都不画，
+    插件页就剩一片白板——用户装了小说插件却找不到任何能操作的东西。
+    """
+    theme = host.theme
+    widgets = host.widgets
+    room = _room(parent)
+    bg = theme.PAGE_BG
+
+    _caption(parent, "小说工作台", theme)
+    tk.Label(parent, text=("这里还不是小说工程" if empty
+                           else "这个文件夹不是小说工程"),
+             bg=bg, fg=theme.TEXT, font=theme.font(13, True),
+             anchor="w").pack(anchor="w")
+    _wrapped(parent, ("这是一个空文件夹。初始化后会生成 书籍信息.md 和 story/，"
+                      "右栏立刻就能看见书卡和章节。") if empty else
+                     "初始化只会补上 书籍信息.md 和 story/，这里已有的文件"
+                     "一个都不会动。",
+             theme, room, pady=(6, 0))
+
+    actions = tk.Frame(parent, bg=bg)
+    actions.pack(fill="x", pady=(10, 0))
+    widgets.PillButton(actions, "在这里初始化小说工程", lambda: on_init(),
+                       primary=True, bg=bg, height=28).pack(side="left")
+    widgets.PillButton(actions, "打开文件夹", lambda: _open(host, path),
+                       bg=bg, height=28).pack(side="left", padx=(6, 0))
+
+
+def build_start_panel(parent, host, on_new):
+    """没选中文件夹时：别让插件页空着，给一颗「新建小说」。"""
+    theme = host.theme
+    widgets = host.widgets
+    room = _room(parent)
+    bg = theme.PAGE_BG
+
+    _caption(parent, "小说工作台", theme)
+    tk.Label(parent, text="还没选中文件夹", bg=bg, fg=theme.TEXT,
+             font=theme.font(13, True), anchor="w").pack(anchor="w")
+    _wrapped(parent, "从左栏选一个文件夹，这里会显示它是不是小说工程；"
+                     "也可以直接新建一本。", theme, room, pady=(6, 0))
+
+    actions = tk.Frame(parent, bg=bg)
+    actions.pack(fill="x", pady=(10, 0))
+    widgets.PillButton(actions, "✍ 新建小说", lambda: on_new(),
+                       primary=True, bg=bg, height=28).pack(side="left")
 
 
 # ── 两个动作 ──────────────────────────────────────────────────────────────

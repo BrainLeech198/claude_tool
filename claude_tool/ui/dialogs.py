@@ -1703,6 +1703,46 @@ class LauncherDialogs:
         entry.selection_range(0, "end")
         self._center(dialog)
 
+    def edit_session_tags(self, item, session, on_done=None):
+        """给一条会话贴标签：逗号分隔，写进 jsonl 末尾的 session-flags。
+
+        收藏不在这扇窗里改（会话中心右侧有单独的星标按钮），但写快照时要带上
+        它，否则这条记录一写，之前收藏的状态就被默认的 False 盖掉了。
+        """
+        dialog = tk.Toplevel(self)
+        dialog.grab_set()
+        body = make_form(dialog, "给会话贴标签")
+        tk.Label(body, text="多个标签用逗号隔开；清空就是去掉全部标签。",
+                 bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w").pack(fill="x")
+        tags_var = tk.StringVar(value=", ".join(session.get("tags") or []))
+        entry = make_entry(body, tags_var, width=40)
+        entry.pack(fill="x", pady=(8, 0))
+
+        def save():
+            tags = history.clean_tags(re.split(r"[,，;；]+", tags_var.get()))
+            saved = history.set_flags(item.get("agent"), item["path"],
+                                      session["id"], session.get("favorite", False),
+                                      tags)
+            if saved is None:
+                messagebox.showerror("没写成", "记录文件可能已经被别处挪走了。",
+                                     parent=dialog)
+                return
+            session["tags"] = saved
+            dialog.destroy()
+            self.refresh_sessions()
+            if on_done is not None:
+                on_done()
+            self.feedback_var.set(
+                "标签改成：{}".format(" / ".join(saved)) if saved
+                else "标签清空了。")
+
+        finish_form(dialog, [("保存", save, True), ("取消", dialog.destroy, False)])
+        dialog.bind("<Return>", lambda e: save())
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        entry.focus_set()
+        entry.selection_range(0, "end")
+        self._center(dialog)
+
     def open_session_picker(self, item, sessions=None):
         """「查看全部」：把这一本的会话整份列出来，点一条就续上。
 

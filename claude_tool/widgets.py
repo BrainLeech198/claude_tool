@@ -174,11 +174,14 @@ class Row(tk.Canvas):
 
     def __init__(self, parent, title, subtitle="", on_click=None, actions=(),
                  active=False, marker=False, warn="", warn_color=None,
-                 bg=None, height=52, badge=None, agent=None):
+                 bg=None, height=52, badge=None, agent=None, tags=()):
         super().__init__(parent, height=height, bg=PAGE_BG if bg is None else bg,
                          highlightthickness=0, borderwidth=0)
         self.title = title
         self.subtitle = subtitle
+        # 副标题那一行右端贴一排小标签。只在有副标题时摆——没有副标题的行
+        # 标题本来就占满，再塞标签会把名字挤没。
+        self.tags = list(tags or ())
         self.on_click = on_click
         self.actions = list(actions)
         self.active = active
@@ -242,6 +245,12 @@ class Row(tk.Canvas):
         """换掉右侧那行小字；测试结果就是靠它落在卡片上的。"""
         self.warn, self.warn_color = text, (WARN if color is None else color)
         self._draw()
+
+    def set_active(self, value):
+        """换选中态。选中行不重建也能变——会话中心用上下键换行时走这条。"""
+        if self.active != value:
+            self.active = value
+            self._draw()
 
     def _draw(self):
         self.delete("all")
@@ -322,6 +331,20 @@ class Row(tk.Canvas):
 
         title_font = font(11, self.active)
         if self.subtitle:
+            # 标签从右往左排，排不下就丢掉靠左的那几个（名字和工作区在前，
+            # 标签只是补充信息）。剩下的宽度才给副标题。
+            chips = []
+            edge = action_edge
+            for tag in reversed(self.tags):
+                caption = "#" + tag
+                chip_w = measure(caption, 9) + 14
+                if edge - chip_w < x + 70:
+                    break
+                chips.append((caption, edge - chip_w, edge))
+                edge -= chip_w + 6
+            chips.reverse()
+            if chips:
+                subtitle_room = max(min(subtitle_room, edge - 6 - x), 40)
             self.create_text(x, height / 2 - 9,
                              text=ellipsize(self.title, title_room, 11, self.active),
                              anchor="w", fill=ACCENT if self.active else TEXT,
@@ -329,6 +352,12 @@ class Row(tk.Canvas):
             self.create_text(x, height / 2 + 11,
                              text=ellipsize(self.subtitle, subtitle_room), anchor="w",
                              fill=MUTED, font=font(9))
+            for caption, x1, x2 in chips:
+                cy = height / 2 + 11
+                rounded_rect(self, x1, cy - 8, x2, cy + 8, RADIUS_CHIP,
+                             fill=HOVER_BG, outline=BORDER)
+                self.create_text((x1 + x2) / 2, cy + 1, text=caption,
+                                 fill=MUTED, font=font(8))
         else:
             self.create_text(x, height / 2, text=ellipsize(self.title, title_room, 11, self.active),
                              anchor="w", fill=ACCENT if self.active else TEXT,
@@ -467,6 +496,21 @@ class ScrollArea(tk.Frame):
 
     def scroll(self, steps):
         self.canvas.yview_scroll(steps, "units")
+
+    def see(self, widget):
+        """把某一行滚进可视范围。上下键换选中时用。"""
+        self.update_idletasks()
+        total = self.inner.winfo_height()
+        if total <= 0:
+            return
+        top = widget.winfo_y()
+        bottom = top + widget.winfo_height()
+        view_top = self.canvas.yview()[0] * total
+        room = self.canvas.winfo_height()
+        if top < view_top:
+            self.canvas.yview_moveto(top / total)
+        elif bottom > view_top + room:
+            self.canvas.yview_moveto(max(bottom - room, 0) / total)
 
 
 class Tip:
