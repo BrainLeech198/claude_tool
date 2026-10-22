@@ -307,10 +307,10 @@ def test_registry():
           os.path.normcase(user_dir))
     check("装完是未启用（导入 != 信任）", reg.is_enabled(found[0]), False)
 
-    # 只有内置那一份时，标记反过来
+    # 单目录（运行时只有用户目录这一种情况）：都是普通文件，不再贴「内置」
     reg2 = R.Registry(plugin_dirs=[builtin_dir], state_file=state)
     only = reg2.discover("0.4.0")
-    check("只有内置时标成内置", only[0].builtin, True)
+    check("单目录时不再贴内置标签", only[0].builtin, False)
     check("内置那份的名字", only[0].name, "内置的示例")
     check("它也没被启用", reg2.is_enabled(only[0]), False)
 

@@ -103,6 +103,20 @@ def is_collection(path):
     return bool(path) and os.path.isfile(os.path.join(path, SPEC_FILE))
 
 
+def is_empty_dir(path):
+    """这个目录里有没有用户看得见的东西（隐藏文件不算）。
+
+    只给"要不要摆初始化按钮"用：一个刚建好的空文件夹是最典型的"想在这儿写
+    小说"的场景。目录不存在、读不了都不算空——别在一本真书上摆初始化。
+    """
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        return not any(not name.startswith(".") for name in os.listdir(path))
+    except OSError:
+        return False
+
+
 # ── 读一本书 ──────────────────────────────────────────────────────────────
 
 def read_card(path):

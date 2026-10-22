@@ -63,20 +63,21 @@ def main():
         os.remove(ZIP)
 
     files = make_zip()
-    check("插件目录里有清单 + 三个 .py", files,
-          ["__init__.py", "novel_book.py", "novel_panel.py", "plugin.json"])
+    check("插件目录里有清单 + 四个 .py", files,
+          ["__init__.py", "novel_book.py", "novel_new.py", "novel_panel.py",
+           "plugin.json"])
 
     pid, place = pack.import_zip(ZIP, DEST)
     check("装包认得这个包、id 跟目录名一致", pid, "novel_assistant")
-    check("四个文件都落到用户插件目录里",
+    check("五个文件都落到用户插件目录里",
           sorted(os.listdir(place)), files)
 
-    # 扫一遍：内置那份在、用户导入的那份也在 -> 同名，用户那份该赢
+    # 扫一遍：现在只有用户目录这一个来处，装进来的就是唯一那份
     reg = registry.Registry()
     reg.discover()
     hit = reg.get(pid)
     check("扫出来了", hit is not None, True)
-    check("赢的是用户导入那份（不是内置的）",
+    check("默认目录下不再贴「内置」标签",
           bool(hit and hit.builtin), False)
     check("装进来仍是未启用（来源是 zip 也不放松信任）",
           bool(hit and hit.enabled), False)
@@ -90,6 +91,32 @@ def main():
     check("加载的就是这个插件", [p.id for p in ok], [pid])
     check("面板注册上了", len(host.views("workspace_detail")), 1)
     check("用的是当前接口版本", host.api_version, 1)
+
+    # ── 直接丢进插件目录（像 MC 的 mods 文件夹）──
+    dropped = os.path.join(DEST, "novel-dropped.zip")
+    shutil.copyfile(ZIP, dropped)
+    installed, failed = pack.install_dropped(DEST)
+    check("目录里的 zip 被认出来并装好", installed,
+          [("novel_assistant", "novel-dropped.zip")])
+    check("没有装失败的包", failed, [])
+    check("原包挪进 .archives（不再躺在目录顶层）",
+          os.path.isfile(dropped), False)
+    check("原包没被删掉",
+          os.path.isfile(os.path.join(DEST, pack.ARCHIVE_DIR,
+                                      "novel-dropped.zip")), True)
+
+    bad = os.path.join(DEST, "不是插件.zip")
+    with open(bad, "w", encoding="utf-8") as handle:
+        handle.write("not a zip")
+    installed, failed = pack.install_dropped(DEST)
+    check("坏包不装", installed, [])
+    check("坏包留在原地、照实报出来",
+          [name for name, _ in failed], ["不是插件.zip"])
+    check("坏包文件没被动过", os.path.isfile(bad), True)
+
+    reg.discover()
+    check(".archives 不会被当成插件扫出来",
+          [p.id for p in reg.plugins], ["novel_assistant"])
 
     print()
     if FAILED:

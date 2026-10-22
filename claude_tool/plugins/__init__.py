@@ -5,20 +5,20 @@
 一个插件 = 一个子目录，里面有 `plugin.json`（只写「是什么」）和一个入口 `.py`
 （只写「怎么算」）。宿主负责五件事：
 
-1. **发现** —— 扫两个目录、读 `plugin.json`（`registry.py` / `manifest.py`）
+1. **发现** —— 扫用户插件目录、读 `plugin.json`（`registry.py` / `manifest.py`）
 2. **门禁** —— `api_version` 要对得上、`min_host` 不能比宿主新
 3. **信任** —— 首次见到一律未启用；用户点过「启用」才 import（`registry.py`）
 4. **喂一个 `host` 对象** —— 插件能碰到的全部就是那个对象（`host.py`）
 5. **装包** —— 用户拿到的 `.zip` 由 `pack.py` 解进用户插件目录
 
-## 插件放哪两个目录
+## 插件放在哪
 
-  paths.PLUGIN_DIR        随启动器发出去的内置插件。打包后在 `_internal/` 里，
-                          **只读、升级一次覆盖一次**。
-  paths.USER_PLUGIN_DIR   用户自己导入的（`~/.claude_tool/plugins/`）。这是**用户
-                          数据**，升级、重装都不动它。
+只有一个：`paths.USER_PLUGIN_DIR`（`~/.claude_tool/plugins/`）。这是**用户数据**，
+升级、重装都不动它。随启动器附带的插件（比如「小说工作台」）由 `seed.py` 在启动时
+复制进来——复制过之后它就跟用户自己导入的插件完全一样，能看、能改、能备份，管理
+窗里的路径就是真正加载的路径。
 
-同名时用户那份优先——用户能用一个自己改过的版本顶掉内置的同名插件。
+播种只做一次；用户删掉的不会补回来，用户改过的副本不会被内置升级覆盖。
 
 ## 它不是什么
 
@@ -33,10 +33,14 @@
 - **加动作** —— `register_action(where, 文字, 回调)`：顶栏胶囊、右栏按钮、左栏
   行右键菜单
 - **画面板** —— `register_view(where, build)`：往右栏详情区画一整块界面
+- **读写宿主数据** —— `workspaces()` / `current_workspace()` /
+  `default_workplace()` / `create_workspace(path)`：插件不自己拼工作区记录，
+  建目录和落盘都走宿主，形状跟界面上那两个入口一致
 
 ## 怎么加一个插件
 
-自己写就往 `claude_tool/plugins/我的插件/` 里放：
+自己写就往 `~/.claude_tool/plugins/我的插件/` 里放（附带插件也在这里，可以直接
+复制一份改）：
 
     plugin.json      ← 只写「是什么」：id / 名称 / 版本 / 接口版本 / 入口
     __init__.py      ← 只写「怎么算」：一个 register(host) 函数

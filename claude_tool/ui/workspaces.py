@@ -13,7 +13,12 @@ import time
 from tkinter import filedialog, messagebox, simpledialog
 
 from claude_tool import mover
-from claude_tool.config import merge_scanned, path_key, save_config
+from claude_tool.config import (
+    merge_scanned,
+    new_workspace_entry,
+    path_key,
+    save_config,
+)
 from claude_tool.handoff import HANDOFF_FILE
 from claude_tool.host import trash_path
 from claude_tool.paths import TOOL_DIR
@@ -89,6 +94,35 @@ class WorkspacesMixin:
         workspaces[index], workspaces[target] = workspaces[target], workspaces[index]
         save_config(self.config_data)
         self.refresh_workspaces()
+
+    def add_workspace_path(self, path, name=None, select=True):
+        """把一个目录加进工作区列表；目录不存在就建。返回那条工作区 dict。
+
+        插件（小说工作台）建新工程时走这儿。跟界面上那两个入口共用
+        `new_workspace_entry` 的形状和同一份落盘逻辑，免得插件自己拼一条字段
+        不全的记录。已经存在的路径直接复用，不重复添加。
+
+        建目录或落盘失败时返回 None——插件那边会给用户一句提示，别静默。
+        """
+        path = os.path.normpath(path)
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            return None
+        entry = next((item for item in self.config_data["workspaces"]
+                      if path_key(item["path"]) == path_key(path)), None)
+        if entry is None:
+            entry = new_workspace_entry(name or os.path.basename(path), path)
+            self.config_data["workspaces"].append(entry)
+            try:
+                save_config(self.config_data)
+            except OSError:
+                self.config_data["workspaces"].remove(entry)
+                return None
+        self.refresh_workspaces()
+        if select:
+            self.select_workspace(path)
+        return entry
 
     # ── 搬工作区 ──
 

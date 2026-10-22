@@ -200,6 +200,16 @@ def check_detail_stack(app):
 def main():
     app = Launcher()
     soak(app)
+
+    # 右栏现在是「会话历史 / 插件」两页：插件区只在插件页可见。先启用随包带的
+    # 小说插件、切到插件页，再量那几块的几何——不然量到的全是没摆出来的坐标。
+    for plugin in app.plugin_registry.plugins:
+        if plugin.usable:
+            app.plugin_registry.set_enabled(plugin, True)
+    app._reload_plugins()
+    app._set_detail_tab("plugins")
+    soak(app, 0.5)
+
     print("窗口 {}x{}  正文两栏 {} + {}  下限 {}".format(
         app.winfo_width(), app.winfo_height(), NAV_WIDTH, DETAIL_MIN_WIDTH,
         app.minsize()))

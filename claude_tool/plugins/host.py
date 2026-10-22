@@ -102,6 +102,28 @@ class Host:
             return None
         return picker()
 
+    def default_workplace(self):
+        """设置里那个「默认工作区目录」。插件让用户挑新工程位置时拿它当前值。"""
+        live = getattr(self._app, "config_data", None)
+        if isinstance(live, dict) and live.get("workplace"):
+            return str(live["workplace"])
+        from claude_tool import config
+        return str(config.load_config().get("workplace") or "")
+
+    def create_workspace(self, path, name=None, select=True):
+        """把一个目录加进左栏工作区；目录不存在就建。返回那条工作区 dict。
+
+        **这是插件第一次能改宿主的工作区列表**（小说工作台建新工程要它）。目录
+        和配置都由宿主建，插件只决定"建在哪儿、叫什么"。失败返回 None——插件
+        要照实告诉用户，别当成成功继续往下走。
+
+        `select=True` 会顺手选中这一条，右栏和插件面板当场跟着刷新。
+        """
+        maker = getattr(self._app, "add_workspace_path", None)
+        if not callable(maker):
+            return None
+        return maker(path, name=name, select=select)
+
     # ── 订阅 ────────────────────────────────────────────────────
     def on_workspace_change(self, callback):
         """订阅"用户换了工作区"。`callback(entry_or_None)`。

@@ -24,6 +24,9 @@ from claude_tool import agents
 # 标题行是随对话追加的，尾部那份最新；头部留给"还没有 ai-title 的新会话"。
 TAIL_BYTES = 48 * 1024
 HEAD_BYTES = 24 * 1024
+# 预览读最近这么多字节。一屏只摆几条消息，但单条可能很长（贴了大段日志），
+# 留够 128KB 一般够翻出最近七八条；真不够就少给几条，不为了补满整份读进来。
+PREVIEW_BYTES = 128 * 1024
 
 
 def compress_path(path):
@@ -150,23 +153,41 @@ def _last_prompt(text):
     return found[:80]
 
 
-def title_of(path):
-    """一条会话给人看的标题。一条都取不到就退回空串。"""
+def clean_tags(values):
+    """标签列表去空、去重、去掉开头的 #。"""
+    found = []
+    for value in values or ():
+        tag = " ".join(str(value).split()).lstrip("#")
+        if tag and tag not in found:
+            found.append(tag)
+    return found
+
+
+def _title_and_flags(path):
+    """一次读头尾，把标题、收藏、标签都取出来。
+
+    返回 (title, favorite, tags)。收藏和标签是启动器自己往文件末尾补的
+    `session-flags` 行（见 set_flags），取最后一条——后写的盖前面的，跟
+    ai-title 一个道理。
+    """
     try:
         tail = _piece(path, True, TAIL_BYTES)
-        title = _title_in(tail, last=True)
-        if title:
-            return title
         head = _piece(path, False, HEAD_BYTES)
-        title = _title_in(head, last=False) or _first_prompt(head)
-        if title:
-            return title
-        prompt = _last_prompt(tail)
-        if prompt:
-            return prompt
     except OSError:
-        pass
-    return ""
+        return "", False, []
+    title = (_title_in(tail, last=True) or _title_in(head, last=False)
+             or _first_prompt(head) or _last_prompt(tail))
+    favorite, tags = False, []
+    for row in _rows(tail):
+        if row.get("type") == "session-flags":
+            favorite = bool(row.get("favorite"))
+            tags = clean_tags(row.get("tags"))
+    return title, favorite, tags
+
+
+def title_of(path):
+    """一条会话给人看的标题。一条都取不到就退回空串。"""
+    return _title_and_flags(path)[0]
 
 
 _CWD_RE = re.compile(r'"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"')
@@ -197,7 +218,8 @@ def _cwd_matches(path, wanted):
 def list_sessions(agent_id, workspace, limit=None):
     """这一本工作区在一个档位下的会话，新的在前。
 
-    每项：id（uuid）、title、updated（mtime 时间戳）、file（绝对路径）。
+    每项：id（uuid）、title、updated（mtime 时间戳）、file（绝对路径）、
+    favorite（收藏）、tags（标签列表）。
     """
     variants = _variants(workspace)
     files = []
@@ -229,11 +251,14 @@ def list_sessions(agent_id, workspace, limit=None):
         if not _cwd_matches(file, variants):
             continue
         session_id = os.path.basename(file)[:-len(".jsonl")]
+        title, favorite, tags = _title_and_flags(file)
         sessions.append({
             "id": session_id,
-            "title": title_of(file) or "会话 " + session_id[:8],
+            "title": title or "会话 " + session_id[:8],
             "updated": stamp,
             "file": file,
+            "favorite": favorite,
+            "tags": tags,
         })
     return sessions
 
@@ -260,6 +285,30 @@ def delete_session(agent_id, workspace, session_id):
     return False
 
 
+def _append_row(path, row):
+    """往会话文件末尾补一行。
+
+    写入用 "ab"（追加模式）而不是 "r+b" + seek：会话正开着时 CLI 也在往同一个
+    文件追加，追加模式由系统保证每次都落在当前末尾，不会把 CLI 刚写的那截盖掉。
+    上一行没换行收尾时先补一个，免得两行粘成一行 JSON。
+    """
+    payload = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            needs_newline = bool(handle.tell())
+            if needs_newline:
+                handle.seek(-1, os.SEEK_END)
+                needs_newline = handle.read(1) != b"\n"
+        with open(path, "ab") as handle:
+            if needs_newline:
+                handle.write(b"\n")
+            handle.write(payload)
+    except OSError:
+        return False
+    return True
+
+
 def rename_session(agent_id, workspace, session_id, title):
     """给一条会话改个名字：往那份 jsonl 末尾补一条 `ai-title`。
 
@@ -274,25 +323,29 @@ def rename_session(agent_id, workspace, session_id, title):
         if session["id"] != session_id:
             continue
         row = {"type": "ai-title", "aiTitle": title, "sessionId": session_id}
-        payload = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
-        try:
-            # 先单独看一眼上一行有没有换行收尾。写入用 "ab"（追加模式）而不是
-            # "r+b" + seek：会话正开着时 CLI 也在往同一个文件追加，追加模式由
-            # 系统保证每次都落在当前末尾，不会把 CLI 刚写的那截盖掉。
-            with open(session["file"], "rb") as handle:
-                handle.seek(0, os.SEEK_END)
-                needs_newline = bool(handle.tell())
-                if needs_newline:
-                    handle.seek(-1, os.SEEK_END)
-                    needs_newline = handle.read(1) != b"\n"
-            with open(session["file"], "ab") as handle:
-                if needs_newline:
-                    handle.write(b"\n")
-                handle.write(payload)
-        except OSError:
-            return False
-        return True
+        return _append_row(session["file"], row)
     return False
+
+
+def set_flags(agent_id, workspace, session_id, favorite, tags):
+    """记下一条会话的收藏和标签：往 jsonl 末尾补一条 `session-flags`。
+
+    每次写的是**完整快照**（不是增量），读的时候取最后一条（见
+    `_title_and_flags`）。这样取消收藏、清空标签也只需要再补一行 false / []，
+    不用回头改前面那些行——会话文件仍然只追加，不重写。
+
+    返回清理后的标签列表（写成功）；找不到会话返回 None。
+    """
+    tags = clean_tags(tags)
+    if not session_id:
+        return None
+    for session in list_sessions(agent_id, workspace):
+        if session["id"] != session_id:
+            continue
+        row = {"type": "session-flags", "sessionId": session_id,
+               "favorite": bool(favorite), "tags": tags}
+        return tags if _append_row(session["file"], row) else None
+    return None
 
 
 def latest_time(agent_id, workspace):
@@ -309,3 +362,156 @@ def latest_time(agent_id, workspace):
         return max(stamps) if stamps else None
     except OSError:
         return None
+
+
+# ── 会话中心：跨工作区的那一份 ─────────────────────────────────────────────
+
+def timeline(workspaces, per_workspace=200):
+    """把所有工作区的会话聚成一条按时间倒序的时间线。
+
+    `list_sessions` 只管一本；会话中心要的是"不管哪个项目，最近聊过什么"。
+    每项在它返回的那几个字段之外多两样：`workspace`（配置里那条 dict）和
+    `agent`（规范化之后的档位 id），右边预览和「接着聊」都要靠它们找回现场。
+
+    per_workspace 默认 200（跟「查看全部」那个上限一致）：时间线是拿来翻最近
+    的东西的，一个项目压着上千条旧会话时，为了列出来把整份历史都读一遍不值当。
+    """
+    found = []
+    for entry in workspaces or ():
+        path = entry.get("path")
+        if not path or not os.path.isdir(path):
+            continue
+        agent_id = agents.get(entry.get("agent")).id
+        try:
+            sessions = list_sessions(agent_id, path, limit=per_workspace)
+        except Exception:
+            # 会话文件是外部数据，一本读坏了不该让整条时间线空掉。
+            continue
+        for session in sessions:
+            item = dict(session)
+            item["workspace"] = entry
+            item["agent"] = agent_id
+            found.append(item)
+    found.sort(key=lambda item: item["updated"], reverse=True)
+    return found
+
+
+def _snippet(text, needle, radius=48):
+    """关键词前后各留一小段，压成一行给搜索结果显示。"""
+    index = text.lower().find(needle.lower())
+    if index < 0:
+        return ""
+    start = max(index - radius, 0)
+    end = min(index + len(needle) + radius, len(text))
+    piece = re.sub(r"\s+", " ", text[start:end]).strip()
+    return ("…" if start else "") + piece + ("…" if end < len(text) else "")
+
+
+def _simple_hit(path, needle):
+    """简单模式：只看标题、开场白和最近一条提示。返回 (命中字段, 摘要)。"""
+    try:
+        tail = _piece(path, True, TAIL_BYTES)
+        head = _piece(path, False, HEAD_BYTES)
+    except OSError:
+        return "", ""
+    title = _title_in(tail, last=True) or _title_in(head, last=False)
+    fields = (("标题", title),
+              ("开场白", _first_prompt(head)),
+              ("最近提示", _last_prompt(tail)))
+    for where, text in fields:
+        if text and needle in text.lower():
+            return where, _snippet(text, needle)
+    return "", ""
+
+
+def _deep_hit(path, needle):
+    """深度模式：整份扫一遍，正文、标题、最近提示都算。返回 (命中字段, 摘要)。
+
+    只认消息里真正的 text 块（`_text_of`），工具结果、图片 base64 那些不进
+    搜索范围——它们要么没人读得懂，要么会把关键词匹配成一堆垃圾。
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                kind = row.get("type")
+                where = ""
+                if kind == "ai-title":
+                    text, where = str(row.get("aiTitle") or ""), "标题"
+                elif kind in ("user", "assistant") and not row.get("isMeta"):
+                    message = row.get("message")
+                    content = (message.get("content")
+                               if isinstance(message, dict) else message)
+                    text, where = _text_of(content), "正文"
+                elif kind == "last-prompt":
+                    text, where = str(row.get("lastPrompt") or ""), "最近提示"
+                else:
+                    continue
+                if text and needle in text.lower():
+                    return where, _snippet(text, needle)
+    except OSError:
+        return "", ""
+    return "", ""
+
+
+def search(sessions, keyword, deep=False, progress=None):
+    """在一批会话里按关键词筛，返回命中的那些（原样复制 + 两格命中信息）。
+
+    `sessions` 是 `timeline()` 或 `list_sessions()` 的返回值；两种形状都够用
+    ——只读 file，别的一概不碰。`progress(done, total)` 给深度模式报进度用：
+    整份扫描可能要好几秒，界面得知道它还在动。
+    """
+    keyword = (keyword or "").strip()
+    if not keyword:
+        return list(sessions)
+    needle = keyword.lower()
+    found = []
+    total = len(sessions)
+    for index, session in enumerate(sessions):
+        where, hit = (_deep_hit if deep else _simple_hit)(session["file"], needle)
+        if hit:
+            item = dict(session)
+            item["match_where"] = where
+            item["match_text"] = hit
+            found.append(item)
+        if progress is not None:
+            progress(index + 1, total)
+    return found
+
+
+def preview(path, count=8):
+    """一条会话最近几条人和 AI 说的话，给会话中心右边那块预览。
+
+    返回 [{"role": "user"/"assistant", "text": ...}, ...]，按时间先后。读尾部
+    就够了——预览要的是"聊到哪儿了"，不是从头复述。工具结果、系统提醒这类
+    不是人话的行一律跳过。
+    """
+    try:
+        tail = _piece(path, True, PREVIEW_BYTES)
+    except OSError:
+        return []
+    messages = []
+    for row in _rows(tail):
+        kind = row.get("type")
+        if kind not in ("user", "assistant") or row.get("isMeta"):
+            continue
+        message = row.get("message")
+        content = message.get("content") if isinstance(message, dict) else message
+        text = _text_of(content).strip()
+        if not text:
+            continue
+        if kind == "user" and text.startswith("<"):
+            # CLI 自己塞进来的 system-reminder / 命令回显，不是用户说的话。
+            continue
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        messages.append({"role": kind, "text": text})
+    return messages[-count:]

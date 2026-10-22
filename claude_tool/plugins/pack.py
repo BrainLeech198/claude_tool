@@ -57,6 +57,10 @@ JUNK_NAMES = ("__MACOSX", ".DS_Store", "Thumbs.db")
 # 上一次导入崩了留下一坨，也不会被当成插件扫出来。
 STAGING_MARK = "."
 
+# 装完的 zip 原包收进这个子目录。点开头，同样不会被当成插件扫出来；不删用户
+# 的文件，只从目录顶层挪开，免得每次扫描都重装一遍。
+ARCHIVE_DIR = ".archives"
+
 
 class BadPackage(Exception):
     """这个包不能当插件装。`str(e)` 是给用户看的一句话。"""
@@ -247,3 +251,53 @@ def import_zip(zip_path, dest_dir, max_files=MAX_FILES, max_bytes=MAX_BYTES):
             shutil.rmtree(staging, ignore_errors=True)
             raise
         return pid, target
+
+
+def install_dropped(dest_dir=None, archive_name=ARCHIVE_DIR):
+    """把**直接丢进插件目录**的 `.zip` 装成插件文件夹。
+
+    这是"像 MC 模组那样，把包扔进文件夹就认"的那一步。宿主在启动和「重新扫描」
+    时各调一次；装好的原包挪进 `.archives/`（点开头，不会被当成插件），不删。
+
+    返回 `(装好的 [(id, 包名)], 失败的 [(包名, 原因)])`。认不出来的包**原样留在
+    目录里**——不删、不搬，用户还能自己处理。
+    """
+    from claude_tool.paths import USER_PLUGIN_DIR
+    dest_dir = dest_dir or USER_PLUGIN_DIR
+    if not os.path.isdir(dest_dir):
+        return [], []
+    installed, failed = [], []
+    for name in sorted(os.listdir(dest_dir)):
+        path = os.path.join(dest_dir, name)
+        if not name.lower().endswith(".zip") or not os.path.isfile(path):
+            continue
+        try:
+            pid, _place = import_zip(path, dest_dir)
+        except BadPackage as exc:
+            failed.append((name, str(exc)))
+            continue
+        except Exception as exc:                          # noqa: BLE001
+            failed.append((name, "{}: {}".format(type(exc).__name__, exc)))
+            continue
+        installed.append((pid, name))
+        _archive(path, dest_dir, archive_name)
+    return installed, failed
+
+
+def _archive(zip_path, dest_dir, archive_name):
+    """把装完的原包挪进 `dest_dir/.archives/`；同名就加序号，不覆盖旧包。"""
+    folder = os.path.join(dest_dir, archive_name)
+    try:
+        os.makedirs(folder, exist_ok=True)
+        name = os.path.basename(zip_path)
+        target = os.path.join(folder, name)
+        stem, ext = os.path.splitext(name)
+        index = 2
+        while os.path.exists(target):
+            target = os.path.join(folder, "{}-{}{}".format(stem, index, ext))
+            index += 1
+        os.replace(zip_path, target)
+    except OSError:
+        # 挪不动就把包留在原地。下次扫描会再装一遍，结果一样（同名整体替换），
+        # 不值得为这一步把已经装好的插件回滚。
+        pass

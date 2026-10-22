@@ -5,7 +5,7 @@
 
 1. 选中**一本小说工程**：面板里真有书卡 / 章节（已发布那两章挂着「已发布·冻结」）
    / 人物 / 本轮观察词，而且排在宿主自己那排（「管理」）**下面**；
-2. 选中**不是**小说工程的工作区：整块连「插件」那个标题一起收掉，不留空位；
+2. 选中**不是**小说工程的工作区：给出「初始化小说工程」入口，不留白板；
 3. 「按规范审查」按下去，开的是**这本书**的会话，提示词里带书名和「只审不改」。
 
     python _probe_run.py _probe_novel_panel.py
@@ -143,6 +143,11 @@ def main():
         {"name": "作品集", "path": root},
     ]
 
+    # 标签页默认在「会话历史」；下面要量的都是插件面板，先切过去。
+    app._set_detail_tab("plugins")
+    soak(app)
+    check("右栏标签栏切到了插件页", app.detail_tab, "plugins")
+
     # ── 一本书 ──
     app.select_workspace(book)
     soak(app)
@@ -155,7 +160,8 @@ def main():
     check("一本书 · 人物在", len(labels(area, "许默")), 1)
     check("一本书 · 本轮观察词在",
           len(labels(area, contains="过了一会儿／过了会儿")), 1)
-    check("一本书 · 「插件」标题露出来了", len(labels(area, "插件")), 1)
+    check("一本书 · 标签栏在（插件已启用）",
+          app.detail_tab_bar.winfo_manager(), "pack")
 
     first = labels(area, contains="小说工作台")
     if first:
@@ -167,8 +173,17 @@ def main():
     # ── 不是小说工程 ──
     app.select_workspace(os.path.join(root, "随手建的"))
     soak(app)
-    check("非小说工程 · 整块不出现（连「插件」标题一起收掉）",
-          len(area.winfo_children()), 0)
+    check("非小说工程 · 说清楚这不是小说工程",
+          len(labels(area, "这个文件夹不是小说工程")), 1)
+    check("非小说工程 · 有「在这里初始化」可点",
+          button(area, "在这里初始化小说工程") is not None, True)
+    check("非小说工程 · 面板不是白板", len(area.winfo_children()), 1)
+
+    # ── 没选中任何文件夹 ──
+    app.select_workspace(None)
+    soak(app)
+    check("没选中 · 给一颗「✍ 新建小说」",
+          button(area, "✍ 新建小说") is not None, True)
 
     # ── 作品集根 ──
     app.select_workspace(root)

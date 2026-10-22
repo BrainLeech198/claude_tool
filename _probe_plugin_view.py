@@ -96,6 +96,15 @@ def main():
     undo = app.plugin_host.register_view("workspace_detail", build)
     soak(app)
 
+    check("注册之后标签栏出现", app.detail_tab_bar.winfo_manager(), "pack")
+    check("标签栏就是「会话历史」和「插件」", sorted(app._detail_tabs),
+          ["plugins", "sessions"])
+    # 默认停在会话历史；要看插件页得按一下「插件」。
+    check("默认停在会话历史", app.detail_tab, "sessions")
+    app._set_detail_tab("plugins")
+    soak(app)
+    check("切到插件页", app.detail_tab, "plugins")
+
     check("注册后面板画了一次", len(seen), 1)
     check("build 拿到的是当前选中那条",
           (seen[-1] if seen else {}).get("name"), "甲本")
@@ -119,6 +128,8 @@ def main():
     soak(app)
     check("撤掉之后插件区空了", len(area.winfo_children()), 0)
     check("记号也没了", by_text(area, "插件画的记号"), None)
+    check("没有插件了，标签栏收掉", app.detail_tab_bar.winfo_manager(), "")
+    check("自动退回会话历史", app.detail_tab, "sessions")
 
     app.destroy()
 
