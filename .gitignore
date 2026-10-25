@@ -15,6 +15,16 @@ build/_venv/
 Output/
 *.iss.bak
 
+# 安装包、压缩包这类打包大文件一律不进仓库，统一放到 release 附件里。
+# 上面 Output/ 和 dist/ 已经整目录挡了；这几条是防着有人把包拷到别处再提交。
+*.exe
+*.msi
+*.zip
+*.tar.gz
+*.7z
+*.dmg
+*.AppImage
+
 # claude_tool.iss 用 #include 吃的那个版本号：由 build/write_version.py 按
 # claude_tool/__init__.py 里的 __version__ 现生成，是产物不是源码。
 build/_version.iss
