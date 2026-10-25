@@ -58,15 +58,16 @@ def default_config():
         # 左栏当前选中那一本（记路径不记名字：改名不影响选中）。
         # 老配置文件里没这个键，读的地方一律用 .get()，别用 []。
         "selected_workspace": None,
-        # 底下这一排勾都记着上次的状态，但首次装上一定是关的：内嵌终端会改变新开
-        # 的会话开在哪儿，自动继续会替用户拍板，自动查 claude 新版会联网，都不该
-        # 悄悄替用户打开。（启动器查**自己**新版那条 0.4 起没开关了，每次启动都
-        # 查，见下面 auto_self_update 那行。）
+        # 底下这一排勾都记着上次的状态。内嵌、自动继续、查 claude 新版首次装上
+        # 都是关的：会改变新会话开在哪儿、替用户拍板、联网，都不该悄悄替用户打开。
+        # 只有「查启动器自己的新版」默认开——它只问一次官网、不改任何东西，关着
+        # 反而容易错过更新。现在这个也有开关了（见 auto_self_check）。
         "auto_continue": False,
         "embed": False,
         "auto_version_check": False,
-        # 这个键 0.4 起没用了：启动器现在每次都自动查自己的新版，不再由用户开关。
-        # 老配置文件里留着它，读的时候忽略，不删也不迁移——为这个跑一次迁移不值当。
+        "auto_self_check": True,
+        # 0.4 起废弃的旧键（当年没有开关，每次启动都查）。老配置里可能还留着，
+        # 读的时候不认它；新配置不再写。
         "auto_self_update": False,
         # 「AI 托管」上次选的档、上次丢给它的那个工作区、以及第 2 档用哪个模型
         # 当指挥。记着是为了下次打开对话框直接停在原处，不用重挑。档位只认 1/2/3。
@@ -131,6 +132,9 @@ def load_config():
     config["auto_continue"] = bool(data.get("auto_continue"))
     config["embed"] = bool(data.get("embed"))
     config["auto_version_check"] = bool(data.get("auto_version_check"))
+    # 老配置没有这个键，按"开"算——0.4 到 1.0.1 一直是无条件查，升级过来
+    # 不该突然变得不查了。
+    config["auto_self_check"] = bool(data.get("auto_self_check", True))
     # 不认识的、老配置里没有的，一律回到默认那套。老配置里的 light / dark
     # 由 theme.canonical 翻成新名字，升级后不会退回默认色。
     config["theme"] = theme.canonical(data.get("theme")) or "paper"

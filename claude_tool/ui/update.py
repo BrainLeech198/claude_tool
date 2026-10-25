@@ -173,6 +173,23 @@ class UpdateMixin:
         if self._local_version:
             self._start_version_check()
 
+    def _on_self_check_toggle(self):
+        """「自动查启动器新版」这个勾：记下来，打开时当场查一次。
+
+        这个开关是后来补的——0.4 到 1.0.1 是无条件查。默认还是开，关掉之后
+        设置「关于」页那颗「查启动器新版」和顶栏的手动入口都还在。
+        """
+        self.config_data["auto_self_check"] = self.auto_self_check_var.get()
+        save_config(self.config_data)
+        if not self.auto_self_check_var.get():
+            self.feedback_var.set(
+                "关掉了：启动时不再自动查启动器新版。"
+                "设置「关于」页里随时能手动查。")
+            return
+        self.feedback_var.set("开着了：以后每次启动都会问一次官网有没有新版。")
+        # 当场问一次，不然勾上去半天没动静，像没生效。
+        self._start_self_check()
+
     # ── 当前模型通不通（启动探一次）────────────────────────────────────────
     # 跟"要不要更新"无关，摆这儿是因为它跟那几颗胶囊一样：结果落在顶栏，
     # 只在出问题时冒头，平时不打扰。
@@ -250,9 +267,8 @@ class UpdateMixin:
         跟 claude 那条一样得在后台：网络不通时单是超时就好几秒。
 
         manual 就是"用户自己点的"：查不到、或者已经是最新，这两种"什么事都没
-        发生"的结果只有手动那次需要说出来，自动那次闭嘴。0.4 起启动即查（底下
-        那个勾去掉了），所以现在没有调用方传 True——参数留着是给设置窗「关于」
-        页的手动查入口用的，别顺手删。
+        发生"的结果只有手动那次需要说出来，自动那次闭嘴。自动那次由设置里的
+        「自动查启动器新版」控制（默认开），手动那次不受开关影响。
         """
         def work():
             try:

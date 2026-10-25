@@ -260,6 +260,10 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             value=bool(self.config_data.get("auto_continue")))
         self.auto_version_var = tk.BooleanVar(
             value=bool(self.config_data.get("auto_version_check")))
+        # 启动时自动查启动器自己有没有新版。默认开（见 config.default_config），
+        # 关掉之后手动入口还在（设置「关于」页 / 顶栏）。
+        self.auto_self_check_var = tk.BooleanVar(
+            value=bool(self.config_data.get("auto_self_check", True)))
         # 设置窗「关于」页那行字：手动查启动器新版的结果。反馈栏只有主窗底下
         # 那一条，而设置窗是独立的 Toplevel、常常正盖在主窗上面——结果得在眼皮
         # 底下能看见，所以单独存一份给它（update._say_self_check 往这儿写）。
@@ -279,10 +283,11 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self._setup_plugins()
         self._apply_min_size()
         self._probe_claude_version()
-        # 启动器自己有没有新版：0.4 起每次都查，不再由用户开关。查的是我们自己
-        # 的官网，不是 npm，量很小。这条不依赖本机 claude 的版本号（问的是我们
-        # 自己），所以不跟 claude 那条一起挂在 version_queue 上，直接起。
-        self._start_self_check()
+        # 启动器自己有没有新版：默认每次启动都查一次（设置里能关），查的是我们
+        # 自己的官网，不是 npm，量很小。这条不依赖本机 claude 的版本号（问的是
+        # 我们自己），所以不跟 claude 那条一起挂在 version_queue 上，直接起。
+        if self.auto_self_check_var.get():
+            self._start_self_check()
         # 模型通不通也顺手探一次：开着启动器才发现 key 过期/被墙，比开完会话撞一脸
         # 报错好。这条不联网查版本，是拿当前预设真打一次请求。
         self._start_model_health_check()

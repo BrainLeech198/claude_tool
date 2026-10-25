@@ -269,9 +269,9 @@ class SettingsMixin:
         # Terminal，字形回退差些），另一条挂的是 Claude Code 的 Stop hook。
         # 熟练用户要的是这几个词，好去翻文档、翻配置文件；只写大白话他就得猜。
         #
-        # 行按功能分：怎么开终端、挂不挂 Stop hook、查不查 claude 新版。每行都从
-        # 第 0 列起头，几个勾的左边缘对齐（0.4 去掉了「自动查启动器新版」那个勾，
-        # 它现在每次启动都查，见 ui/update.py）。
+        # 行按功能分：怎么开终端、挂不挂 Stop hook、查不查新版。每行都从
+        # 第 0 列起头，几个勾的左边缘对齐。现在「自动查启动器新版」也有了单独
+        # 的勾（0.4 到 1.0.1 是无条件查）——默认开着，关掉之后手动查还在。
         #
         # 内嵌那个勾只在 Windows 上摆，摆上了它独占第 0 行。别的平台上这行是空
         # 的，于是下面那几行就落到第 0、1 行——行号得跟着挪，不然中间空出一行。
@@ -286,6 +286,8 @@ class SettingsMixin:
              self._on_auto_continue_toggle, base, 0),
             (self.auto_version_var, "自动查 claude 新版（联网）",
              self._on_version_check_toggle, base + 1, 0),
+            (self.auto_self_check_var, "自动查启动器新版（联网）",
+             self._on_self_check_toggle, base + 2, 0),
         ]
         for var, text, command, row, col in rows:
             tk.Checkbutton(switches, text=text, variable=var, command=command,
@@ -306,7 +308,7 @@ class SettingsMixin:
                  anchor="w", justify="left",
                  wraplength=SETTINGS_W - 200).pack(fill="x", pady=(10, 0))
         tk.Label(parent,
-                 text="这几个勾只影响新开的会话，不动已经在跑的那些。",
+                 text="这几个勾记的是偏好，不会动已经在跑的那些会话。",
                  bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
                  justify="left", wraplength=SETTINGS_W - 200,
                  ).pack(fill="x", pady=(6, 0))
@@ -317,8 +319,7 @@ class SettingsMixin:
         """这一版叫什么、官网在哪儿、想立刻问一次新版按哪儿。
 
         手动查那颗按钮走的是 update 那边的 `_start_self_check(manual=True)`。
-        0.4 把「自动查启动器新版」那个勾去掉、改成启动即查之后，这个参数就再没
-        人传 True 了——留着的唯一去处就是这一页（见 ui/update.py 里那段说明）。
+        它不受「自动查启动器新版」那个勾影响——自动查关了，这里照样能查。
         """
         tk.Label(parent, text="Claude 启动器", bg=PAGE_BG, fg=TEXT,
                  font=font(13, True), anchor="w").pack(fill="x")
