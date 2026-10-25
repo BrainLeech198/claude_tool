@@ -57,8 +57,21 @@ Source: "..\dist\claude_tool\*"; DestDir: "{app}"; Flags: ignoreversion recurses
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
+Name: "{group}\{#AppName}（安全启动）"; Filename: "{app}\{#AppExe}"; Parameters: "--reset-window"; WorkingDir: "{app}"; Comment: "上次的窗口位置找不回来时用：不读旧位置，开在主屏中央"
 Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[Registry]
+; 右键 exe →「安全启动（重置窗口位置）」：不读上次存的窗口位置，直接开在主屏
+; 中央。自动夹取救不回来的怪情况（幻影显示器、奇怪的缩放）靠这一手兜底。
+;
+; 挂在 Applications\<exe> 下面而不是 HKCR\*\shell，只影响这一个程序；HKA 会
+; 按安装方式自动落到 HKLM（整机安装）或 HKCU（当前用户），卸载时 uninsdeletekey
+; 把这几项清干净。
+Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\shell\safe"; ValueType: string; ValueName: ""; ValueData: "安全启动（重置窗口位置）"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\shell\safe"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\shell\safe\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --reset-window"; Flags: uninsdeletekey
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

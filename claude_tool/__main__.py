@@ -19,11 +19,15 @@ if __package__ in (None, "") and not getattr(sys, "frozen", False):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from claude_tool.handoff import HOOK_FLAG, hook_options, run_hook
+from claude_tool.startup import RESET_WINDOW_ENV, RESET_WINDOW_FLAG
 
 
 def main():
     if HOOK_FLAG in sys.argv:
         return run_hook(**hook_options(sys.argv))
+    if RESET_WINDOW_FLAG in sys.argv:
+        sys.argv.remove(RESET_WINDOW_FLAG)
+        os.environ[RESET_WINDOW_ENV] = "1"
     from claude_tool import cli
     code = cli.main()
     if code is not None:

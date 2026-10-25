@@ -330,6 +330,22 @@ def window_position(window):
     return window.winfo_rootx(), window.winfo_rooty()
 
 
+def window_rect(window):
+    """窗口的 (x, y, 宽, 高)。"""
+    return (window.winfo_rootx(), window.winfo_rooty(),
+            window.winfo_width(), window.winfo_height())
+
+
+def work_area(window, x=None, y=None):
+    """离 (x, y) 最近那块屏幕的工作区。
+
+    Tk 拿不到任务栏高度，退回整块屏幕——比 Windows 那份粗，但恢复窗口位置这件
+    事至少不会把窗口丢到屏幕外。
+    """
+    left, top, right, bottom = screen_bounds(window)
+    return left, top, right, bottom
+
+
 def place_window(window, x, y):
     """把窗口挪到 (x, y)。"""
     if x < 0 or y < 0:

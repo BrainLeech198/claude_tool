@@ -358,16 +358,79 @@ class _RECT(ctypes.Structure):
                 ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
 
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint), ("rcMonitor", _RECT),
+                ("rcWork", _RECT), ("dwFlags", ctypes.c_uint)]
+
+
+class _WINDOWPLACEMENT(ctypes.Structure):
+    """GetWindowPlacement 的结构。窗口最小化时它记着"还原后会摆在哪"。"""
+    _fields_ = [("length", ctypes.c_uint), ("flags", ctypes.c_uint),
+                ("showCmd", ctypes.c_uint), ("ptMinPosition", _POINT),
+                ("ptMaxPosition", _POINT), ("rcNormalPosition", _RECT)]
+
+
+_user32.MonitorFromPoint.argtypes = [_POINT, ctypes.c_uint]
+_user32.MonitorFromPoint.restype = ctypes.c_void_p
+_user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p,
+                                    ctypes.POINTER(_MONITORINFO)]
+_user32.GetWindowPlacement.argtypes = [ctypes.c_void_p,
+                                       ctypes.POINTER(_WINDOWPLACEMENT)]
+_user32.GetWindowPlacement.restype = ctypes.c_bool
+
+
 def _frame_handle(window):
     """winfo_id 给的是客户区句柄，带边框的顶层窗口是它的父窗口。"""
     return ctypes.windll.user32.GetParent(window.winfo_id())
 
 
-def window_position(window):
-    """顶层窗口左上角在桌面上的坐标，副屏上是负的。"""
+def window_rect(window):
+    """顶层窗口的 (x, y, 宽, 高)。
+
+    最小化的时候 GetWindowRect 给的是 `-32000` 一带的哨兵坐标——照那个存下来，
+    下次开窗就在屏幕外了。所以先问 GetWindowPlacement 的 rcNormalPosition：
+    那是"还原之后会摆在哪"，不管现在是最小化还是正常显示都对。
+    """
+    hwnd = _frame_handle(window)
+    if _user32.IsIconic(hwnd):
+        placement = _WINDOWPLACEMENT()
+        placement.length = ctypes.sizeof(_WINDOWPLACEMENT)
+        if _user32.GetWindowPlacement(hwnd, ctypes.byref(placement)):
+            rect = placement.rcNormalPosition
+            return (rect.left, rect.top,
+                    rect.right - rect.left, rect.bottom - rect.top)
     rect = _RECT()
-    ctypes.windll.user32.GetWindowRect(_frame_handle(window), ctypes.byref(rect))
-    return rect.left, rect.top
+    _user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+
+
+def window_position(window):
+    """顶层窗口左上角在桌面上的坐标，副屏上是负的。最小化时给还原后的位置。"""
+    x, y, _w, _h = window_rect(window)
+    return x, y
+
+
+def work_area(window, x=None, y=None):
+    """离 (x, y) 最近那块屏幕的工作区（去掉任务栏），多屏时坐标可能是负的。
+
+    不用 screen_bounds 的虚拟桌面：那块矩形把任务栏也算进去了，按它夹位置会
+    把窗口底边塞到任务栏底下。给了 x/y 就找最近的屏，这样"上次存在副屏、副屏
+    已经拔了"也能落到还剩的那块屏上。
+    """
+    if x is None or y is None:
+        x, y = window_position(window)
+    point = _POINT(int(x), int(y))
+    monitor = _user32.MonitorFromPoint(point, 2)  # MONITOR_DEFAULTTONEAREST
+    info = _MONITORINFO()
+    info.cbSize = ctypes.sizeof(_MONITORINFO)
+    if monitor and _user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+        rect = info.rcWork
+        return rect.left, rect.top, rect.right, rect.bottom
+    return screen_bounds(window)
 
 
 def place_window(window, x, y):

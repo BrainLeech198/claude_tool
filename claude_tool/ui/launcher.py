@@ -55,8 +55,11 @@ from claude_tool.host import (
     EMBED_SUPPORTED,
     open_path,
     place_window,
-    window_position,
+    window_rect,
+    work_area,
 )
+from claude_tool.geometry import fit_rect
+from claude_tool.startup import reset_window_requested
 from claude_tool.widgets import (
     PillButton,
     ScrollArea,
@@ -410,19 +413,52 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self.minsize(width, MIN_HEIGHT_FLOOR)
 
     def _restore_geometry(self):
-        """把上次关窗时的位置和尺寸摆回去，存多少就用多少。
+        """把上次关窗时的位置和尺寸摆回去，但先确认它还在屏幕上。
 
         早先高度是"只往上记、不往下记"（比默认矮就按默认开），当时的理由是
         用户嫌过窗口矮。实践下来这条是错的：他手调的那个高度才是他的偏好，
         启动器拿默认值去盖，出来的效果就是"有点太高了，稍微矮一点"。真存了
         个矮到没法用的，minsize 那道下限也兜得住（见 _apply_min_size）。
+
+        **位置不能照存照用**：副屏拔了、分辨率改小了，或者上次是最小化时关的
+        （Win32 对最小化窗口给 -32000 那一带的坐标），窗口就摆到看不见的地方去
+        了。这里按"离存的坐标最近的那块屏幕"夹一遍：整扇窗口都要落在工作区里，
+        比屏幕大就缩到屏幕那么大，但不小于界面自己的下限。
+
+        带 `--reset-window`（安装器的「安全启动」）时不读存的位置，直接摆主屏中央
+        ——自动夹取都救不回来的怪情况，这是最后一条确定能看见窗口的路。
         """
+        if reset_window_requested():
+            self._center_on_primary()
+            self.feedback_var.set("已按「安全启动」把窗口摆到主屏中央。")
+            return
         saved = self.config_data["window"]
         if not saved:
             return
-        self.geometry("{}x{}".format(saved["w"], saved["h"]))
+        min_w, min_h = self.minsize()
+        area = work_area(self, saved["x"], saved["y"])
+        x, y, w, h = fit_rect(saved["x"], saved["y"], saved["w"], saved["h"],
+                              area, min_w, min_h)
+        self.geometry("{}x{}".format(w, h))
         self.update_idletasks()
-        place_window(self, saved["x"], saved["y"])
+        place_window(self, x, y)
+        # 只在"原位置真的放不进屏幕"时提示；只是被 minsize 抬了下限不算。
+        if not (saved["x"] >= area[0] and saved["y"] >= area[1]
+                and saved["x"] + saved["w"] <= area[2]
+                and saved["y"] + saved["h"] <= area[3]):
+            self.feedback_var.set("上次的窗口位置放不进当前屏幕，已经摆回可见范围。")
+
+    def _center_on_primary(self):
+        """主屏中央，尺寸用默认值（不沿用可能超出屏幕的旧尺寸）。"""
+        area = work_area(self, 0, 0)
+        w, h = default_window_size(self.winfo_screenwidth(),
+                                   self.winfo_screenheight())
+        x = area[0] + (area[2] - area[0] - w) // 2
+        y = area[1] + (area[3] - area[1] - h) // 2
+        x, y, w, h = fit_rect(x, y, w, h, area, *self.minsize())
+        self.geometry("{}x{}".format(w, h))
+        self.update_idletasks()
+        place_window(self, x, y)
 
     def _busy(self):
         """启动器手上有活占着进度区没有。
@@ -456,13 +492,18 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
 
     def _shutdown(self):
         try:
-            x, y = window_position(self)
+            # window_rect 对最小化窗口给的是"还原后会摆在哪"，不会存下 -32000。
+            # 存之前也夹一遍：下次开窗读到的就一定是屏幕内的矩形，万一这份配置被
+            # 拷到别的机器上也不会把窗口丢出去。
+            x, y, w, h = window_rect(self)
             # 存进去的是"没内嵌时候"的宽度：内嵌时窗口是临时撑宽的，下次开
             # 机不该照那个宽度铺一扇空荡荡的窗口。
+            w = self._width_before_embed or w
+            min_w, min_h = self.minsize()
+            area = work_area(self, x, y)
+            x, y, w, h = fit_rect(x, y, w, h, area, min_w, min_h)
             self.config_data["window"] = {
-                "x": x, "y": y,
-                "w": self._width_before_embed or self.winfo_width(),
-                "h": self.winfo_height()}
+                "x": x, "y": y, "w": w, "h": h}
             save_config(self.config_data)
         except Exception:
             pass

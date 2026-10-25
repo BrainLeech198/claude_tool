@@ -43,3 +43,5 @@ terminal_windows = _host.terminal_windows
 toggle_topmost = _host.toggle_topmost
 window_alive = _host.window_alive
 window_position = _host.window_position
+window_rect = _host.window_rect
+work_area = _host.work_area
