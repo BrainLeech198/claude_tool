@@ -16,6 +16,7 @@ import sys
 import tempfile
 
 from claude_tool import agents
+from claude_tool import paths
 from claude_tool.agent import agent_args, agent_exe
 
 
@@ -307,6 +308,49 @@ def focus_window(target):
     同 bring_next_to：没有可以按句柄指挥别人窗口的通路。界面上据此退化成
     一句"会话已经在另一个窗口里开着"。
     """
+    return False
+
+
+# ── 单实例 ────────────────────────────────────────────────────────────────
+# 与 winhost 同一组名字：第二次启动不再开第二扇。这边用锁文件（flock），进程
+# 死了内核自动放锁；找窗和挪窗那两条做不到，都返回 None/False（见下）。
+
+_SINGLETON_LOCKS = []
+
+
+def claim_singleton(name="claude_tool_launcher"):
+    """认领唯一实例：拿到锁返回 True，已经有人开着返回 False。
+
+    fcntl 是 POSIX 专属，在用到的这一刻再 import——Windows 上也有探针会 import
+    本模块做对照，放文件头上会让它当场 ImportError。
+    """
+    import fcntl
+
+    if _SINGLETON_LOCKS:
+        return False
+    os.makedirs(paths.TOOL_DIR, exist_ok=True)
+    handle = open(os.path.join(paths.TOOL_DIR, "launcher.lock"), "a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return False
+    _SINGLETON_LOCKS.append(handle)  # 攥到进程结束，锁才一直在
+    return True
+
+
+def find_window(title):
+    """按标题找窗——非 Windows 上没有这路，返回 None。"""
+    return None
+
+
+def cursor_position():
+    """鼠标位置——不问窗口管理器就拿不到，返回 None。"""
+    return None
+
+
+def focus_window_at(target, x, y):
+    """把已有那扇挪到鼠标所在屏——非 Windows 上做不到，返回 False。"""
     return False
 
 

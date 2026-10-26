@@ -8,6 +8,10 @@ import os
 RESET_WINDOW_FLAG = "--reset-window"
 RESET_WINDOW_ENV = "CLAUDE_TOOL_RESET_WINDOW"
 
+# 主窗口标题，也是"把已有那扇窗口认出来"的依据：第二次启动时按它找窗口，
+# 找到就挪到鼠标所在的屏幕上，不再新开一扇。
+LAUNCHER_TITLE = "Claude 启动器"
+
 
 def reset_window_requested():
     return bool(os.environ.get(RESET_WINDOW_ENV))

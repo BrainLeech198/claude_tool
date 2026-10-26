@@ -9,6 +9,7 @@
 """
 import os
 import sys
+import time
 
 # 允许两种跑法：`python claude_tool\__main__.py`（开发/源码）和
 # `python -m claude_tool`。前者的 sys.path[0] 是包目录本身，得先把它的上级
@@ -22,6 +23,27 @@ from claude_tool.handoff import HOOK_FLAG, hook_options, run_hook
 from claude_tool.startup import RESET_WINDOW_ENV, RESET_WINDOW_FLAG
 
 
+def _hand_off_to_running():
+    """把已经在跑的那扇窗口叫到眼前：挪到鼠标所在的那块屏、再提到前台。
+
+    第一次启动可能还在建窗（标题都还没挂上），按标题找不着就等一等，最多两秒；
+    还找不到就认了——总比自己再开一扇强。
+    """
+    from claude_tool import host
+    from claude_tool.startup import LAUNCHER_TITLE
+
+    at = host.cursor_position()
+    for _ in range(20):
+        target = host.find_window(LAUNCHER_TITLE)
+        if target is not None:
+            if at is not None:
+                host.focus_window_at(target, *at)
+            else:
+                host.focus_window(target)
+            return
+        time.sleep(0.1)
+
+
 def main():
     if HOOK_FLAG in sys.argv:
         return run_hook(**hook_options(sys.argv))
@@ -32,6 +54,12 @@ def main():
     code = cli.main()
     if code is not None:
         return code
+    # 只允许开一扇：第二扇不新建窗口，把已有那扇挪到鼠标所在的屏。hook 和命令行
+    # 那两条不进这里——它们本来就不开窗，不该被这个挡掉。
+    from claude_tool import host
+    if not host.claim_singleton():
+        _hand_off_to_running()
+        return 0
     from claude_tool.ui.launcher import Launcher
     Launcher().mainloop()
     return 0

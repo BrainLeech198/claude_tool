@@ -10,6 +10,7 @@ import subprocess
 
 from claude_tool import agents
 from claude_tool.agent import CREATE_NEW_CONSOLE, agent_args, agent_command
+from claude_tool.geometry import fit_rect
 
 
 # ── 内嵌终端 ──────────────────────────────────────────────────────────────
@@ -381,6 +382,14 @@ _user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p,
 _user32.GetWindowPlacement.argtypes = [ctypes.c_void_p,
                                        ctypes.POINTER(_WINDOWPLACEMENT)]
 _user32.GetWindowPlacement.restype = ctypes.c_bool
+_user32.GetCursorPos.argtypes = [ctypes.POINTER(_POINT)]
+_user32.GetCursorPos.restype = ctypes.c_bool
+_user32.EnumWindows.argtypes = [_WNDENUMPROC, ctypes.c_void_p]
+_user32.EnumWindows.restype = ctypes.c_bool
+_user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+_user32.IsWindowVisible.restype = ctypes.c_bool
+_user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+_user32.GetWindowTextLengthW.restype = ctypes.c_int
 
 
 def _frame_handle(window):
@@ -446,6 +455,78 @@ def screen_bounds(window):
     top = _user32.GetSystemMetrics(77)
     return (left, top, left + _user32.GetSystemMetrics(78),
             top + _user32.GetSystemMetrics(79))
+
+
+# ── 单实例 ────────────────────────────────────────────────────────────────
+# 启动器只允许开一扇：第二次双击不再新开窗口，而是把已有那扇挪到鼠标所在的那块
+# 屏幕上、提到前台。认领走命名互斥体——进程被杀系统会自己收回，不会像锁文件那样
+# 留下一个谁都不敢动的孤儿。找窗按主窗口标题（startup.LAUNCHER_TITLE）。
+
+_SINGLETON_HANDLES = []
+
+
+def claim_singleton(name="claude_tool_launcher"):
+    """认领这个互斥体名。认到返回 True，被别的实例占着返回 False。
+
+    句柄得攥住到进程结束：放掉（或被 GC 掉）就等于没占过，第二个能再认到。
+    """
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    handle = kernel32.CreateMutexW(None, False, name)
+    already = kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+    _SINGLETON_HANDLES.append(handle)
+    return not already
+
+
+def find_window(title):
+    """按标题找一扇可见的顶层窗口；找不到返回 None。"""
+    found = []
+
+    def each(hwnd, _lparam):
+        if not _user32.IsWindowVisible(hwnd):
+            return True
+        length = _user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        _user32.GetWindowTextW(hwnd, buf, length + 1)
+        if buf.value == title:
+            found.append(hwnd)
+            return False  # 找到就停，别再扫
+        return True
+
+    _user32.EnumWindows(_WNDENUMPROC(each), 0)
+    return found[0] if found else None
+
+
+def cursor_position():
+    """鼠标指针在桌面上的坐标；问不到就返回 None。"""
+    point = _POINT()
+    if not _user32.GetCursorPos(ctypes.byref(point)):
+        return None
+    return point.x, point.y
+
+
+def focus_window_at(target, x, y):
+    """把 target 挪到 (x, y) 所在那块屏幕的中央，还原后提到前台。
+
+    "挪"是本条的本分：用户在第二块屏幕上双击，多半就是想把窗口叫到眼前；只提
+    焦点不动位置的话，窗口可能还缩在另一块屏上，他照样看不到。
+    """
+    if not target or not _user32.IsWindow(target):
+        return False
+    rect = _RECT()
+    _user32.GetWindowRect(target, ctypes.byref(rect))
+    w = rect.right - rect.left
+    h = rect.bottom - rect.top
+    area = work_area(None, x, y)
+    placed = fit_rect(area[0] + (area[2] - area[0] - w) // 2,
+                      area[1] + (area[3] - area[1] - h) // 2,
+                      w, h, area)
+    if _user32.IsIconic(target):
+        _user32.ShowWindow(target, SW_RESTORE)
+    _user32.SetWindowPos(target, 0, placed.x, placed.y, 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW)
+    _user32.SetForegroundWindow(target)
+    return True
 
 
 # ── 交给系统的默认程序 ────────────────────────────────────────────────────

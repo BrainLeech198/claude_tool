@@ -27,8 +27,12 @@ else:
 # 当面炸掉，而不是运行到一半才发现某个平台上少了个函数。
 EmbeddedConsole = _host.EmbeddedConsole
 bring_next_to = _host.bring_next_to
+claim_singleton = _host.claim_singleton
 close_window = _host.close_window
+cursor_position = _host.cursor_position
+find_window = _host.find_window
 focus_window = _host.focus_window
+focus_window_at = _host.focus_window_at
 fresh_console = _host.fresh_console
 fresh_terminal = _host.fresh_terminal
 open_path = _host.open_path

@@ -59,7 +59,7 @@ from claude_tool.host import (
     work_area,
 )
 from claude_tool.geometry import fit_rect
-from claude_tool.startup import reset_window_requested
+from claude_tool.startup import LAUNCHER_TITLE, reset_window_requested
 from claude_tool.widgets import (
     PillButton,
     ScrollArea,
@@ -122,7 +122,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
                PluginsMixin, LauncherDialogs, tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Claude 启动器")
+        self.title(LAUNCHER_TITLE)
         self.geometry("{}x{}".format(*default_window_size(
             self.winfo_screenwidth(), self.winfo_screenheight())))
         self.configure(bg=PAGE_BG)
