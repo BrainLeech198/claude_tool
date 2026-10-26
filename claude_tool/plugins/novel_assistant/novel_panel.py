@@ -15,8 +15,6 @@
 """
 import tkinter as tk
 
-from novel_book import plain
-
 # 面板最多占多高。留够最小窗口（660）时的余地，见文件头那段。
 MAX_PANEL_HEIGHT = 360
 

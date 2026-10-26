@@ -9,7 +9,6 @@ import time
 
 from claude_tool import agents, history, theme
 from claude_tool.paths import (
-    CLAUDE_DIR,
     CONFIG_FILE,
     LEGACY_CONFIG,
     TOOL_DIR,
@@ -154,14 +153,6 @@ def save_config(config):
     os.makedirs(TOOL_DIR, exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
-
-
-PROJECTS_DIR = os.path.join(CLAUDE_DIR, "projects")
-
-
-def projects_dir_for(agent_id):
-    """这个 agent 的会话记录目录。认不出来的回落 claude。"""
-    return agents.get(agent_id).projects_dir
 
 
 def project_dir(path, agent_id=agents.DEFAULT_AGENT):

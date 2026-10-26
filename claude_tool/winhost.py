@@ -128,7 +128,7 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
     """在新控制台窗口里跑 claude，返回那个进程对象。
 
     直接把 argv 列表交给 Popen，不套 cmd /k：cmd 那层的引号规则会把
-    "C:\Program Files\..." 劈成 C:\Program（见 agent.agent_command 的说明），
+    "C:\\Program Files\\..." 劈成 C:\\Program（见 agent.agent_command 的说明），
     路径带空格就跑不起来。argv 列表交给 Popen 时 Python 走 CreateProcess
     的多参数通道，没有引号问题。
 

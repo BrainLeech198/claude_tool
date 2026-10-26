@@ -32,7 +32,6 @@
 一起画。顶栏那颗「新建小说」是全局动作，才用 register_action。
 """
 import os
-import tkinter as tk                                    # noqa: F401  （面板要用）
 
 from novel_book import detect, is_empty_dir
 from novel_new import init_current, new_book

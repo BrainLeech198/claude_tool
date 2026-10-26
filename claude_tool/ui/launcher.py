@@ -28,11 +28,8 @@ from claude_tool.paths import (
     TOOL_DIR,
 )
 from claude_tool.theme import (
-    ACCENT,
-    ACCENT_SOFT,
     ALERT_BG,
     BORDER,
-    HOVER_BG,
     MUTED,
     PAGE_BG,
     PAGE_GUTTER,
