@@ -19,7 +19,7 @@ import sys
 import threading
 
 from claude_tool import agents
-from claude_tool.agent import CREATE_NO_WINDOW
+from claude_tool.agent import CREATE_NO_WINDOW, spawn_prefix
 from claude_tool.paths import LOCAL_BIN, LOCAL_NAMES, NODE_DIR
 
 # 这几个常量是 claude 那一档的值，探针和默认参数还按它们对；真拼路线时一律从
@@ -202,6 +202,10 @@ def node_setup(platform=None, bases=NODE_DIST, package=None, name=None):
     不碰注册表。卸载就是把那个目录删掉。想让终端里也敲得出 claude，得用户自己
     把那个目录加进 PATH——脚本最后会把路径打出来，但不会替他改。
 
+    **那个目录几个 agent 合用**（claude 和 codebuddy 都可能落在这儿）：已经有一
+    份能跑的就直接拿它装，别再下一遍、更别把目录删掉重建——这一条以前会把先
+    用这条路装好的另一个 agent 连带删干净。
+
     bases 是包的来源，探针靠它指到本地那个小服务上，不真去下 Node。
     package 是 npm 包名，name 是装完那个可执行文件叫什么（输出提示里用），
     不传就走 claude 默认那一套。
@@ -230,46 +234,65 @@ $tool = Join-Path $env:USERPROFILE '.claude_tool'
 $root = Join-Path $tool 'node'
 $bases = __BASES__
 
-# 版本清单：第一个还挂着 LTS 的那条就是我们要的。Invoke-RestMethod 自己就把
-# JSON 解好了，不用在这儿抠字符串。
-$index = $null
-foreach ($base in $bases) {
-    try { $index = Invoke-RestMethod -Uri "$base/index.json" -ErrorAction Stop; break } catch { }
-}
-if (-not $index) {
-    [Console]::WriteLine('没取到 Node 的版本清单：nodejs.org 和 npmmirror 都连不上。')
-    exit 1
-}
-$ver = ($index | Where-Object { $_.lts } | Select-Object -First 1).version
-if (-not $ver) { [Console]::WriteLine('版本清单里没找到 LTS 那条。'); exit 1 }
-
-$name = "node-$ver-win-x64"
-$zip = Join-Path $env:TEMP "$name.zip"
-$tmp = Join-Path $env:TEMP 'claude_tool_node'
-Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-
-$got = $false
-foreach ($base in $bases) {
+# 这个目录几个 agent 合用：已经有一份能跑的 Node 就直接拿它装，别再下一遍、更
+# 别把整个目录删掉——那会把先前用这条路装好的另一个 agent 一起带走。
+$haveNode = $false
+if ((Test-Path (Join-Path $root 'node.exe')) -and (Test-Path (Join-Path $root 'npm.cmd'))) {
     try {
-        [Console]::WriteLine("正在下 Node $ver ……")
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/$ver/$name.zip" -OutFile $zip -ErrorAction Stop
-        $got = $true
-        break
-    } catch {
-        [Console]::WriteLine('这个源没下来：' + $_.Exception.Message)
-    }
+        & (Join-Path $root 'node.exe') --version | Out-Null
+        if ($LASTEXITCODE -eq 0) { $haveNode = $true }
+    } catch { }
 }
-if (-not $got) { [Console]::WriteLine('Node 的包没下下来。'); exit 1 }
 
-[Console]::WriteLine('下好了，正在解开……')
-Expand-Archive -Path $zip -DestinationPath $tmp -Force
-if (Test-Path $root) { Remove-Item -Recurse -Force $root }
-New-Item -ItemType Directory -Force -Path $tool | Out-Null
-Move-Item (Join-Path $tmp $name) $root
-Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-Remove-Item -Force $zip -ErrorAction SilentlyContinue
-[Console]::WriteLine("Node 解好了：$root")
+if ($haveNode) {
+    [Console]::WriteLine("已经有 Node，直接用：$root")
+} else {
+    # 版本清单：第一个还挂着 LTS 的那条就是我们要的。Invoke-RestMethod 自己就把
+    # JSON 解好了，不用在这儿抠字符串。
+    $index = $null
+    foreach ($base in $bases) {
+        try { $index = Invoke-RestMethod -Uri "$base/index.json" -ErrorAction Stop; break } catch { }
+    }
+    if (-not $index) {
+        [Console]::WriteLine('没取到 Node 的版本清单：nodejs.org 和 npmmirror 都连不上。')
+        exit 1
+    }
+    $ver = ($index | Where-Object { $_.lts } | Select-Object -First 1).version
+    if (-not $ver) { [Console]::WriteLine('版本清单里没找到 LTS 那条。'); exit 1 }
+
+    $name = "node-$ver-win-x64"
+    $zip = Join-Path $env:TEMP "$name.zip"
+    $tmp = Join-Path $env:TEMP 'claude_tool_node'
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+
+    $got = $false
+    foreach ($base in $bases) {
+        try {
+            [Console]::WriteLine("正在下 Node $ver ……")
+            Invoke-WebRequest -UseBasicParsing -Uri "$base/$ver/$name.zip" -OutFile $zip -ErrorAction Stop
+            $got = $true
+            break
+        } catch {
+            [Console]::WriteLine('这个源没下来：' + $_.Exception.Message)
+        }
+    }
+    if (-not $got) { [Console]::WriteLine('Node 的包没下下来。'); exit 1 }
+
+    [Console]::WriteLine('下好了，正在解开……')
+    Expand-Archive -Path $zip -DestinationPath $tmp -Force
+    New-Item -ItemType Directory -Force -Path $tool | Out-Null
+    $unpacked = Join-Path $tmp $name
+    if (Test-Path $root) {
+        # 目录在、但 Node 坏了：把新的摊进去盖掉，目录里别的 agent 的包留着。
+        Copy-Item -Path (Join-Path $unpacked '*') -Destination $root -Recurse -Force
+    } else {
+        Move-Item $unpacked $root
+    }
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    Remove-Item -Force $zip -ErrorAction SilentlyContinue
+    [Console]::WriteLine("Node 解好了：$root")
+}
 
 & (Join-Path $root 'npm.cmd') install -g --prefix $root --no-fund --no-audit '__PACKAGE__'
 if ($LASTEXITCODE -ne 0) { [Console]::WriteLine('npm 没装上 __NAME__。'); exit $LASTEXITCODE }
@@ -297,37 +320,49 @@ case "$(uname -m)" in
     *)             arch=x64 ;;
 esac
 
-index=
-for base in $bases; do
-    if index=$(curl -fsSL "$base/index.json"); then break; fi
-done
-if [ -z "$index" ]; then
-    echo '没取到 Node 的版本清单：nodejs.org 和 npmmirror 都连不上。'
-    exit 1
-fi
-ver=$(printf '%s\n' "$index" | grep '"lts":"' | head -1 | grep -o '"version":"v[0-9.]*"' | head -1 | cut -d'"' -f4)
-if [ -z "$ver" ]; then echo '版本清单里没找到 LTS 那条。'; exit 1; fi
-
-name="node-$ver-$os-$arch"
-tgz="$HOME/.claude_tool/$name.tar.gz"
 # 这个目录正常是启动器启动时建的，但这段脚本可能被单独拿去敲——curl 不会替你
 # 建父目录，缺了就只报一句"打不开文件"，看不出来是缺目录。
 mkdir -p "$HOME/.claude_tool"
 
-got=
-for base in $bases; do
-    echo "正在下 Node $ver ……"
-    if curl -fsSL -o "$tgz" "$base/$ver/$name.tar.gz"; then got=1; break; fi
-    echo '这个源没下来，换下一个。'
-done
-if [ -z "$got" ]; then echo 'Node 的包没下下来。'; exit 1; fi
+# 这个目录几个 agent 合用：已经有一份能跑的 Node 就直接拿它装，别再下一遍、更
+# 别把整个目录删掉——那会把先前用这条路装好的另一个 agent 一起带走。
+if [ -x "$root/bin/node" ] && [ -x "$root/bin/npm" ]; then
+    echo "已经有 Node，直接用：$root"
+else
+    index=
+    for base in $bases; do
+        if index=$(curl -fsSL "$base/index.json"); then break; fi
+    done
+    if [ -z "$index" ]; then
+        echo '没取到 Node 的版本清单：nodejs.org 和 npmmirror 都连不上。'
+        exit 1
+    fi
+    ver=$(printf '%s\n' "$index" | grep '"lts":"' | head -1 | grep -o '"version":"v[0-9.]*"' | head -1 | cut -d'"' -f4)
+    if [ -z "$ver" ]; then echo '版本清单里没找到 LTS 那条。'; exit 1; fi
 
-echo '下好了，正在解开……'
-rm -rf "$root"
-tar -xzf "$tgz" -C "$HOME/.claude_tool"
-mv "$HOME/.claude_tool/$name" "$root"
-rm -f "$tgz"
-echo "Node 解好了：$root"
+    name="node-$ver-$os-$arch"
+    tgz="$HOME/.claude_tool/$name.tar.gz"
+
+    got=
+    for base in $bases; do
+        echo "正在下 Node $ver ……"
+        if curl -fsSL -o "$tgz" "$base/$ver/$name.tar.gz"; then got=1; break; fi
+        echo '这个源没下来，换下一个。'
+    done
+    if [ -z "$got" ]; then echo 'Node 的包没下下来。'; exit 1; fi
+
+    echo '下好了，正在解开……'
+    tar -xzf "$tgz" -C "$HOME/.claude_tool"
+    if [ -d "$root" ]; then
+        # 目录在、但 Node 坏了：把新的摊进去盖掉，目录里别的 agent 的包留着。
+        cp -R "$HOME/.claude_tool/$name/." "$root/"
+        rm -rf "$HOME/.claude_tool/$name"
+    else
+        mv "$HOME/.claude_tool/$name" "$root"
+    fi
+    rm -f "$tgz"
+    echo "Node 解好了：$root"
+fi
 
 "$root/bin/npm" install -g --prefix "$root" --no-fund --no-audit '__PACKAGE__' || {
     echo 'npm 没装上 __NAME__。'
@@ -543,15 +578,21 @@ def routes(platform=None, which=shutil.which, node=UNSET, upgrade=False,
             _node_show(platform, package),
             key="node", timeout=NODE_TIMEOUT))
 
-    if upgrade:
-        who = installed_via(claude_path)
-        if who is not None:
-            for route in found:
-                route["pick"] = route["key"] == who
+    # 装和修都先看这份 agent 的来历：从 winget 装的那份点「修复」，默认塞一条
+    # 官方原生脚本（国内被墙）等于没修，修不好还可能在旁边多装一份。升级认不
+    # 出来就不替用户选（猜错会在旁边再装一份）；装/修认不出来就落到第一条能走的。
+    who = installed_via(claude_path)
+    matched = next((route for route in found
+                    if who is not None and route["key"] == who), None)
+    if matched is not None and matched["ready"]:
+        for route in found:
+            route["pick"] = route is matched
+            if route["ready"]:
                 route["note"] = ("你现在这份就是这条装的。" if route["pick"] else
                                  "不是这条装的，选它会再装一份。")
-    elif found:
-        found[0]["pick"] = True
+    elif not upgrade and found:
+        chosen = next((route for route in found if route["ready"]), found[0])
+        chosen["pick"] = True
 
     return found
 
@@ -623,9 +664,12 @@ def run_stream(argv, on_line, timeout=INSTALL_TIMEOUT):
 
     **别在这层碰界面**：调用方把它丢进一个线程里，on_line 只管往队列里塞，
     取和画都在主线程（Tk 的东西不能跨线程碰）。
+
+    argv 过一遍 spawn_prefix：Windows 上 npm 是 npm.cmd，直接交给 Popen 会报
+    「系统找不到指定的文件」——这条路以前就是这么一直装不上的。
     """
     try:
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(spawn_prefix(argv), stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL,
                                 creationflags=CREATE_NO_WINDOW)

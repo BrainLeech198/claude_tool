@@ -613,4 +613,52 @@ def finish_form(dialog, buttons):
                    bg=PAGE_BG).pack(side="right", padx=(8, 0))
 
 
+def anchor_point(win, anchor=None):
+    """父窗的中心点；父窗没显示或者压根没给，就退回屏幕中间偏上。
+
+    用 winfo_viewable 而不是 winfo_exists：收起的窗口还在，但拿它当锚点，对话框
+    会摆到看不见的地方去。
+    """
+    if anchor is not None:
+        try:
+            if anchor.winfo_exists() and anchor.winfo_viewable():
+                return (anchor.winfo_rootx() + anchor.winfo_width() // 2,
+                        anchor.winfo_rooty() + anchor.winfo_height() // 2)
+        except tk.TclError:
+            pass
+    return (win.winfo_vrootx() + win.winfo_vrootwidth() // 2,
+            win.winfo_vrooty() + win.winfo_vrootheight() // 3)
+
+
+def fit_window(win, want_w, want_h, anchor=None, min_w=1, min_h=1, margin=0):
+    """把顶层窗口收进屏幕工作区，再摆到 anchor 中间。
+
+    小屏、高 DPI、副屏都走这一套算术：先拿离 anchor 最近那块屏的工作区（已经
+    去掉任务栏），把尺寸封顶，再居中；位置越界就贴边（geometry.fit_rect）。
+    margin 是窗口四周至少留出的空档，免得贴着屏幕边、跟任务栏混在一起。
+
+    屏幕比 min_w/min_h 还小时，尺寸就停在 min_w/min_h——那是界面自己的下限，
+    宁可越出一点也不能把控件挤成一条缝。返回最终 (x, y, w, h)。
+
+    anchor 传父窗（Tk/Toplevel）。这样设置窗里开的对话框落回设置窗那块屏，
+    不会跑到主窗所在的另一块屏去。
+    """
+    from claude_tool.geometry import fit_rect
+    from claude_tool.host import work_area
+
+    ax, ay = anchor_point(win, anchor)
+    area = work_area(win, ax, ay)
+    left, top, right, bottom = area
+    room_w = max(right - left - 2 * margin, min_w)
+    room_h = max(bottom - top - 2 * margin, min_h)
+    w = min(max(want_w, min_w), room_w)
+    h = min(max(want_h, min_h), room_h)
+    x = ax - w // 2
+    y = ay - h // 3
+    x, y, w, h = fit_rect(x, y, w, h, area, min_w, min_h)
+    # Tk 的 "+-100" 就是 x=-100（副屏在主屏左边时用得上），三个平台的 WM 都认。
+    win.geometry("{}x{}+{}+{}".format(w, h, x, y))
+    return x, y, w, h
+
+
 # ── 主窗口 ────────────────────────────────────────────────────────────────

@@ -19,7 +19,7 @@ from tkinter import messagebox, ttk
 from claude_tool import versions
 from claude_tool import agents
 from claude_tool import shared_memory
-from claude_tool.agent import CREATE_NO_WINDOW, agent_exe, agent_path
+from claude_tool.agent import CREATE_NO_WINDOW, agent_exe, agent_path, spawn_prefix
 from claude_tool.config import save_config
 from claude_tool.handoff import (
     HANDOFF_FILE,
@@ -612,10 +612,10 @@ class SessionsMixin:
                                           delete=False)
         try:
             self._handoff_proc = subprocess.Popen(
-                agent_exe(agents.get(item.get("agent")))
-                + ["-c", "--fork-session", "-p",
-                   handoff_prompt(ignore_git),
-                   "--allowedTools", HANDOFF_TOOLS],
+                spawn_prefix(agent_exe(agents.get(item.get("agent")))
+                             + ["-c", "--fork-session", "-p",
+                                handoff_prompt(ignore_git),
+                                "--allowedTools", HANDOFF_TOOLS]),
                 cwd=path, stdin=subprocess.DEVNULL, stdout=log,
                 stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
         except Exception as e:

@@ -26,7 +26,7 @@ from claude_tool.theme import (
     TEXT,
     font,
 )
-from claude_tool.widgets import PillButton, Row, ScrollArea, measure
+from claude_tool.widgets import PillButton, Row, ScrollArea, fit_window, measure
 
 # 左边一次最多摆多少条。timeline 本身按每个工作区 200 条聚合，这里不再二次
 # 截断——搜索是在整份时间线上做的，摆多少就搜多少，免得"搜得到却找不到"。
@@ -63,11 +63,12 @@ class SessionCenter(tk.Toplevel):
         self.transient(app)
         theme.titlebar(self)
 
+        # 按整屏算出来的大小再收进工作区：任务栏、屏幕缩放和副屏都交给
+        # fit_window 一道处理，不再自己算 x/y。
         width = max(780, min(1440, self.winfo_screenwidth() - 120))
         height = max(560, min(1020, self.winfo_screenheight() - 90))
-        x = max((self.winfo_screenwidth() - width) // 2, 0)
-        y = max((self.winfo_screenheight() - height) // 3, 0)
-        self.geometry("{}x{}+{}+{}".format(width, height, x, y))
+        fit_window(self, width, height, anchor=app, min_w=780, min_h=540,
+                   margin=24)
         self.minsize(780, 540)
 
         self.mode = "simple"

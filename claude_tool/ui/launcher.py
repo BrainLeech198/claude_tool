@@ -380,7 +380,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self.feedback_var.set("配色换成「{}」了。".format(
             theme.PALETTE_INFO[name]["label"]))
 
-    def _apply_min_size(self):
+    def _apply_min_size(self, area=None):
         """窗口下限按内容量出来，别写死。
 
         正文那两栏是新的基准：左导航定宽（NAV_WIDTH），右栏得摆得下【管理】那一
@@ -404,6 +404,10 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         高度**不**跟着算：左栏列表是可滚动的，它的自然高度不该拿来当下限——而且
         这个数还跟问的时机有关（列表 fit() 前是 823、fit() 完是 410，差一倍）。
         高度就守 MIN_HEIGHT_FLOOR 这个可用底线。
+
+        **小屏接管**：下限本身不能把窗口顶到屏幕外。按传进来的工作区（不传就按
+        主屏）把宽和高各封一道顶——宁可让控件挤一点，也好过窗口有一截在屏幕外
+        够不着。
         """
         content = NAV_WIDTH + PAGE_PAD + DETAIL_MIN_WIDTH
         width = content + 2 * PAGE_GUTTER + MIN_MARGIN
@@ -412,7 +416,11 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             # 先挨挤的还是上面那两栏。
             width = max(width, self._width_before_embed + SIDE_GAP
                         + TERMINAL_MIN_WIDTH)
-        self.minsize(width, MIN_HEIGHT_FLOOR)
+        if area is None:
+            area = work_area(self, 0, 0)
+        room_w = max(area[2] - area[0], 1)
+        room_h = max(area[3] - area[1], 1)
+        self.minsize(min(width, room_w), min(MIN_HEIGHT_FLOOR, room_h))
 
     def _restore_geometry(self):
         """把上次关窗时的位置和尺寸摆回去，但先确认它还在屏幕上。
@@ -437,8 +445,11 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         saved = self.config_data["window"]
         if not saved:
             return
-        min_w, min_h = self.minsize()
         area = work_area(self, saved["x"], saved["y"])
+        # 上次那扇可能在副屏上，下限得照那块屏重算一遍——主屏的下限放到小屏上
+        # 照样会把窗口顶出去。
+        self._apply_min_size(area)
+        min_w, min_h = self.minsize()
         x, y, w, h = fit_rect(saved["x"], saved["y"], saved["w"], saved["h"],
                               area, min_w, min_h)
         self.geometry("{}x{}".format(w, h))
@@ -453,6 +464,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
     def _center_on_primary(self):
         """主屏中央，尺寸用默认值（不沿用可能超出屏幕的旧尺寸）。"""
         area = work_area(self, 0, 0)
+        self._apply_min_size(area)
         w, h = default_window_size(self.winfo_screenwidth(),
                                    self.winfo_screenheight())
         x = area[0] + (area[2] - area[0] - w) // 2
@@ -498,6 +510,13 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             # 存之前也夹一遍：下次开窗读到的就一定是屏幕内的矩形，万一这份配置被
             # 拷到别的机器上也不会把窗口丢出去。
             x, y, w, h = window_rect(self)
+            if str(self.state()) == "normal":
+                # window_rect 是**外框**（标题栏 + Windows 的透明边框），Tk 的
+                # geometry 说的却是客户区。混着存，下次开窗把外框当客户区，
+                # 外面再套一圈边框——每开一次大一圈，小屏上几轮就顶满。
+                # 正常显示时按客户区存；最小化时才用 window_rect（它给的是
+                # 还原后的位置，客户区尺寸这会儿读不可靠）。
+                w, h = self.winfo_width(), self.winfo_height()
             # 存进去的是"没内嵌时候"的宽度：内嵌时窗口是临时撑宽的，下次开
             # 机不该照那个宽度铺一扇空荡荡的窗口。
             w = self._width_before_embed or w

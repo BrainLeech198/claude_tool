@@ -8,6 +8,7 @@ claude 和 codebuddy 的命令行旗标是同一套，所以参数拼法只有�
 """
 import os
 import shutil
+import subprocess
 import sys
 
 from claude_tool import agents
@@ -143,6 +144,28 @@ def agent_exe(profile=None, which=shutil.which):
     """
     profile = _profile(profile)
     return find_agent(profile, which) or [profile.exe_names[0]]
+
+
+def spawn_prefix(argv):
+    """把一条命令行变成 Popen 真拉得起来的东西。
+
+    **Windows 的 CreateProcess 只认 exe**：npm、npm 装的 claude / codebuddy 的
+    shim 都是 .cmd，直接拉就是一句「系统找不到指定的文件」——装、查版本、开会话
+    三条线都栽在这上面。这种脚本得经 cmd.exe /c 走一层；整条命令外面再套一对
+    引号，cmd 才不会把带空格的路径劈成两截（外面那对是留给它 /c 剥的）。
+
+    非 Windows、或者本来就是 exe，原样返回列表。返回列表时调用方可以继续拿它
+    当 argv 拼；返回字符串时直接交给 Popen（字符串走 cmd 那一层，列表走不了）。
+    """
+    argv = _split_prefix(argv)
+    if not argv or os.name != "nt":
+        return argv
+    first = str(argv[0])
+    resolved = shutil.which(first) or first
+    if not resolved.lower().endswith((".cmd", ".bat")):
+        return [resolved] + [str(item) for item in argv[1:]]
+    inner = subprocess.list2cmdline([resolved] + [str(item) for item in argv[1:]])
+    return 'cmd.exe /c "{}"'.format(inner)
 
 
 def python_exe():

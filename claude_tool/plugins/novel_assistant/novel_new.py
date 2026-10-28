@@ -153,7 +153,7 @@ def new_book(host):
     _finish(dialog, widgets, [("取消", lambda: _close(dialog), False),
                               ("创建", submit, True)])
     folder_entry.focus_set()
-    _wait(dialog)
+    _wait(dialog, widgets)
 
 
 def init_current(host, path):
@@ -191,7 +191,7 @@ def init_current(host, path):
     _finish(dialog, widgets, [("取消", lambda: _close(dialog), False),
                               ("初始化", submit, True)])
     entry.focus_set()
-    _wait(dialog)
+    _wait(dialog, widgets)
 
 
 # ── 对话框小工具 ──────────────────────────────────────────────────────────
@@ -237,15 +237,17 @@ def _finish(dialog, widgets, buttons):
     dialog.bind("<Escape>", lambda _e: _close(dialog))
 
 
-def _wait(dialog):
-    """摆完控件再露脸、居中、抢焦点——先显示会看到一次跳位置。"""
+def _wait(dialog, widgets):
+    """摆完控件再露脸、居中、抢焦点——先显示会看到一次跳位置。
+
+    委派给宿主的 `widgets.fit_window`：小屏 / 缩放 / 任务栏都按同一套工作区
+    收一遍，不再自己拿整屏尺寸减一减。
+    """
     dialog.update_idletasks()
     dialog.deiconify()
     width = max(dialog.winfo_reqwidth(), 440)
     height = dialog.winfo_reqheight()
-    x = (dialog.winfo_screenwidth() - width) // 2
-    y = (dialog.winfo_screenheight() - height) // 3
-    dialog.geometry("{}x{}+{}+{}".format(width, height, max(x, 0), max(y, 0)))
+    widgets.fit_window(dialog, width, height, min_w=440, margin=16)
     dialog.grab_set()
     dialog.wait_window(dialog)
 

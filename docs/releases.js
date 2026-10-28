@@ -31,6 +31,18 @@ window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/down
 // 也拿官网上这个数当兜底（npm 问不到的时候用）——改它没用，那是打包时写死的。
 window.RELEASES = [
   {
+    "version": "1.2.0",
+    "date": "2026-10-28",
+    "notes": "这一版把「安装 / 修复」修通了：Windows 上 npm 是个 .cmd，系统创建进程默认拉不起来，所以以前点 npm 那条路必失败——现在这类命令统一经 cmd 走一层，装、修都通了，npm 装的 claude / codebuddy 也能正常开会话、读出自己的版本号。「修复」会照这份 agent 原来的装法预选那条路（winget 装的不会再默认跑官方脚本），便携版 Node 那条也不再删掉目录重建，claude 和 codebuddy 共用同一个 Node 目录时不会互相带走。设置窗这边：页面有了来路，「← 返回」和 Esc 一页页往回退，退到头才收起；在设置里取消「添加模型」不会再连带把设置窗一起关掉；切换模型前先确认一次。主窗、设置、添加/编辑模型、插件、会话中心这些窗口都按所在屏幕的工作区收拢，小屏和副屏上不会再有一截跑到外面够不着。",
+    "claude": "2.1.150",
+    "windows": {
+      "file": "ClaudeLauncher-1.2.0-Setup.exe",
+      "size": 10557734
+    },
+    "linux": null,
+    "macos": null
+  },
+  {
     "version": "1.1.0",
     "date": "2026-10-28",
     "notes": "这一版让「添加模型」更省事：选好供应商、贴上 key 之后，启动器会自动问这家在卖哪些模型，模型名那一格变成可输入的下拉，点一下就能挑。地址带 /anthropic 或已经带 /v1 的都能对上；拉不到也不影响保存，仍然可以手填，界面会直说是 key 不对、这家没开放模型列表，还是网络不通。",

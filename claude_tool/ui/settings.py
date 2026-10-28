@@ -21,7 +21,7 @@ from claude_tool import versions
 from claude_tool.agent import agent_path
 from claude_tool.host import EMBED_SUPPORTED, open_url
 from claude_tool.theme import MUTED, OK, PAGE_BG, PANEL_BG, TEXT, WARN, font
-from claude_tool.widgets import PaletteCard, PillButton, Tip
+from claude_tool.widgets import PaletteCard, PillButton, Tip, fit_window
 
 
 # 分页顺序就是这儿定的，_settings_rail 照着画。
@@ -36,6 +36,9 @@ BUILDERS = {
     "关于": "_settings_page_about",
 }
 SETTINGS_W, SETTINGS_H = 640, 560
+# 屏幕真放不下时能缩到多小。正文里那些说明文字按 SETTINGS_W 定宽换行，再窄
+# 就会被切掉——所以只在小屏上才缩，不把它当成常规下限。
+SETTINGS_MIN_W, SETTINGS_MIN_H = 580, 460
 # 模型列表滚到多高封顶。原来跟 WORKSPACE_MAX 一起摆在 launcher.py 顶部，工作区
 # 那份随列表搬去左栏、改由 NAV_MAX 管（见 ui/nav.py），这份跟着模型区搬到这儿。
 MODEL_MAX = 300
@@ -57,34 +60,70 @@ class SettingsMixin:
         win.title("设置")
         win.configure(bg=PAGE_BG)
         win.protocol("WM_DELETE_WINDOW", self._close_settings)
-        # Esc 跟点 X 一回事（都是 withdraw，不是销毁——理由见文件开头那段）。
-        win.bind("<Escape>", lambda _e: self._close_settings())
+        # Esc 先沿着来过的页面往回退；退到头才收起窗口（withdraw，不是销毁——
+        # 理由见文件开头那段）。这样在「模型」里点进「外观」看一眼，Esc 不会把
+        # 整个设置窗一起带走。
+        win.bind("<Escape>", lambda _e: self._settings_escape())
+
+        # 底部那排：左边「← 返回」只在有来路时可点，右边「完成」负责真把窗收起。
+        # 摆在整个窗口上而不是每页里，翻页时它就一直在、位置也不跳。
+        foot = tk.Frame(win, bg=PAGE_BG)
+        foot.pack(side="bottom", fill="x", padx=16, pady=(0, 14))
+        self._settings_back = PillButton(foot, "← 返回", self._settings_back_step,
+                                         bg=PAGE_BG, enabled=False)
+        self._settings_back.pack(side="left")
+        PillButton(foot, "完成", self._close_settings, primary=True,
+                   bg=PAGE_BG).pack(side="right")
 
         box = tk.Frame(win, bg=PAGE_BG)
         box.pack(fill="both", expand=True)
         self._settings_rail = tk.Frame(box, bg=PAGE_BG)
-        self._settings_rail.pack(side="left", fill="y", padx=(16, 0), pady=16)
+        self._settings_rail.pack(side="left", fill="y", padx=(16, 0), pady=(16, 0))
         self._settings_body = tk.Frame(box, bg=PAGE_BG)
         self._settings_body.pack(side="left", fill="both", expand=True,
-                                 padx=(16, 16), pady=16)
+                                 padx=(16, 16), pady=(16, 0))
 
         self._settings_pages = {}
         self._settings_page = None
+        # 来过的页面，最后一项是"上一页"。这是「← 返回」和 Esc 的来路。
+        self._settings_history = []
         self._settings_win = win
-        win.minsize(SETTINGS_W, SETTINGS_H)
-        win.geometry("{}x{}".format(SETTINGS_W, SETTINGS_H))
-        self._center(win)
+        # 先按屏幕工作区收一遍：小屏上 640×560 可能顶到任务栏或被切掉一截。
+        _x, _y, width, height = fit_window(
+            win, SETTINGS_W, SETTINGS_H, anchor=self,
+            min_w=SETTINGS_MIN_W, min_h=SETTINGS_MIN_H, margin=16)
+        win.minsize(width, height)
         theme.titlebar(win)
 
     def _close_settings(self):
         if self._settings_win is not None and self._settings_win.winfo_exists():
             self._settings_win.withdraw()
 
-    def _settings_show_page(self, name):
+    def _settings_escape(self):
+        """Esc：一页页退回起点，退到头才收起设置窗。"""
+        if self._settings_history:
+            self._settings_back_step()
+            return
+        self._close_settings()
+
+    def _settings_back_step(self):
+        """回上一页。没有来路就什么都不做（那颗按钮这时是灰的）。"""
+        if not self._settings_history:
+            return
+        self._settings_show_page(self._settings_history.pop(), back=True)
+
+    def _settings_show_page(self, name, back=False):
         """切到某一页，没建过就现建。
 
         建过的不销毁：模型那页有正在跑的测试，重开一次就把结果丢一次。
+
+        back=True 是「返回」走的路，不再往历史里压一条，否则返回一次反而把
+        刚离开的那页又记成来路，来回点就出不去了。
         """
+        if name not in PAGES:
+            return
+        if not back and self._settings_page is not None and self._settings_page != name:
+            self._settings_history.append(self._settings_page)
         self._settings_page = name
         for frame in self._settings_pages.values():
             frame.pack_forget()
@@ -99,6 +138,12 @@ class SettingsMixin:
             getattr(self, BUILDERS[name])(frame)
         frame.pack(fill="both", expand=True)
         self._settings_render_rail()
+        self._settings_render_foot()
+
+    def _settings_render_foot(self):
+        back = getattr(self, "_settings_back", None)
+        if back is not None and back.winfo_exists():
+            back.set_enabled(bool(self._settings_history))
 
     def _settings_render_rail(self):
         """左边那条分页栏。当前那页用强调色，一眼看出人在哪儿。"""

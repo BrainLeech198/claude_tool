@@ -17,7 +17,7 @@ from claude_tool import selfupdate
 from claude_tool import versions
 from claude_tool import __version__
 from claude_tool import agents
-from claude_tool.agent import CREATE_NO_WINDOW, find_agent
+from claude_tool.agent import CREATE_NO_WINDOW, find_agent, spawn_prefix
 from claude_tool.config import save_config
 from claude_tool.host import open_url
 from claude_tool.presets import (
@@ -49,7 +49,8 @@ class UpdateMixin:
         def work():
             try:
                 result = subprocess.run(
-                    prefix + profile.version_argv(), capture_output=True,
+                    spawn_prefix(prefix + profile.version_argv()),
+                    capture_output=True,
                     creationflags=CREATE_NO_WINDOW, timeout=20)
                 # 明确按 UTF-8 解：这台机器子进程默认走 cp936，版本串里万一有
                 # 非 ASCII 会解出乱码甚至抛异常。

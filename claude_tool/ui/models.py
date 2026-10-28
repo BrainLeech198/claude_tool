@@ -95,7 +95,7 @@ class ModelsMixin:
             path = presets[name]
             row = Row(inner, title=name, subtitle=describe_preset(path), marker=True,
                       active=(name == self.active_name), height=50,
-                      on_click=lambda n=name, p=path: self.switch_model(n, p),
+                      on_click=lambda n=name, p=path: self._ask_switch_model(n, p),
                       actions=[("移除", lambda n=name, p=path: self.remove_model(n, p)),
                                ("复制", lambda n=name, p=path: self._open_model_dialog(copy=(n, p))),
                                ("编辑", lambda n=name, p=path: self._open_model_dialog((n, p)))])
@@ -179,6 +179,24 @@ class ModelsMixin:
         self._testing = False
         self.feedback_var.set("测完了：绿色=打得通，红色=打不通。结果留在卡片上，"
                               "下次打开设置窗还在。")
+
+    def _ask_switch_model(self, name, path):
+        """点卡片先问一句再换。
+
+        换模型会覆盖这个 agent 的 settings.json、还要把开着的会话逐个问一遍
+        「要不要重开」，误点一下代价不小。已经生效的那个点上去只回一句，不弹框。
+        """
+        if name == self.active_name:
+            self.feedback_var.set("现在用的就是「{}」。".format(name))
+            return
+        profile = agents.get(self.model_agent)
+        if not messagebox.askyesno(
+                "切换模型",
+                "把 {} 现在用的模型换成「{}」？\n\n"
+                "会改写它的 settings.json；已经开着的会话要重开才生效。"
+                .format(profile.label, name)):
+            return
+        self.switch_model(name, path)
 
     def switch_model(self, name, path):
         profile = agents.get(self.model_agent)

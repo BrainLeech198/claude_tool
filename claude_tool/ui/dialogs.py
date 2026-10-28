@@ -76,6 +76,7 @@ from claude_tool.widgets import (
     Row,
     ScrollArea,
     finish_form,
+    fit_window,
     make_combo,
     make_entry,
     make_form,
@@ -94,6 +95,34 @@ def unbound_model_label(agent_id):
 
 class LauncherDialogs:
 
+    def _dialog_owner(self):
+        """这扇对话框该挂在哪扇窗上：焦点在谁那儿就挂谁。
+
+        设置窗开着的时候，从它里面点「＋ 添加」起的模型对话框要是还认主窗当爹，
+        取消之后主窗会被抬到前面，设置窗看着就像一起没了。挂到当前那扇顶层窗
+        上，取消/保存之后焦点自然回到设置窗。
+
+        焦点拿不到（刚切出去点过别的程序）就退一步：设置窗开着就挂设置窗，
+        否则挂主窗。
+        """
+        try:
+            focused = self.focus_get()
+        except (KeyError, tk.TclError):
+            focused = None
+        if focused is not None:
+            try:
+                return focused.winfo_toplevel()
+            except tk.TclError:
+                pass
+        win = getattr(self, "_settings_win", None)
+        if win is not None and win.winfo_exists() and win.winfo_viewable():
+            return win
+        return self
+
+    def _new_dialog(self):
+        """建一扇认当前活动窗口当爹的对话框。"""
+        return tk.Toplevel(self._dialog_owner())
+
     def _open_model_dialog(self, edit=None, copy=None):
         """edit 传 (名称, 路径) 是编辑，copy 传 (名称, 路径) 是照着源预设复制一份
         新的，都不传是新增。三者共用一套表单。"""
@@ -105,7 +134,7 @@ class LauncherDialogs:
         source_path = old_path if is_edit else seed_path
         env = read_env(source_path) if source_path else {}
 
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         title = "编辑模型" if is_edit else ("复制模型" if seed_name else "添加模型")
         body = make_form(dialog, title)
@@ -352,7 +381,7 @@ class LauncherDialogs:
         才落盘——AI 报的地址是可能编的，查到什么就写什么等于拿用户当小白鼠。写盘只
         落在 ~/.claude_tool/providers.json 这一个启动器自己的文件上。
         """
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "更新常用供应商表")
 
@@ -662,7 +691,7 @@ class LauncherDialogs:
         base = str(env.get("ANTHROPIC_BASE_URL") or "")
         model = str(env.get("ANTHROPIC_MODEL") or "")
 
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "导入当前配置")
 
@@ -797,7 +826,7 @@ class LauncherDialogs:
         options = [unbound] + sorted(presets)
         current = item.get("preset") or ""
 
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "这个工作区用哪个模型")
 
@@ -878,7 +907,7 @@ class LauncherDialogs:
             target = next((s for s in getattr(self, "_sessions", [])
                            if s["id"] == session_id), None)
 
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, item["name"])
 
@@ -1003,7 +1032,7 @@ class LauncherDialogs:
         只有 git 仓库才有这一问（是不是仓库由 write_handoff 那边先判掉了）。
         勾选顺手记回工作区条目，下次不用再选。
         """
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "整理交接文档")
 
@@ -1054,7 +1083,7 @@ class LauncherDialogs:
         读完才分得清差别，而且「新建文件夹」那个说法听着像文件管理，不像"弄一个
         能干活的工作区"。拆成一步问，每个选项自己带一句解释。
         """
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "添加工作区")
 
@@ -1094,7 +1123,7 @@ class LauncherDialogs:
             messagebox.showinfo("还没有工作区", "先加一个工作区，托管得有个目录在里头干活。")
             return
 
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "AI 托管")
 
@@ -1277,12 +1306,14 @@ class LauncherDialogs:
         官网装」——不拿别的 agent 的命令凑数。
         """
         profile = profile or agents.get(agents.DEFAULT_AGENT)
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
-        what = "升级" if updating else "装"
+        claude_path = agent_path(profile)
+        # 已经装上的那份点进来的是「修复」：措辞跟着变，用户才看得出这是修它，
+        # 不是再装一个。
+        what = "升级" if updating else ("修复" if claude_path else "装")
         body = make_form(dialog, "帮你{} {}".format(what, profile.id))
 
-        claude_path = agent_path(profile)
         routes = install.routes(upgrade=updating, claude_path=claude_path,
                                profile=profile)
         table = install.checkup(claude_path=claude_path, profile=profile)
@@ -1493,6 +1524,11 @@ class LauncherDialogs:
                 return
             index = picked.get()
             route = routes[index]
+            # 单选框走不了的那几颗本来就是灰的；这里再兜一道，免得预选落在一条
+            # 走不了的路上时还硬跑。
+            if not route["ready"]:
+                put("这条路现在走不了，换一条能走的。", WARN)
+                return
             if not messagebox.askyesno(
                     "开始" + what,
                     "要在这台机器上跑这条命令：\n\n{}\n\n"
@@ -1541,7 +1577,7 @@ class LauncherDialogs:
         pick_workplace，点完当场落盘——所以点「取消」取消的只是"建这个文件夹"，
         不会把刚改的默认目录一起吞掉（早先就是这么吞的）。
         """
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "新建工作区文件夹")
 
@@ -1626,7 +1662,7 @@ class LauncherDialogs:
 
     def _open_add_workspace_dialog(self):
         """「选已有目录」：挑一个已经存在的目录，加进列表里当工作区。"""
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "选已有目录当工作区")
 
@@ -1697,7 +1733,7 @@ class LauncherDialogs:
         分家，而用户看到的话得跟实际拦他的那条是同一句。填错了就把 mover 那句
         原话摆在对话框里让他改，不关窗口。
         """
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "搬迁工作区")
 
@@ -1759,7 +1795,7 @@ class LauncherDialogs:
         扇窗的那扇对话框（会话记录列表）：Tk 的 grab 不排队，改名这扇一销毁，
         它的模态就跟着没了，得手动还给 owner。
         """
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "给会话改名")
         tk.Label(body, text="现在叫", bg=PAGE_BG, fg=MUTED, font=font(9),
@@ -1807,7 +1843,7 @@ class LauncherDialogs:
         收藏不在这扇窗里改（会话中心右侧有单独的星标按钮），但写快照时要带上
         它，否则这条记录一写，之前收藏的状态就被默认的 False 盖掉了。
         """
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "给会话贴标签")
         tk.Label(body, text="多个标签用逗号隔开；清空就是去掉全部标签。",
@@ -1857,7 +1893,7 @@ class LauncherDialogs:
         # refresh_sessions 自己重读重画。
         sessions = list(sessions)
 
-        dialog = tk.Toplevel(self)
+        dialog = self._new_dialog()
         dialog.grab_set()
         body = make_form(dialog, "会话记录 · " + item["name"])
         tk.Label(body, text=path, bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
@@ -1920,8 +1956,15 @@ class LauncherDialogs:
         self._center(dialog)
 
     def _center(self, dialog):
-        """把对话框摆到主窗口中间。"""
+        """把对话框摆到它父窗中间，并收进屏幕。
+
+        父窗是建对话框时传的那扇窗（见 `_dialog_owner`）——从设置窗里开出来的
+        就摆在设置窗中间；不是顶层窗口的话退回主窗。尺寸按控件自己量出来的自然
+        大小，屏幕放不下就缩到放得下。
+        """
         dialog.update_idletasks()
-        x = self.winfo_rootx() + (self.winfo_width() - dialog.winfo_width()) // 2
-        y = self.winfo_rooty() + (self.winfo_height() - dialog.winfo_height()) // 3
-        dialog.geometry("+{}+{}".format(x, y))
+        owner = dialog.master
+        if not isinstance(owner, (tk.Tk, tk.Toplevel)):
+            owner = self
+        fit_window(dialog, dialog.winfo_reqwidth(), dialog.winfo_reqheight(),
+                   anchor=owner)

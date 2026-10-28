@@ -9,7 +9,8 @@ import os
 import subprocess
 
 from claude_tool import agents
-from claude_tool.agent import CREATE_NEW_CONSOLE, agent_args, agent_command
+from claude_tool.agent import (CREATE_NEW_CONSOLE, agent_args, agent_command,
+                               spawn_prefix)
 from claude_tool.geometry import fit_rect
 
 
@@ -142,12 +143,16 @@ def spawn_terminal(workdir, cont=False, prompt=None, settings=None,
     会话预先钉死 id。
 
     那个进程对象调用方留着轮询 poll()，就知道这个会话还开没开着。
+
+    argv 过一遍 spawn_prefix：npm 装的 claude / codebuddy 落在 PATH 上的是
+    .cmd，CreateProcess 拉不起来，会话会当场报错。
     """
     profile = profile or agents.get(agents.DEFAULT_AGENT)
     return subprocess.Popen(
-        agent_args(profile, cont=cont, prompt=prompt, settings=settings,
-                   permission=permission, append_system_prompt=append_system_prompt,
-                   resume_id=resume_id, new_session_id=new_session_id),
+        spawn_prefix(agent_args(
+            profile, cont=cont, prompt=prompt, settings=settings,
+            permission=permission, append_system_prompt=append_system_prompt,
+            resume_id=resume_id, new_session_id=new_session_id)),
         cwd=workdir,
         creationflags=CREATE_NEW_CONSOLE,
         env=profile.spawn_environ(),

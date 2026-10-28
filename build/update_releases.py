@@ -41,7 +41,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from claude_tool import __version__               # noqa: E402
 from claude_tool import agents                    # noqa: E402
-from claude_tool.agent import find_agent          # noqa: E402
+from claude_tool.agent import find_agent, spawn_prefix   # noqa: E402
 from claude_tool.versions import number, parse    # noqa: E402
 
 DATA = os.path.join(ROOT, "docs", "releases.js")
@@ -77,7 +77,7 @@ def local_claude():
     if not prefix:
         return ""
     try:
-        result = subprocess.run(prefix + profile.version_argv(),
+        result = subprocess.run(spawn_prefix(prefix + profile.version_argv()),
                                 capture_output=True, timeout=30)
     except Exception:
         return ""

@@ -43,7 +43,7 @@ from claude_tool.theme import (
     WARN,
     font,
 )
-from claude_tool.widgets import PillButton
+from claude_tool.widgets import PillButton, fit_window
 
 # 插件管理窗的大小。够摆三四个插件卡片，再多往下滚。
 PLUGINS_W, PLUGINS_H = 560, 460
@@ -256,9 +256,11 @@ class PluginsMixin:
         PillButton(foot, "打开插件目录", self._open_plugin_dir,
                    bg=PAGE_BG).pack(side="left", padx=(6, 0))
 
-        win.minsize(PLUGINS_W, PLUGINS_H)
-        win.geometry("{}x{}".format(PLUGINS_W, PLUGINS_H))
-        self._center(win)
+        # 小屏上 560×460 也可能顶出工作区，按屏幕收一遍再摆。
+        _x, _y, width, height = fit_window(
+            win, PLUGINS_W, PLUGINS_H, anchor=self,
+            min_w=min(PLUGINS_W, 420), min_h=min(PLUGINS_H, 340), margin=16)
+        win.minsize(width, height)
 
     def _close_plugins(self):
         if self._plugins_win is not None and self._plugins_win.winfo_exists():
