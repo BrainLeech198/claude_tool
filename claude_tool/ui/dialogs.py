@@ -14,7 +14,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from claude_tool import history, install
-from claude_tool import agents
+from claude_tool import agents, model_list
 from claude_tool.agent import agent_path
 from claude_tool.host import open_url
 from claude_tool.paths import (
@@ -125,7 +125,8 @@ class LauncherDialogs:
 
         row = 0
         hint_var = tk.StringVar(
-            value="从下拉里挑一个供应商，地址和模型名会自动填好，你只要贴自己的 key。")
+            value="从下拉里挑一个供应商，地址和模型名会自动填好；贴上 key 后这里"
+                  "会自动列出这家在卖的模型，挑一个就行。")
 
         # 常用供应商：选一个就把 Base URL 和模型名填好，用户只剩贴 key 这件事。
         # 这一格跟下面那四行同一个摆法（标签在第 0 列、控件在第 1 列），下拉才跟四
@@ -189,6 +190,82 @@ class LauncherDialogs:
                     break
         row += 1
 
+        # 模型名那一格：手填之外，还能从服务商那儿现拉一份候选。
+        # 地址和 key 都填好后自动问一次（停手 700 毫秒才发，免得每敲一个字打一趟），
+        # 也可以点「刷新列表」重问。拉不到不影响保存——模型名本来就能手填。
+        list_var = tk.StringVar()
+        fetch = {"gen": 0, "after": None, "busy": False, "results": queue.Queue()}
+        status_label = [None]
+
+        def dialog_alive():
+            try:
+                return bool(dialog.winfo_exists())
+            except tk.TclError:
+                return False
+
+        def set_list_status(text, color=MUTED):
+            list_var.set(text)
+            if status_label[0] is not None:
+                status_label[0].configure(fg=color)
+
+        def apply_fetch(gen, models, note):
+            if gen != fetch["gen"] or not dialog_alive():
+                return
+            fetch["busy"] = False
+            refresh_btn.set_enabled(True)
+            if models:
+                var, box = entries["model"]
+                current = var.get().strip()
+                values = list(models)
+                if current and current not in values:
+                    values.insert(0, current)
+                box.configure(values=values)
+            set_list_status(note, MUTED if models else WARN)
+
+        def poll_results():
+            while fetch["busy"] and dialog_alive():
+                try:
+                    gen, models, note = fetch["results"].get_nowait()
+                except queue.Empty:
+                    dialog.after(100, poll_results)
+                    return
+                if gen == fetch["gen"]:
+                    apply_fetch(gen, models, note)
+
+        def run_fetch():
+            if not dialog_alive():
+                return
+            base = entries["base_url"][0].get().strip()
+            token = entries["token"][0].get().strip()
+            if not (base and token):
+                set_list_status("填好服务地址和 key，这里会自动列出这家在卖的模型名。",
+                                MUTED)
+                return
+            fetch["gen"] += 1
+            fetch["busy"] = True
+            refresh_btn.set_enabled(False)
+            set_list_status("正在问这家有哪些模型…", MUTED)
+            gen = fetch["gen"]
+
+            def worker():
+                try:
+                    models, note = model_list.fetch_models(base, token)
+                except Exception as e:
+                    models, note = [], "拉模型列表出错了（{}）".format(
+                        type(e).__name__)
+                fetch["results"].put((gen, models, note))
+
+            threading.Thread(target=worker, daemon=True).start()
+            dialog.after(100, poll_results)
+
+        def schedule_fetch(*_args):
+            if fetch["after"] is not None:
+                try:
+                    dialog.after_cancel(fetch["after"])
+                except tk.TclError:
+                    pass
+            fetch["after"] = dialog.after(700, run_fetch)
+
         for label, hint, key, secret in fields:
             cell = tk.Frame(body, bg=PAGE_BG)
             cell.grid(row=row, column=0, sticky="w", pady=4)
@@ -197,8 +274,23 @@ class LauncherDialogs:
             tk.Label(cell, text=hint, bg=PAGE_BG, fg=MUTED, font=font(9),
                      anchor="w").pack(anchor="w")
             var = tk.StringVar(value=values[key])
-            entry = make_entry(body, var, width=40, secret=secret)
-            entry.grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=4)
+            if key == "model":
+                # 可编辑的下拉：拉回来的模型名是候选，照样能自己敲。
+                holder = tk.Frame(body, bg=PAGE_BG)
+                holder.grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=4)
+                entry = ttk.Combobox(holder, textvariable=var, state="normal",
+                                     width=40, font=font(11),
+                                     values=[values["model"]] if values["model"] else [])
+                entry.pack(fill="x")
+                status_label[0] = tk.Label(
+                    holder, textvariable=list_var, bg=PAGE_BG, fg=MUTED,
+                    font=font(9), anchor="w", justify="left", wraplength=500)
+                status_label[0].pack(fill="x", pady=(3, 0))
+                refresh_btn = PillButton(body, "刷新列表", run_fetch, bg=PAGE_BG)
+                refresh_btn.grid(row=row, column=2, sticky="w", padx=(8, 0), pady=4)
+            else:
+                entry = make_entry(body, var, width=40, secret=secret)
+                entry.grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=4)
             entries[key] = (var, entry)
             if key == "token":
                 shown = tk.BooleanVar(value=False)
@@ -213,6 +305,12 @@ class LauncherDialogs:
                                ).grid(row=row, column=2, sticky="w", padx=(8, 0))
             row += 1
         body.columnconfigure(1, weight=1)
+
+        # 改地址/key 就重新排一次自动拉取；编辑已有预设时一打开就该有一份候选。
+        for key in ("base_url", "token"):
+            entries[key][0].trace_add("write", schedule_fetch)
+        if values["base_url"].strip() and values["token"].strip():
+            schedule_fetch()
 
         # wraplength 给到 700：这幅对话框是被第 1 列那四个输入框撑到 796 宽的，说明
         # 文字按 470 折会提前一行——初句量出来 494，末尾那个「key。」被甩到第二行。
