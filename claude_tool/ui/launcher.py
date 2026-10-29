@@ -61,6 +61,7 @@ from claude_tool.widgets import (
     PillButton,
     ScrollArea,
     Tip,
+    frame_insets,
     make_entry,
     section_title,
 )
@@ -418,8 +419,17 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
                         + TERMINAL_MIN_WIDTH)
         if area is None:
             area = work_area(self, 0, 0)
-        room_w = max(area[2] - area[0], 1)
-        room_h = max(area[3] - area[1], 1)
+        # 下限说的是客户区；工作区里先扣掉标题栏和边框，不然窗口外框会多出
+        # 那 40 多像素，小屏上正好落到屏幕外面去（见 widgets.frame_insets）。
+        is_mapped = getattr(self, "winfo_ismapped", None)
+        if is_mapped is not None and not is_mapped():
+            try:
+                self.update_idletasks()
+            except (AttributeError, tk.TclError):
+                pass
+        inset_w, inset_h = frame_insets(self)
+        room_w = max(area[2] - area[0] - inset_w, 1)
+        room_h = max(area[3] - area[1] - inset_h, 1)
         self.minsize(min(width, room_w), min(MIN_HEIGHT_FLOOR, room_h))
 
     def _restore_geometry(self):
@@ -450,15 +460,18 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 照样会把窗口顶出去。
         self._apply_min_size(area)
         min_w, min_h = self.minsize()
-        x, y, w, h = fit_rect(saved["x"], saved["y"], saved["w"], saved["h"],
-                              area, min_w, min_h)
+        inset_w, inset_h = frame_insets(self)
+        x, y, outer_w, outer_h = fit_rect(
+            saved["x"], saved["y"], saved["w"] + inset_w, saved["h"] + inset_h,
+            area, min_w + inset_w, min_h + inset_h)
+        w, h = outer_w - inset_w, outer_h - inset_h
         self.geometry("{}x{}".format(w, h))
         self.update_idletasks()
         place_window(self, x, y)
         # 只在"原位置真的放不进屏幕"时提示；只是被 minsize 抬了下限不算。
         if not (saved["x"] >= area[0] and saved["y"] >= area[1]
-                and saved["x"] + saved["w"] <= area[2]
-                and saved["y"] + saved["h"] <= area[3]):
+                and saved["x"] + saved["w"] + inset_w <= area[2]
+                and saved["y"] + saved["h"] + inset_h <= area[3]):
             self.feedback_var.set("上次的窗口位置放不进当前屏幕，已经摆回可见范围。")
 
     def _center_on_primary(self):
@@ -467,9 +480,14 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self._apply_min_size(area)
         w, h = default_window_size(self.winfo_screenwidth(),
                                    self.winfo_screenheight())
-        x = area[0] + (area[2] - area[0] - w) // 2
-        y = area[1] + (area[3] - area[1] - h) // 2
-        x, y, w, h = fit_rect(x, y, w, h, area, *self.minsize())
+        inset_w, inset_h = frame_insets(self)
+        min_w, min_h = self.minsize()
+        x = area[0] + (area[2] - area[0] - w - inset_w) // 2
+        y = area[1] + (area[3] - area[1] - h - inset_h) // 2
+        x, y, outer_w, outer_h = fit_rect(
+            x, y, w + inset_w, h + inset_h, area,
+            min_w + inset_w, min_h + inset_h)
+        w, h = outer_w - inset_w, outer_h - inset_h
         self.geometry("{}x{}".format(w, h))
         self.update_idletasks()
         place_window(self, x, y)
@@ -522,9 +540,12 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             w = self._width_before_embed or w
             min_w, min_h = self.minsize()
             area = work_area(self, x, y)
-            x, y, w, h = fit_rect(x, y, w, h, area, min_w, min_h)
+            inset_w, inset_h = frame_insets(self)
+            x, y, outer_w, outer_h = fit_rect(
+                x, y, w + inset_w, h + inset_h, area,
+                min_w + inset_w, min_h + inset_h)
             self.config_data["window"] = {
-                "x": x, "y": y, "w": w, "h": h}
+                "x": x, "y": y, "w": outer_w - inset_w, "h": outer_h - inset_h}
             save_config(self.config_data)
         except Exception:
             pass
@@ -769,6 +790,10 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
     def _on_wheel(self, event):
         widget = self.winfo_containing(event.x_root, event.y_root)
         if widget is None:
+            return
+        # 文本框、列表框自己带滚轮绑定，别再让外头那层滚动区跟着滚一遍——不然
+        # 光标停在安装日志那种 Text 上，一滚是两处一起动。
+        if widget.winfo_class() in ("Text", "Listbox"):
             return
         # 绑的是 bind_all，所以滚轮事件是整进程的——设置窗、对话框里滚也走这儿。
         # 从光标底下那个控件往上找**最近的** ScrollArea：左栏工作区、右栏会话、

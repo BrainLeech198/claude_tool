@@ -67,9 +67,11 @@ class SessionCenter(tk.Toplevel):
         # fit_window 一道处理，不再自己算 x/y。
         width = max(780, min(1440, self.winfo_screenwidth() - 120))
         height = max(560, min(1020, self.winfo_screenheight() - 90))
-        fit_window(self, width, height, anchor=app, min_w=780, min_h=540,
-                   margin=24)
-        self.minsize(780, 540)
+        _x, _y, width, height = fit_window(
+            self, width, height, anchor=app, min_w=780, min_h=540, margin=24)
+        # 下限跟着实际收下来的尺寸走：小屏上 fit_window 会把窗口压到屏幕能放下
+        # 的大小，这时候再硬钉 780×540，窗口又被 minsize 顶出去一截。
+        self.minsize(min(780, width), min(540, height))
 
         self.mode = "simple"
         self.query = tk.StringVar()

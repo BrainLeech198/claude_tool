@@ -360,10 +360,13 @@ class LauncherDialogs:
         row += 1
 
         note = "改名会一并重命名那份配置文件；" if is_edit else "会存成一份配置文件；"
+        # 这一行带着预设目录，用户把家目录搬到深路径下时能长到上千像素，不折行
+        # 会把整扇对话框撑出屏幕。
         tk.Label(body, text=note + "就在 {} 里，"
                                   "以后想手改也行。".format(
                                       agents.get(self.model_agent).preset_dir),
                  bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
+                 wraplength=640,
                  ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
         save = lambda: self._save_model(dialog, entries, apply_now, edit, seed_path)
@@ -1352,8 +1355,8 @@ class LauncherDialogs:
                     messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(error),
                                          parent=dialog)
 
-            PillButton(body, "打开官网说明", open_docs, bg=PAGE_BG).grid(
-                row=head + 2, column=0, sticky="w", pady=(14, 0))
+            PillButton(dialog._form_foot, "打开官网说明", open_docs,
+                       bg=PAGE_BG).pack(side="left")
             self._center(dialog)
             return
 
@@ -1560,10 +1563,12 @@ class LauncherDialogs:
                 messagebox.showerror("打不开", "拉不起浏览器：\n{}".format(error),
                                      parent=dialog)
 
-        PillButton(body, "开始" + what, start, primary=True,
-                   bg=PAGE_BG).grid(row=row + 2, column=1, sticky="e", pady=(12, 0))
-        PillButton(body, "打开官网说明", open_docs, bg=PAGE_BG).grid(
-            row=row + 2, column=0, sticky="w", pady=(12, 0))
+        # 这两个按钮钉在窗口底边（make_form 预留的那条），不进滚动区——正文
+        # 一长，用户滚不滚得下去另说，「开始装」得一直看得见。
+        PillButton(dialog._form_foot, "打开官网说明", open_docs,
+                   bg=PAGE_BG).pack(side="left")
+        PillButton(dialog._form_foot, "开始" + what, start, primary=True,
+                   bg=PAGE_BG).pack(side="right")
         if first_ready is None:
             put("这台机器上一条现成的路都没有。可以照着「打开官网说明」"
                 "自己装，或者先把上面缺的那几样装好。")
@@ -1960,7 +1965,9 @@ class LauncherDialogs:
 
         父窗是建对话框时传的那扇窗（见 `_dialog_owner`）——从设置窗里开出来的
         就摆在设置窗中间；不是顶层窗口的话退回主窗。尺寸按控件自己量出来的自然
-        大小，屏幕放不下就缩到放得下。
+        大小，屏幕放不下就缩到放得下——正文那份滚动区已经跟着内容的自然尺寸
+        报了请求尺寸（见 widgets.ScrollArea 的 auto_size），这儿直接量整扇窗口
+        就行。
         """
         dialog.update_idletasks()
         owner = dialog.master

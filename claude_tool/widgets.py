@@ -451,21 +451,32 @@ class PaletteCard(tk.Canvas):
 
 
 class ScrollArea(tk.Frame):
-    """带细滚动条的容器，内容都塞进 .inner。"""
+    """带细滚动条的容器，内容都塞进 .inner。
+
+    滚动条是"要用才出现"的：内容装得下就收起来，装不下才摆出来。小对话框
+    用不着一条空滚条占着右边。
+
+    auto_size=True 时，画布的**请求**尺寸跟着内容的自然尺寸走：对话框没自己
+    定 geometry，收放就刚好包住正文，不会因为画布默认的 378×max_height 而
+    空出一大块。只改请求值——外层把窗口拖大拖小时，pack expand 照样说了算。
+    """
 
     # bg 不能写成 bg=PAGE_BG：默认参数在 import 那一刻就定死了，换主题时
     # theme.apply 重绑的是模块里的名字，改不动已经存进默认参数里的那个值。
-    def __init__(self, parent, max_height, bg=None):
+    def __init__(self, parent, max_height, bg=None, auto_size=False):
         bg = PAGE_BG if bg is None else bg
         super().__init__(parent, bg=bg)
         self.max_height = max_height
+        self.auto_size = auto_size
         self.canvas = tk.Canvas(self, height=max_height, bg=bg,
                                 highlightthickness=0, borderwidth=0)
-        bar = ttk.Scrollbar(self, orient="vertical", style="Slim.Vertical.TScrollbar",
-                            command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=bar.set)
+        self.bar = ttk.Scrollbar(self, orient="vertical",
+                                 style="Slim.Vertical.TScrollbar",
+                                 command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.bar.set)
         self.canvas.pack(side="left", fill="both", expand=True)
-        bar.pack(side="right", fill="y")
+        self.bar.pack(side="right", fill="y")
+        self._syncing_bar = False
 
         self.inner = tk.Frame(self.canvas, bg=bg)
         self._window = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
@@ -474,9 +485,41 @@ class ScrollArea(tk.Frame):
 
     def _on_inner_resize(self, _event):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        if self.auto_size:
+            # 高度照内容的自然高度要，不拿 max_height 封顶：大屏上整页摊开
+            # 比框着 600 再看滚动条舒服；小屏由 fit_window 按屏幕收，画布被
+            # pack 挤窄之后滚动条自然就出来了。
+            want_w = max(self.inner.winfo_reqwidth(), 1)
+            want_h = max(self.inner.winfo_reqheight(), 1)
+            if want_w != self.canvas.winfo_reqwidth():
+                self.canvas.configure(width=want_w)
+            if want_h != self.canvas.winfo_reqheight():
+                self.canvas.configure(height=want_h)
+        self.sync_bar()
 
     def _on_canvas_resize(self, event):
         self.canvas.itemconfigure(self._window, width=event.width)
+        self.sync_bar()
+
+    def sync_bar(self):
+        """内容装得下就把滚动条收起来，装不下再摆出来。
+
+        收放会改画布宽度，画布一改又转回这儿——拿 _syncing_bar 挡一下，别转圈。
+        """
+        if self._syncing_bar:
+            return
+        self._syncing_bar = True
+        try:
+            need = self.inner.winfo_reqheight() > self.canvas.winfo_height() + 1
+            shown = bool(self.bar.winfo_manager())
+            if need and not shown:
+                self.bar.pack(side="right", fill="y")
+            elif not need and shown:
+                self.bar.pack_forget()
+        except tk.TclError:
+            pass
+        finally:
+            self._syncing_bar = False
 
     def clear(self):
         for child in self.inner.winfo_children():
@@ -486,6 +529,7 @@ class ScrollArea(tk.Frame):
         """把高度收到内容那么多，超过 max_height 才出现滚动条。"""
         self.update_idletasks()
         self.canvas.configure(height=min(self.inner.winfo_reqheight(), self.max_height))
+        self.sync_bar()
 
     def contains(self, widget):
         while widget is not None:
@@ -590,24 +634,39 @@ def make_combo(parent, values, size=10, min_chars=18, textvariable=None):
 
 
 def make_form(dialog, title):
-    """建一个统一样式的对话框，返回可往里放控件的 body 框架。"""
+    """建一个统一样式的对话框，返回可往里放控件的 body 框架。
+
+    **正文放进可滚动的区域，按钮先钉在底部**：安装、托管、模型这几扇表单
+    内容能高到 900 像素，768 高的本子上摆不下——以前整个窗口被内容撑到屏幕
+    外，底下「开始装」那排按钮直接看不见，用户连命令都跑不了。现在的分工是：
+    窗口按屏幕收拢，正文超出的部分靠滚，按钮永远在窗口底边。
+
+    底部占位框在正文之前 pack：pack 从上往下分地盘，正文后摆、又带 expand，
+    先摆的底部那排才能把它的位置留住。
+    """
     dialog.title(title)
-    dialog.resizable(False, False)
+    dialog.resizable(True, True)
     dialog.configure(bg=PAGE_BG)
     dialog.transient(dialog.master)
     theme.titlebar(dialog)
 
     tk.Label(dialog, text=title, bg=PAGE_BG, fg=TEXT,
              font=font(13, True), anchor="w").pack(fill="x", padx=20, pady=(16, 10))
-    body = tk.Frame(dialog, bg=PAGE_BG)
-    body.pack(fill="x", padx=20)
-    return body
+    holder = tk.Frame(dialog, bg=PAGE_BG)
+    holder.pack(side="bottom", fill="x", padx=20, pady=(12, 16))
+    dialog._form_foot = holder
+
+    area = ScrollArea(dialog, max_height=600, bg=PAGE_BG, auto_size=True)
+    area.pack(fill="both", expand=True, padx=(20, 12), pady=(0, 6))
+    return area.inner
 
 
 def finish_form(dialog, buttons):
     """在对话框底部摆按钮，buttons 是 [(文字, 回调, 是否主按钮), ...]。"""
-    holder = tk.Frame(dialog, bg=PAGE_BG)
-    holder.pack(fill="x", padx=20, pady=(16, 16))
+    holder = getattr(dialog, "_form_foot", None)
+    if holder is None:
+        holder = tk.Frame(dialog, bg=PAGE_BG)
+        holder.pack(fill="x", padx=20, pady=(16, 16))
     for text, command, primary in buttons:
         PillButton(holder, text, command, primary=primary,
                    bg=PAGE_BG).pack(side="right", padx=(8, 0))
@@ -630,15 +689,57 @@ def anchor_point(win, anchor=None):
             win.winfo_vrooty() + win.winfo_vrootheight() // 3)
 
 
+def frame_insets(win):
+    """窗口外框比客户区多出来的那点尺寸（左右边框合起来、标题栏加底边）。
+
+    **为什么必须扣这个**：Tk 的 geometry 里，位置 +x+y 指的是**外框**左上角，
+    宽高 x y 指的却是**客户区**。只拿客户区尺寸去跟工作区比，算出来的 y 会让
+    整扇窗口往下多出标题栏那 30 多像素——1080p 上刚好压进任务栏，768 高的
+    本子上就是底边一排按钮落在屏幕外。
+
+    量的是 win 自己；它还没映射（刚建出来）就问父窗的顶层——同一套系统边框，
+    数值一样。都拿不到就按 0 算（Linux/macOS 那边 Tk 给的就是客户区）。
+
+    **只用 Tk 自己的坐标**，不去调 Win32：探针会在同一个 ctypes 句柄上改
+    GetWindowRect 的参数类型（它们要按 wintypes.RECT 收），跟这儿抢起来就是
+    一句 ArgumentError。顶层窗口的 winfo_x/y 是外框左上角，winfo_rootx/rooty
+    是客户区左上角，两个一减，左边框和标题栏就都出来了。
+    """
+    candidates = [win]
+    master = getattr(win, "master", None)
+    if master is not None:
+        try:
+            candidates.append(master.winfo_toplevel())
+        except tk.TclError:
+            pass
+    for candidate in candidates:
+        is_mapped = getattr(candidate, "winfo_ismapped", None)
+        if is_mapped is None:
+            continue
+        try:
+            if not is_mapped():
+                continue
+            left = candidate.winfo_rootx() - candidate.winfo_x()
+            top = candidate.winfo_rooty() - candidate.winfo_y()
+        except (AttributeError, tk.TclError):
+            continue
+        if left >= 0 and top >= 0 and (left or top):
+            # 左右各一条边框，高度是标题栏加上下面那条边框。
+            return 2 * left, top + left
+    return 0, 0
+
+
 def fit_window(win, want_w, want_h, anchor=None, min_w=1, min_h=1, margin=0):
     """把顶层窗口收进屏幕工作区，再摆到 anchor 中间。
 
     小屏、高 DPI、副屏都走这一套算术：先拿离 anchor 最近那块屏的工作区（已经
-    去掉任务栏），把尺寸封顶，再居中；位置越界就贴边（geometry.fit_rect）。
-    margin 是窗口四周至少留出的空档，免得贴着屏幕边、跟任务栏混在一起。
+    去掉任务栏），按**外框**把尺寸封顶（见 frame_insets），再居中；位置越界就
+    贴边（geometry.fit_rect）。margin 是窗口四周至少留出的空档，免得贴着屏幕
+    边、跟任务栏混在一起。
 
-    屏幕比 min_w/min_h 还小时，尺寸就停在 min_w/min_h——那是界面自己的下限，
-    宁可越出一点也不能把控件挤成一条缝。返回最终 (x, y, w, h)。
+    屏幕比 min_w/min_h 还小时，让位给屏幕：这时窗口会比界面自己定的下限还小，
+    但总比有一截永远够不着强——正文都做成了可滚动的，挤一挤还能用。返回最终
+    (x, y, w, h)，是客户区的尺寸。
 
     anchor 传父窗（Tk/Toplevel）。这样设置窗里开的对话框落回设置窗那块屏，
     不会跑到主窗所在的另一块屏去。
@@ -647,15 +748,22 @@ def fit_window(win, want_w, want_h, anchor=None, min_w=1, min_h=1, margin=0):
     from claude_tool.host import work_area
 
     ax, ay = anchor_point(win, anchor)
-    area = work_area(win, ax, ay)
-    left, top, right, bottom = area
-    room_w = max(right - left - 2 * margin, min_w)
-    room_h = max(bottom - top - 2 * margin, min_h)
-    w = min(max(want_w, min_w), room_w)
-    h = min(max(want_h, min_h), room_h)
-    x = ax - w // 2
-    y = ay - h // 3
-    x, y, w, h = fit_rect(x, y, w, h, area, min_w, min_h)
+    left, top, right, bottom = work_area(win, ax, ay)
+    inset_w, inset_h = frame_insets(win)
+    room_w = max(right - left - 2 * margin - inset_w, 1)
+    room_h = max(bottom - top - 2 * margin - inset_h, 1)
+    floor_w = min(max(int(min_w), 1), room_w)
+    floor_h = min(max(int(min_h), 1), room_h)
+    w = min(max(int(want_w), floor_w), room_w)
+    h = min(max(int(want_h), floor_h), room_h)
+
+    # 位置说的是外框左上角，把外框整个夹进扣掉 margin 的工作区。
+    outer_w, outer_h = w + inset_w, h + inset_h
+    inner = (left + margin, top + margin, right - margin, bottom - margin)
+    x = ax - outer_w // 2
+    y = ay - outer_h // 3
+    x, y, _w, _h = fit_rect(x, y, outer_w, outer_h, inner,
+                            floor_w + inset_w, floor_h + inset_h)
     # Tk 的 "+-100" 就是 x=-100（副屏在主屏左边时用得上），三个平台的 WM 都认。
     win.geometry("{}x{}+{}+{}".format(w, h, x, y))
     return x, y, w, h
