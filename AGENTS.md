@@ -22,7 +22,7 @@
 - 安装包作为 release 附件上传；附件名必须与 `docs/releases.js` 里的 `file` 完全一致，上传后验证下载直链返回 200。
 - `docs/releases.js` 只记录真实存在附件的版本；没有附件的版本不要写进去，否则官网必然 404。
 - 发布后手动重建 Pages（`gh api -X POST repos/BrainLeech198/claude_tool/pages/builds`），再确认线上清单已更新。
-- Gitee 的发行版 API 只认私人令牌（GCM 里缓存的账号密码调 `api/v5` 会 401）。令牌不常驻，发布时临时放 `temp/gitee_token.txt`，用完即删。
+- Gitee 的发行版 API 只认私人令牌（GCM 里缓存的账号密码调 `api/v5` 会 401）。令牌在 `temp/gee令牌，用了别删.txt`（`temp/` 已 gitignore，**别删**）；发布跑 `python temp/gitee_release_any.py`，它会建发行版、传附件、验直链。
 
 ## 验证与数据
 
