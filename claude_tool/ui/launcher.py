@@ -46,7 +46,7 @@ from claude_tool.config import (
     merge_scanned,
     save_config,
 )
-from claude_tool import agents, theme
+from claude_tool import agents, theme, upgrading
 from claude_tool.agent import agent_path
 from claude_tool.host import (
     EMBED_SUPPORTED,
@@ -666,22 +666,35 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
     def _build_claude_banner(self):
         """找不到 claude 时在顶上挂一条。找到就什么都不摆。
 
+        「找不到」有两种：真没装，和 npm 自动升级的空档（升级先把启动器删掉、
+        新版下完才重建，中间十几分钟 PATH 上就是没有，人其实没被卸载）。后者
+        千万别劝重装——正好踩进升级中间态，口径见 upgrading.notice。
+
         右起第一颗是「帮我装 claude」，开那个安装面板（见 dialogs 那边的
         _open_install_dialog）：哪几条装法这台机器走得通、每条要跑什么命令、
         跑起来的输出，都在那一个窗口里。早先这儿直接挂一颗 winget 一键装，
         别的平台还挂不出来——面板把这些都收进去了，这条横幅只留"进去看看"
         和"再看看装上了没"。
         """
-        self.claude_path = agent_path(agents.get("claude"))
+        profile = agents.get("claude")
+        self.claude_path = agent_path(profile)
         if self.claude_path is not None:
             return
+        notes = upgrading.evidence(profile)
         banner = self.banner
         # 建的时候 body 还没 pack，所以这一 pack 就正好落在标题栏和正文之间
         banner.pack(fill="x")
         inner = tk.Frame(banner, bg=ALERT_BG)
         inner.pack(fill="x", padx=PAGE_GUTTER, pady=10)
-        tk.Label(inner, text="没找到 claude，装好才能启动。", bg=ALERT_BG,
-                 fg=WARN, font=font(10, True)).pack(side="left")
+        if notes:
+            text = "claude 正在自动升级——没被卸载，先别重装，等升级完再开。"
+        else:
+            text = "没找到 claude，装好才能启动。"
+        label = tk.Label(inner, text=text, bg=ALERT_BG,
+                         fg=WARN, font=font(10, True))
+        label.pack(side="left")
+        if notes:
+            Tip(label, upgrading.notice(profile))
         PillButton(inner, "重新检测", self._recheck_claude, bg=ALERT_BG,
                    ).pack(side="right", padx=(6, 0))
         install_pill = PillButton(inner, "帮我装 claude", self._open_install_dialog,
@@ -691,9 +704,14 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         tk.Frame(banner, bg=BORDER, height=1).pack(fill="x", side="bottom")
 
     def _recheck_claude(self):
-        self.claude_path = agent_path(agents.get("claude"))
+        profile = agents.get("claude")
+        self.claude_path = agent_path(profile)
         if self.claude_path is None:
-            self.feedback_var.set("还是没找到。装完可能要重开一次启动器，PATH 才会刷新。")
+            if upgrading.evidence(profile):
+                self.feedback_var.set(
+                    "claude 还在自动升级——没被卸载，先别重装，等升级完再开。")
+            else:
+                self.feedback_var.set("还是没找到。装完可能要重开一次启动器，PATH 才会刷新。")
             return
         self.banner.pack_forget()
         # 顺手把版本号重问一遍：刚装上的那个 claude 是什么版本，顶栏该跟着变。

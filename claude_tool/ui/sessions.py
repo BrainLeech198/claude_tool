@@ -19,6 +19,7 @@ from tkinter import messagebox, ttk
 from claude_tool import versions
 from claude_tool import agents
 from claude_tool import shared_memory
+from claude_tool import upgrading
 from claude_tool.agent import CREATE_NO_WINDOW, agent_exe, agent_path, spawn_prefix
 from claude_tool.config import save_config
 from claude_tool.handoff import (
@@ -444,9 +445,16 @@ class SessionsMixin:
         profile = agents.get(item.get("agent"))
         # 没装就别硬开：裸名字塞进命令行，用户只会看到一扇闪一下就没的窗口，
         # 报的还是"不是内部或外部命令"。这儿直接把那个档位的安装面板端出来。
+        # 「找不到」里还混着 npm 自动升级的空档——那种情况口径是先别重装，但
+        # 面板照旧端出来（顶上那条告示是 _probe_install_panel 的事）。
         if agent_path(profile) is None:
-            self.feedback_var.set(
-                "没找到 {}，先把它的命令行装上。".format(profile.label))
+            if upgrading.evidence(profile):
+                self.feedback_var.set(
+                    "「{}」正在自动升级——没被卸载，先别重装，等升级完再开。"
+                    .format(profile.label))
+            else:
+                self.feedback_var.set(
+                    "没找到 {}，先把它的命令行装上。".format(profile.label))
             self._open_install_dialog(profile=profile)
             return None
         resume_id = session_id or None

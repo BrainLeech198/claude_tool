@@ -17,7 +17,7 @@ import os
 import re
 import sys
 
-from claude_tool import __version__, agents
+from claude_tool import __version__, agents, upgrading
 from claude_tool.agent import agent_args, find_agent
 from claude_tool.config import (
     default_config,
@@ -231,6 +231,8 @@ def cmd_go(args):
         _fail("{} 不认权限档位 {}。能用的：{}".format(
             profile.label, permission, " / ".join(profile.permission_modes)))
     if find_agent(profile) is None:
+        if upgrading.evidence(profile):
+            _fail(upgrading.notice(profile))
         _fail("这台机器上找不到 {} 的命令行。装了再 go，或者 --agent 换一档。"
               .format(profile.label))
 
@@ -344,11 +346,17 @@ def cmd_doctor(args):
     for agent_id in agents.ids():
         profile = agents.get(agent_id)
         prefix = find_agent(profile)
-        where = " · ".join(prefix) if prefix else "没找到"
+        notes = [] if prefix else upgrading.evidence(profile)
+        where = (" · ".join(prefix) if prefix else
+                 "正在自动升级" if notes else "没找到")
         _say("  {:<16} {}".format(profile.label, where))
         if prefix is None:
-            problems.append("找不到 {} 的命令行（{}）".format(
-                profile.label, " / ".join(profile.exe_names)))
+            if notes:
+                problems.append("{} 正在自动升级，先别重装——等升级完再看"
+                                .format(profile.label))
+            else:
+                problems.append("找不到 {} 的命令行（{}）".format(
+                    profile.label, " / ".join(profile.exe_names)))
         if not os.path.isfile(profile.settings_file):
             _say("    自己的 settings.json 还没有：{}".format(profile.settings_file))
         presets = discover_presets(profile.id)

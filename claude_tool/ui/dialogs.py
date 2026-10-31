@@ -14,7 +14,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from claude_tool import history, install
-from claude_tool import agents, model_list
+from claude_tool import agents, model_list, upgrading
 from claude_tool.agent import agent_path
 from claude_tool.host import open_url
 from claude_tool.paths import (
@@ -75,6 +75,7 @@ from claude_tool.widgets import (
     PillButton,
     Row,
     ScrollArea,
+    Tip,
     finish_form,
     fit_window,
     make_combo,
@@ -1321,17 +1322,32 @@ class LauncherDialogs:
                                profile=profile)
         table = install.checkup(claude_path=claude_path, profile=profile)
 
+        # npm 自动升级的空档里开进来的（启动器被临时删了，看着像没装）：顶上
+        # 先说清「没被卸载、先别重装」。底下那套装/修照旧摆、照旧能点——告示
+        # 是提示，不是把面板锁住（口径见 upgrading.notice）。
+        top = 0
+        if upgrading.evidence(profile):
+            warn = tk.Label(
+                body,
+                text="{} 正在自动升级——没被卸载，先别重装，等升级完再开。"
+                .format(profile.label),
+                bg=PAGE_BG, fg=WARN, font=font(9), anchor="w",
+                justify="left", wraplength=460)
+            warn.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+            Tip(warn, upgrading.notice(profile))
+            top = 1
+
         tk.Label(body, text="这台机器上是什么", bg=PAGE_BG, fg=TEXT,
                  font=font(10, True), anchor="w").grid(
-                     row=0, column=0, columnspan=2, sticky="w")
+                     row=top, column=0, columnspan=2, sticky="w")
 
-        for index, (label, value, good) in enumerate(table, start=1):
+        for index, (label, value, good) in enumerate(table, start=top + 1):
             tk.Label(body, text=label, bg=PAGE_BG, fg=MUTED, font=font(9),
                      anchor="w").grid(row=index, column=0, sticky="w", padx=(12, 0))
             tk.Label(body, text=value, bg=PAGE_BG, fg=OK if good else WARN,
                      font=font(9), anchor="e").grid(row=index, column=1, sticky="e")
 
-        head = len(table) + 2
+        head = len(table) + top + 2
 
         if not routes:
             # 一条能走的路都没有——不摆假路线，老实说去官网装。
