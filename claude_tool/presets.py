@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 
-from claude_tool import agents
+from claude_tool import agents, gateway
 from claude_tool.paths import (
     CLAUDE_DIR,
     LEGACY_PREFIX,
@@ -134,7 +134,11 @@ def discover_presets(agent_id=None):
 
 
 def read_env(path):
-    """读取预设文件里的 env 段，读不到就返回空字典。"""
+    """读取预设文件里的 env 段，读不到就返回空字典。
+
+    拿到的是**文件里原样那份**：OpenAI 协议的预设这儿存的还是上游地址和上游
+    key。开会话、测试要用的那份走 session_env()——那个会把地址换成本地网关。
+    """
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f).get("env", {})
@@ -142,14 +146,91 @@ def read_env(path):
         return {}
 
 
+def read_meta(path):
+    """预设里启动器自己的那段（协议、上游地址…）。没有就返回空字典。
+
+    放在 env 之外是有意的：env 是给 Claude Code 看的，这段只有启动器和网关认。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    meta = data.get("claude_tool")
+    return meta if isinstance(meta, dict) else {}
+
+
+def protocol_of(path):
+    """这份预设走哪种协议。没写就是 Anthropic（老预设全都这样）。"""
+    return str(read_meta(path).get("protocol") or "anthropic")
+
+
+def agent_of(path):
+    """按预设文件所在的目录认它属于哪个 agent；认不出回落到 claude。"""
+    folder = os.path.normcase(os.path.dirname(os.path.normpath(path)))
+    for agent_id in agents.ids():
+        if os.path.normcase(agents.get(agent_id).preset_dir) == folder:
+            return agent_id
+    return agents.DEFAULT_AGENT
+
+
+def session_env(path, agent_id=None):
+    """开会话/测试那一刻真正要用的 env。
+
+    Anthropic 协议的预设原样返回。OpenAI 协议的预设把 ANTHROPIC_BASE_URL 换成
+    本地网关那条路由、令牌换成网关令牌——上游 key 只留在网关进程里。模型别名
+    （haiku/sonnet/opus、small-fast）也一起钉成同一个上游模型：Claude Code 做
+    后台小任务时会用别名发请求，不钉的话网关会收到一个上游不认识的模型名。
+
+    网关起不来抛 gateway.GatewayError，消息直接能摆给用户看。
+    """
+    env = dict(read_env(path))
+    meta = read_meta(path)
+    if meta.get("protocol") != "openai-responses":
+        return env
+
+    base_url = str(meta.get("base_url") or "").strip()
+    api_key = str(meta.get("api_key") or "").strip()
+    model = str(meta.get("model") or env.get("ANTHROPIC_MODEL") or "").strip()
+    if not (base_url and api_key and model):
+        raise gateway.GatewayError(
+            "「{}」这份预设的 OpenAI 配置不全（地址 / key / 模型名缺一样），"
+            "到「添加模型」里补上再试。".format(os.path.basename(path)))
+
+    resolved_agent = agent_id or agent_of(path)
+    name = os.path.basename(path)
+    if name.endswith(PRESET_SUFFIX):
+        name = name[:-len(PRESET_SUFFIX)]
+    state = gateway.ensure()
+
+    env["ANTHROPIC_BASE_URL"] = gateway.route_base(
+        state["port"], resolved_agent, name)
+    env["ANTHROPIC_AUTH_TOKEN"] = state["token"]
+    env["ANTHROPIC_MODEL"] = model
+    for key in ("ANTHROPIC_SMALL_FAST_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL"):
+        env[key] = model
+    return env
+
+
 def read_model(path):
     """从预设文件读取 ANTHROPIC_MODEL，读不到则返回占位。"""
-    return read_env(path).get("ANTHROPIC_MODEL") or "未知模型"
+    env = read_env(path)
+    return env.get("ANTHROPIC_MODEL") or read_meta(path).get("model") or "未知模型"
 
 
 def describe_preset(path):
     """卡片副标题：模型名 · 供应商域名，域名读不到就只显示模型名。"""
     env = read_env(path)
+    meta = read_meta(path)
+    if meta.get("protocol") == "openai-responses":
+        host = str(meta.get("base_url") or "").split("//")[-1].split("/")[0]
+        model = str(meta.get("model") or read_model(path))
+        return "{}  ·  {} · 经本地网关".format(model, host) if host else model
     host = env.get("ANTHROPIC_BASE_URL", "").split("//")[-1].split("/")[0]
     model = read_model(path)
     return "{}  ·  {}".format(model, host) if host else model
@@ -192,6 +273,19 @@ def apply_preset(name, agent_id=None):
     if not os.path.isfile(source):
         raise FileNotFoundError("预设「{}」不在盘上：{}".format(name, source))
     os.makedirs(os.path.dirname(profile.settings_file), exist_ok=True)
+
+    if protocol_of(source) == "openai-responses":
+        # OpenAI 协议这份的 env 得先换成网关那条路由再写下去，否则 Claude Code
+        # 会拿着上游地址去拼 /v1/messages。网关起不来就原样抛出去，调用方会提示。
+        with open(source, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("预设「{}」读出来不是一份配置".format(name))
+        data["env"] = session_env(source, agent_id)
+        with open(profile.settings_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return profile.settings_file
+
     shutil.copyfile(source, profile.settings_file)
     return profile.settings_file
 
@@ -200,8 +294,16 @@ def test_preset(path, timeout=15):
     """照着预设打一次最小请求，看这个 endpoint 通不通。
 
     返回 (是否可用, 说明)。说明要么是耗时，要么是状态码/错误名，直接摆卡片上。
+
+    OpenAI 协议的预设走 session_env：这一测走的是网关整条链路（翻译 + 上游），
+    比只打上游更能说明"这个模型能不能在 Claude Code 里用"。
     """
-    env = read_env(path)
+    try:
+        env = session_env(path)
+    except gateway.GatewayError as e:
+        return False, str(e)
+    except Exception:
+        env = read_env(path)
     base = (env.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
     token = env.get("ANTHROPIC_AUTH_TOKEN") or ""
     model = env.get("ANTHROPIC_MODEL") or ""

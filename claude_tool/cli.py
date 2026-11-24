@@ -17,7 +17,7 @@ import os
 import re
 import sys
 
-from claude_tool import __version__, agents, upgrading
+from claude_tool import __version__, agents, gateway, upgrading
 from claude_tool.agent import agent_args, find_agent
 from claude_tool.config import (
     default_config,
@@ -41,7 +41,8 @@ from claude_tool.presets import (
     describe_preset,
     discover_presets,
     preset_path,
-    read_env,
+    protocol_of,
+    session_env,
     read_model,
 )
 from claude_tool.shared_memory import ensure_pointers, preamble
@@ -243,7 +244,10 @@ def cmd_go(args):
     if bound:
         source = preset_path(bound, profile.id)
         if os.path.isfile(source):
-            env = read_env(source)
+            try:
+                env = session_env(source, profile.id)
+            except gateway.GatewayError as e:
+                _fail(str(e))
             if env:
                 try:
                     settings = ensure_hook_settings(
@@ -327,6 +331,8 @@ def cmd_use(args):
             profile.label, args.preset))
     try:
         target = apply_preset(args.preset, profile.id)
+    except gateway.GatewayError as e:
+        _fail(str(e))
     except Exception as e:
         _fail("写不进 {}：{}".format(profile.settings_file, e))
     _say("{} 现在用「{}」（{}）。重启 {} 后生效。".format(
@@ -367,6 +373,20 @@ def cmd_doctor(args):
         else:
             _say("    还没有预设")
 
+    # 有 OpenAI 协议的预设才提网关——没这种预设的人不用知道它存在。
+    openai_presets = []
+    for agent_id in agents.ids():
+        for name, path in discover_presets(agent_id).items():
+            if protocol_of(path) == "openai-responses":
+                openai_presets.append(name)
+    if openai_presets:
+        state = gateway.status()
+        if state.get("running"):
+            _say("本地网关  运行中 · {}（pid {}）".format(
+                state.get("base_url"), state.get("pid")))
+        else:
+            _say("本地网关  没在跑（第一次用 OpenAI 协议的模型时会自己起来）")
+
     missing = [w["name"] for w in config["workspaces"]
                if not os.path.isdir(w["path"])]
     if missing:
@@ -383,6 +403,32 @@ def cmd_doctor(args):
             _say("  - {}".format(line))
         return EXIT_FAIL
     _say("没查出问题。")
+    return EXIT_OK
+
+
+def cmd_gateway(args):
+    """本地协议网关：查状态（默认）、拉起、停掉、或前台跑。
+
+    --serve 是给 ensure() 甩到后台用的，也可以手动跑来看日志。
+    """
+    if args.stop:
+        state = gateway.stop()
+        if state.get("running"):
+            _say("没停下来：pid {} 还在。".format(state.get("pid")))
+            return EXIT_FAIL
+        _say("网关停了。")
+        return EXIT_OK
+    if args.serve:
+        try:
+            return gateway.serve(port=args.port, idle=args.idle)
+        except gateway.GatewayError as e:
+            _fail(str(e))
+    try:
+        state = gateway.ensure()
+    except gateway.GatewayError as e:
+        _fail(str(e))
+    _say("本地网关在跑：{}（pid {}）".format(
+        state.get("base_url"), state.get("pid")))
     return EXIT_OK
 
 
@@ -406,6 +452,7 @@ def build_parser():
                "  claude_tool go 2 --continue\n"
                "  claude_tool model --agent codebuddy\n"
                "  claude_tool use deepseek\n"
+               "  claude_tool gateway\n"
                "  claude_tool doctor\n")
     parser.add_argument("--version", action="store_true",
                         help="打印版本号就退出")
@@ -457,6 +504,15 @@ def build_parser():
     p.add_argument("preset", help="预设名，用 model 看有哪些")
     p.add_argument("--agent", choices=list(agents.ids()),
                    default=agents.DEFAULT_AGENT, help="改哪一档，默认 claude")
+
+    p = add("gateway", "本地协议网关：查状态；--stop 停掉；--serve 前台跑",
+            cmd_gateway)
+    p.add_argument("--serve", action="store_true",
+                   help="前台跑网关（内部用，也可以手动跑来看日志）")
+    p.add_argument("--port", type=int, default=None, help="指定端口")
+    p.add_argument("--idle", type=int, default=gateway.IDLE_SECONDS,
+                   help="闲着多少秒自己退，0 表示不退")
+    p.add_argument("--stop", action="store_true", help="停掉后台网关")
 
     add("doctor", "查一遍环境：agent 找得到吗、配置和工作区有没有毛病", cmd_doctor)
     add("version", "打印版本号", cmd_version)

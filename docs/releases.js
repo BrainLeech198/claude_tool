@@ -31,6 +31,18 @@ window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/down
 // 也拿官网上这个数当兜底（npm 问不到的时候用）——改它没用，那是打包时写死的。
 window.RELEASES = [
   {
+    "version": "1.5.0",
+    "date": "2026-11-24",
+    "notes": "这一版内置了本地协议转换网关，OpenAI 官方模型也能直接选。OpenAI 官方的接口只给 Responses 协议，而 Claude Code 只会发 Anthropic Messages，以前接不上。现在添加模型时多一栏「协议」：选「OpenAI Responses」（或直接挑内置的「OpenAI 官方」）并填好接口根，开会话时启动器会在 127.0.0.1 上自动拉起一个独立后台网关，把请求、流式回话、工具调用与工具返回都翻译过去，gpt-6.2-sol 这类官方模型因此能直接用。网关自带令牌、只绑本机、上游 key 只留在网关进程里，上游请求带 store:false，空闲 12 小时自己退；命令行新增 claude_tool gateway（查看状态 / 停止 / 前台跑），doctor 也会报网关状态。原有 Anthropic 兼容预设的用法一个字都没变。",
+    "claude": "2.1.150",
+    "windows": {
+      "file": "ClaudeLauncher-1.5.0-Setup.exe",
+      "size": 10707216
+    },
+    "linux": null,
+    "macos": null
+  },
+  {
     "version": "1.4.0",
     "date": "2026-11-24",
     "notes": "这一版让启动器学会常驻托盘。点窗口的 X 默认收进系统托盘、不退出，正在跑的会话（包括内嵌终端）一个都不断；第一次收进去会弹一条通知说明去哪儿找。托盘图标单击或双击叫回窗口，右键菜单能打开启动器、开会话中心、把某条正在跑的会话自己的窗口调到前面、挑一个工作区直接开新会话、打开配置目录、切换「关闭时收进托盘」和退出。收托盘时设置、插件、会话中心会跟着一起藏，叫回来原样恢复，最大化状态也记着；第二次双击 exe 会唤醒托盘里那一扇，不会再开一个。设置 → 行为开关里能关掉这个行为，关掉之后 X 就是直接退出。托盘用纯 Win32 实现（Shell_NotifyIcon + 原生菜单），没引新的第三方依赖。",

@@ -52,7 +52,9 @@ from claude_tool.presets import (
     preset_path,
     probe_current_settings,
     read_env,
+    read_meta,
     read_model,
+    session_env,
     suggest_preset_name,
 )
 from claude_tool.providers import (
@@ -82,6 +84,17 @@ from claude_tool.widgets import (
     make_entry,
     make_form,
 )
+
+
+# 「添加模型」里的协议：协议决定地址后面能不能直接拼 /v1/messages。绝大多数
+# 服务商是 Anthropic 兼容的；OpenAI 官方这种只给 /v1/responses 的，得让启动器
+# 的本地网关去翻译（见 claude_tool/gateway.py）。
+PROTOCOL_LABELS = (
+    ("anthropic", "Anthropic Messages（大多数服务商）"),
+    ("openai-responses", "OpenAI Responses（官方原生协议）"),
+)
+LABEL_OF_PROTOCOL = dict(PROTOCOL_LABELS)
+PROTOCOL_OF_LABEL = {label: key for key, label in PROTOCOL_LABELS}
 
 
 def unbound_model_label(agent_id):
@@ -134,6 +147,7 @@ class LauncherDialogs:
         # 走的是"新增"那条路，不会去动源文件）。
         source_path = old_path if is_edit else seed_path
         env = read_env(source_path) if source_path else {}
+        meta = read_meta(source_path) if source_path else {}
 
         dialog = self._new_dialog()
         dialog.grab_set()
@@ -151,7 +165,11 @@ class LauncherDialogs:
         values = {"name": old_name or (seed_name + " 副本" if seed_name else ""),
                   "base_url": env.get("ANTHROPIC_BASE_URL", ""),
                   "token": env.get("ANTHROPIC_AUTH_TOKEN", ""),
-                  "model": env.get("ANTHROPIC_MODEL", "")}
+                  "model": env.get("ANTHROPIC_MODEL", ""),
+                  "protocol": str(meta.get("protocol") or "anthropic")}
+        protocol_var = tk.StringVar(
+            value=LABEL_OF_PROTOCOL.get(values["protocol"],
+                                        LABEL_OF_PROTOCOL["anthropic"]))
 
         row = 0
         hint_var = tk.StringVar(
@@ -200,6 +218,8 @@ class LauncherDialogs:
                     continue
                 entries["base_url"][0].set(item.base_url)
                 entries["model"][0].set(item.model)
+                protocol_var.set(LABEL_OF_PROTOCOL.get(
+                    item.protocol, LABEL_OF_PROTOCOL["anthropic"]))
                 current = entries["name"][0].get().strip()
                 if not current or current == auto_name[0]:
                     entries["name"][0].set(item.preset)
@@ -209,6 +229,12 @@ class LauncherDialogs:
                     "已填好 {} 的地址（{}）和模型名 {}。贴上你的 key；"
                     "模型名各家会变，不对就改一下再点「测试」验。"
                     .format(item.name, host_of(item.base_url), item.model))
+                if item.protocol == "openai-responses":
+                    hint_var.set(
+                        "{} 只给 OpenAI 原生协议：地址填它的接口根（例如 "
+                        "https://api.openai.com/v1，别带 /responses），启动器会"
+                        "用内置网关把 Claude Code 的请求翻译过去。"
+                        .format(item.name))
                 return
 
         combo.bind("<<ComboboxSelected>>", pick)
@@ -218,6 +244,33 @@ class LauncherDialogs:
                 if values["base_url"].rstrip("/") == item.base_url:
                     combo.current(index)
                     break
+        row += 1
+
+        # 协议：地址能不能直接接 Messages API。绝大多数家能；OpenAI 官方这种
+        # 只给 /v1/responses 的，选 Responses，启动器会用本地网关翻译。
+        cell = tk.Frame(body, bg=PAGE_BG)
+        cell.grid(row=row, column=0, sticky="w", pady=4)
+        tk.Label(cell, text="协议", bg=PAGE_BG, fg=TEXT, font=font(10),
+                 anchor="w").pack(anchor="w")
+        tk.Label(cell, text="地址不吃 Messages API 时才要改", bg=PAGE_BG, fg=MUTED,
+                 font=font(9), anchor="w").pack(anchor="w")
+        protocol_combo = make_combo(
+            body, [label for _key, label in PROTOCOL_LABELS],
+            textvariable=protocol_var)
+        protocol_combo.grid(row=row, column=1, sticky="w", padx=(12, 0), pady=4)
+
+        def protocol_changed(_event=None):
+            if PROTOCOL_OF_LABEL.get(protocol_var.get()) == "openai-responses":
+                hint_var.set(
+                    "OpenAI 原生协议：地址填接口根（例如 https://api.openai.com/v1），"
+                    "不要带 /responses。开会话时启动器会在本地起一个网关，把 "
+                    "Claude Code 的请求翻译成 Responses 协议再发出去。")
+            else:
+                hint_var.set(
+                    "Anthropic 兼容：地址后面会被拼上 /v1/messages。大多数服务商"
+                    "（包括带 /anthropic 的那些）选这一项。")
+
+        protocol_combo.bind("<<ComboboxSelected>>", protocol_changed)
         row += 1
 
         # 模型名那一格：手填之外，还能从服务商那儿现拉一份候选。
@@ -370,7 +423,8 @@ class LauncherDialogs:
                  wraplength=640,
                  ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
-        save = lambda: self._save_model(dialog, entries, apply_now, edit, seed_path)
+        save = lambda: self._save_model(
+            dialog, entries, apply_now, edit, seed_path, protocol_var)
         finish_form(dialog, [("保存", save, True), ("取消", dialog.destroy, False)])
         dialog.bind("<Return>", lambda e: save())
         dialog.bind("<Escape>", lambda e: dialog.destroy())
@@ -500,7 +554,9 @@ class LauncherDialogs:
                 tk.Label(cell, text=item.name + ("　" + mark if mark else ""),
                          bg=PAGE_BG, fg=TEXT, font=font(10), anchor="w",
                          ).pack(anchor="w")
-                tk.Label(cell, text="{}  ·  {}".format(item.base_url, item.model),
+                suffix = "  ·  经本地网关" if item.protocol == "openai-responses" else ""
+                tk.Label(cell, text="{}  ·  {}{}".format(
+                    item.base_url, item.model, suffix),
                          bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
                          ).pack(anchor="w")
             area.fit()
@@ -535,7 +591,15 @@ class LauncherDialogs:
             web_button.set_enabled(False)
             note.set("正在查…")
             if kind == "ai":
-                env = read_env(preset_path(query_var.get(), self.model_agent))
+                # 走 session_env：拿 OpenAI 协议的预设去查时也得经过本地网关，
+                # 否则会拿着上游地址去拼 /v1/messages，必 404。
+                try:
+                    env = session_env(
+                        preset_path(query_var.get(), self.model_agent),
+                        self.model_agent)
+                except Exception as e:
+                    messagebox.showerror("网关起不来", str(e), parent=dialog)
+                    return
                 worker = lambda: box.put(("done", query_with_ai(
                     env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_AUTH_TOKEN"),
                     env.get("ANTHROPIC_MODEL"), rows_now)))
@@ -569,18 +633,29 @@ class LauncherDialogs:
             changes.append("地址变了")
         if old.model != item.model:
             changes.append("模型 {} → {}".format(old.model, item.model))
+        if getattr(old, "protocol", "anthropic") != item.protocol:
+            changes.append("协议变了")
         return "；".join(changes)
 
 
-    def _save_model(self, dialog, entries, apply_now, edit, base_path=None):
+    def _save_model(self, dialog, entries, apply_now, edit, base_path=None,
+                    protocol_var=None):
         _old_name, old_path = edit or (None, None)
         name = entries["name"][0].get().strip()
         base_url = entries["base_url"][0].get().strip()
         token = entries["token"][0].get().strip()
         model = entries["model"][0].get().strip()
+        protocol = PROTOCOL_OF_LABEL.get(
+            protocol_var.get() if protocol_var is not None else "",
+            "anthropic")
 
         if not all([name, base_url, token, model]):
             messagebox.showerror("缺少信息", "四个字段都要填。", parent=dialog)
+            return
+        if not base_url.startswith(("http://", "https://")):
+            messagebox.showerror("地址不对",
+                                 "Base URL 要以 http:// 或 https:// 开头。",
+                                 parent=dialog)
             return
         if re.search(ILLEGAL_FILE_CHARS, name):
             messagebox.showerror("名称非法",
@@ -610,6 +685,19 @@ class LauncherDialogs:
             "ANTHROPIC_AUTH_TOKEN": token,
             "ANTHROPIC_MODEL": model,
         }
+        if protocol == "openai-responses":
+            # env 里留的是上游地址和上游 key（表单重新打开时照着显示），真正
+            # 开会话时由 presets.session_env() 换成网关路由和网关令牌。
+            preset["claude_tool"] = {
+                "protocol": protocol,
+                "base_url": base_url,
+                "api_key": token,
+                "model": model,
+            }
+        elif isinstance(preset.get("claude_tool"), dict) and \
+                preset["claude_tool"].get("protocol") == "openai-responses":
+            # 从 OpenAI 协议改回 Anthropic：那一段留着只会让下次开会话又走网关。
+            preset.pop("claude_tool", None)
 
         try:
             os.makedirs(agents.get(self.model_agent).preset_dir, exist_ok=True)

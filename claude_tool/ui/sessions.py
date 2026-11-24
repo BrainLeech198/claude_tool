@@ -22,6 +22,7 @@ from claude_tool import shared_memory
 from claude_tool import upgrading
 from claude_tool.agent import CREATE_NO_WINDOW, agent_exe, agent_path, spawn_prefix
 from claude_tool.config import save_config
+from claude_tool.gateway import GatewayError
 from claude_tool.handoff import (
     HANDOFF_FILE,
     HANDOFF_TOOLS,
@@ -44,7 +45,7 @@ from claude_tool.host import (
     window_position,
 )
 from claude_tool.permissions import permission_option, workspace_permission
-from claude_tool.presets import preset_path, read_env
+from claude_tool.presets import preset_path, session_env
 from claude_tool.theme import (
     ACCENT,
     BORDER,
@@ -415,6 +416,10 @@ class SessionsMixin:
 
         读不到就当没绑——宁可回落到全局/自带默认模型，也不要拿着一份读不动的配置
         去开窗。预设名是按**这本工作区当前的档位**去那个 agent 的目录里找的。
+
+        走 session_env 而不是 read_env：OpenAI 协议的预设得在这儿换成本地网关的
+        地址。网关起不来会抛 GatewayError，由 launch_workspace 摆给用户看——
+        悄悄退回全局模型会让用户以为换成功了，实际用的却是别人。
         """
         name = item.get("preset")
         if not name:
@@ -422,7 +427,7 @@ class SessionsMixin:
         path = preset_path(name, profile.id)
         if not os.path.isfile(path):
             return None
-        return read_env(path) or None
+        return session_env(path, profile.id) or None
 
     def launch_workspace(self, item, cont=False, prompt=None, autopilot=False,
                          hook_flags=None, session_id=None):
@@ -469,7 +474,13 @@ class SessionsMixin:
         # 这一层压过用户 settings.json，于是"这一本用哪个模型"就成立了，而全局那份
         # settings.json 一个字节都不动。没绑（或那份预设已被删）就是 None，照常走
         # 全局生效的那份（codebuddy 没绑时就走它自带默认模型）。
-        bound_env = self._bound_preset_env(item, profile)
+        try:
+            bound_env = self._bound_preset_env(item, profile)
+        except GatewayError as e:
+            # 网关起不来就干脆别开：拿一份指向上游的配置去开，Claude Code 会
+            # 一直报 404，用户还以为模型配错了。
+            messagebox.showerror("本地转换网关起不来", str(e))
+            return None
         auto_continue = self.auto_continue_var.get() or autopilot
         settings = None
         if auto_continue or bound_env:

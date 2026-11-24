@@ -41,15 +41,20 @@ AI_MAX_TOKENS = 2048
 
 
 class Provider(NamedTuple):
-    """一家：下拉里显示的名字、存成预设时的名字、地址、模型名。
+    """一家：下拉里显示的名字、存成预设时的名字、地址、模型名、协议。
 
-    NamedTuple 是为了两边都顺手——老代码按元组拆（`for name, preset, base, model
-    in rows`）照旧能跑，新代码想要 `row.base_url` 也行。
+    NamedTuple 是为了两边都顺手——老代码按元组拆照旧能跑，新代码想要
+    `row.base_url` 也行。protocol 有默认值，老 providers.json 没这一格的行
+    读出来就是 Anthropic。
+
+    协议目前只有两种：anthropic（地址能直接接 Messages API）和
+    openai-responses（原生 OpenAI，靠启动器内置的本地网关转换）。
     """
     name: str
     preset: str
     base_url: str
     model: str
+    protocol: str = "anthropic"
 
 
 # 内置那份。下拉里的名字 = 名称那一格自动填的内容，所以两列大多数是同一样东西。
@@ -58,6 +63,10 @@ class Provider(NamedTuple):
 # 同时往同域名的假路径打一次确认它回 404——否则一个"什么都回 401"的网关会把
 # 不存在的路径也伪装成存在。下面这些是过了双重检查的。
 # （OpenAI 格式的 /v1/chat/completions 端点不算数，Claude Code 只认 Messages API。）
+#
+# 唯一的例外是最后那条 OpenAI 官方：它只给 /v1/responses。这条的 protocol 标成
+# openai-responses，启动器会把请求转给内置网关去翻译（见 gateway.py）。别的
+# 家都自带 /anthropic 入口，用不着走转换。
 #
 # 模型名是照各家公开文档填的，会过时；聚合平台的模型名还得照它们的目录填。过时了
 # 不用改代码：在「添加模型」那扇窗里点「更新这张表」，或者直接手改 providers.json。
@@ -88,6 +97,9 @@ BUILTIN = (
     # 官方
     Provider("Anthropic 官方", "Anthropic 官方", "https://api.anthropic.com",
              "claude-sonnet-4-6"),
+    # 只给原生 Responses 协议的官方模型：靠本地网关转换成 Messages API。
+    Provider("OpenAI 官方", "OpenAI 官方", "https://api.openai.com/v1",
+             "gpt-6.2-sol", "openai-responses"),
 )
 
 # 来源写进文件里，界面上好直说是"AI 查的"还是"社区清单拉的"
@@ -116,14 +128,17 @@ def _row(item):
     preset = _text(item.get("preset")) or name
     base_url = _text(item.get("base_url"))
     model = _text(item.get("model"))
+    protocol = _text(item.get("protocol")) or "anthropic"
     if not (name and base_url and model):
         return None
     if not base_url.startswith(("http://", "https://")):
         return None
+    if protocol not in ("anthropic", "openai-responses"):
+        return None
     # 名字存不下去的话，从下拉里挑中它就是往表单里填一个保存不了的名称
     if re.search(ILLEGAL_FILE_CHARS, name) or re.search(ILLEGAL_FILE_CHARS, preset):
         return None
-    return Provider(name, preset, base_url, model)
+    return Provider(name, preset, base_url, model, protocol)
 
 
 def parse_rows(payload):

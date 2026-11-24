@@ -23,7 +23,7 @@ import re
 import urllib.error
 import urllib.request
 
-from claude_tool.presets import preset_path, read_env
+from claude_tool.presets import preset_path, session_env
 from claude_tool.providers import reply_text
 
 # 上下文只取最近这些字符。会话记录那个 jsonl 长起来能到几十兆，整个读进来纯属浪费，
@@ -219,7 +219,11 @@ def ask(name, questions, transcript_path, timeout=DEFAULT_TIMEOUT):
     """
     if not name or not questions:
         return None
-    env = read_env(preset_path(name))
+    try:
+        # 指挥模型也可能是 OpenAI 协议那份：走 session_env 才会经过本地网关。
+        env = session_env(preset_path(name))
+    except Exception:
+        return None
     base = str(env.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
     token = str(env.get("ANTHROPIC_AUTH_TOKEN") or "")
     model = str(env.get("ANTHROPIC_MODEL") or "")
