@@ -31,6 +31,18 @@ window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/down
 // 也拿官网上这个数当兜底（npm 问不到的时候用）——改它没用，那是打包时写死的。
 window.RELEASES = [
   {
+    "version": "1.5.1",
+    "date": "2026-11-24",
+    "notes": "这一版收了几处「明明能用却报模型不存在」的毛病：老启动器存下的 OpenAI 官方预设（只有地址、没有协议标记）会按地址认出是 OpenAI Responses，自动改走本地网关；网关的 /v1/models 按 Anthropic 的样子补全了 first_id / last_id / created_at，Claude Code 启动验模型时不再误判；在「加模型」里把地址填成 api.openai.com 也会自动切到 OpenAI Responses，不用再手挑协议。另外网关补上了 HEAD 探活（Claude Code 启动会先 HEAD 一下，之前回 501）；网关状态里也记了版本号——升级启动器后旧网关进程会被停掉重起，不会继续用上一版的翻译逻辑；回话里的用量还会带上缓存命中数。顺手修了「添加模型」里选 AI 查询时，网关起不来会把两个查询按钮卡在禁用状态的问题。原有 Anthropic 预设不受影响。",
+    "claude": "2.1.150",
+    "windows": {
+      "file": "ClaudeLauncher-1.5.1-Setup.exe",
+      "size": 10709365
+    },
+    "linux": null,
+    "macos": null
+  },
+  {
     "version": "1.5.0",
     "date": "2026-11-24",
     "notes": "这一版内置了本地协议转换网关，OpenAI 官方模型也能直接选。OpenAI 官方的接口只给 Responses 协议，而 Claude Code 只会发 Anthropic Messages，以前接不上。现在添加模型时多一栏「协议」：选「OpenAI Responses」（或直接挑内置的「OpenAI 官方」）并填好接口根，开会话时启动器会在 127.0.0.1 上自动拉起一个独立后台网关，把请求、流式回话、工具调用与工具返回都翻译过去，gpt-6.2-sol 这类官方模型因此能直接用。网关自带令牌、只绑本机、上游 key 只留在网关进程里，上游请求带 store:false，空闲 12 小时自己退；命令行新增 claude_tool gateway（查看状态 / 停止 / 前台跑），doctor 也会报网关状态。原有 Anthropic 兼容预设的用法一个字都没变。",

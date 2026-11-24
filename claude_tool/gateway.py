@@ -52,6 +52,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from claude_tool import __version__
 from claude_tool.paths import TOOL_DIR
 
 HOST = "127.0.0.1"
@@ -73,6 +74,8 @@ MAX_LOG_BYTES = 1024 * 1024
 
 ROUTE_RE = re.compile(
     r"^/a/([^/]+)/([^/]+)(/v1/messages(?:/count_tokens)?|/v1/models)$")
+# Claude Code 启动时会先 HEAD 一下 base URL 探活，那一跳没有尾段。
+BASE_RE = re.compile(r"^/a/([^/]+)/([^/]+)$")
 
 
 class GatewayError(RuntimeError):
@@ -116,6 +119,7 @@ def _write_state(port, token):
     os.makedirs(TOOL_DIR, exist_ok=True)
     data = {
         "app": APP_MARK,
+        "version": __version__,
         "port": int(port),
         "token": token,
         "pid": os.getpid(),
@@ -127,26 +131,40 @@ def _write_state(port, token):
     os.replace(temp, STATE_FILE)
 
 
-def _healthy(port, timeout=0.8):
+def _health(port, timeout=0.8):
+    """探 /health：是本家就回那份载荷，不是/连不上就 None。"""
     if not port:
-        return False
+        return None
     try:
         with urllib.request.urlopen(
                 base_url(port) + "/health", timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8", "replace"))
     except Exception:
-        return False
-    return isinstance(payload, dict) and payload.get("app") == APP_MARK
+        return None
+    if isinstance(payload, dict) and payload.get("app") == APP_MARK:
+        return payload
+    return None
+
+
+def _healthy(port, timeout=0.8):
+    return _health(port, timeout) is not None
 
 
 def status():
-    """网关现在什么状况。running 为假时，port/token 可能是上次留下的旧值。"""
+    """网关现在什么状况。running 为假时，port/token 可能是上次留下的旧值。
+
+    ``stale``：在跑的那个网关是旧版本留下来的。升级启动器不会杀掉它，而它
+    闲 12 小时才退；不标出来，用户升到新版后的头半天还在用旧翻译逻辑。
+    """
     state = _read_state()
-    running = bool(state.get("port")) and _healthy(state["port"])
+    payload = _health(state.get("port"))
+    running = payload is not None
     result = dict(state)
     result["running"] = running
     if running:
         result["base_url"] = base_url(state["port"])
+        result["version"] = str(payload.get("version") or "")
+        result["stale"] = result["version"] != __version__
     return result
 
 
@@ -160,18 +178,21 @@ def ensure(wait=START_TIMEOUT):
     """确保后台网关在跑，返回状态（含 port/token）。起不来抛 GatewayError。
 
     在界面线程里也会被调到（第一次开会话之前），所以已经起着时只做一次 0.8 秒
-    上下的健康检查就返回；只有真需要冷启动才花那几秒。
+    上下的健康检查就返回；只有真需要冷启动才花那几秒。旧版本留下的网关进程
+    先停掉：它跑的不是这套代码。
     """
     state = status()
-    if state.get("running"):
+    if state.get("running") and not state.get("stale"):
         return state
+    if state.get("running"):
+        stop()
 
     _spawn()
     deadline = time.time() + wait
     while time.time() < deadline:
         time.sleep(0.15)
         state = status()
-        if state.get("running"):
+        if state.get("running") and not state.get("stale"):
             return state
     raise GatewayError(
         "本地转换网关没起来。看看 {} 里的报错；也可以在命令行跑 "
@@ -514,6 +535,12 @@ def to_anthropic_response(reply, model, input_tokens):
     if not message_id.startswith("msg_"):
         message_id = "msg_" + (message_id or secrets.token_hex(12))
     usage = _usage(reply, input_tokens)
+    usage_out = {"input_tokens": usage["input_tokens"],
+                 "output_tokens": usage["output_tokens"]}
+    if usage.get("cache_read_input_tokens"):
+        # OpenAI 的 cached_tokens 在 Anthropic 这边叫 cache_read_input_tokens，
+        # 照原样报出去，Claude Code 的用量面板才不会把缓存命中记成 0。
+        usage_out["cache_read_input_tokens"] = usage["cache_read_input_tokens"]
     return {
         "id": message_id,
         "type": "message",
@@ -522,8 +549,7 @@ def to_anthropic_response(reply, model, input_tokens):
         "content": content,
         "stop_reason": _stop_reason(reply, has_tool),
         "stop_sequence": None,
-        "usage": {"input_tokens": usage["input_tokens"],
-                  "output_tokens": usage["output_tokens"]},
+        "usage": usage_out,
     }
 
 
@@ -830,6 +856,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _error(self, status, message):
         self._json(status, _anthropic_error(status, message))
 
+    def _head(self, status):
+        self.send_response(status)
+        self.send_header("content-length", "0")
+        self.end_headers()
+
     def _authorized(self):
         presented = self.headers.get("x-api-key") or ""
         auth = self.headers.get("authorization") or ""
@@ -858,11 +889,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             return None
 
-    def _preset(self):
+    def _preset(self, match):
         """路径里的 agent/预设名 -> 上游配置。路由不认就 None。"""
-        match = ROUTE_RE.match(self._path())
-        if not match:
-            return None, None
         agent_id = urllib.parse.unquote(match.group(1))
         name = urllib.parse.unquote(match.group(2))
         from claude_tool import agents
@@ -875,20 +903,43 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 data = json.load(f)
         except (OSError, ValueError):
             return None, None
-        meta = data.get("claude_tool") if isinstance(data, dict) else None
-        if not isinstance(meta, dict) or meta.get("protocol") != PROTOCOL:
+        raw_meta = data.get("claude_tool") if isinstance(data, dict) else None
+        meta = raw_meta if isinstance(raw_meta, dict) else None
+        env = data.get("env") if isinstance(data, dict) else None
+        env = env if isinstance(env, dict) else None
+        # 1.5.0 之前存的老预设没有 claude_tool 段，按地址认出来之后用 env 里那份。
+        from claude_tool.presets import effective_upstream
+        upstream = effective_upstream(env, meta)
+        if upstream is None:
             return None, None
-        if not all(meta.get(key) for key in ("base_url", "api_key", "model")):
-            return None, None
-        return path, meta
+        return path, upstream
 
     # -- 路由 -------------------------------------------------------------
+
+    def do_HEAD(self):
+        """Claude Code 启动时会 HEAD base URL 探活。
+
+        HEAD 没有响应体，也就带不走任何数据，所以这一跳不验令牌，只回答
+        "这条路由在不在"：认得的回 200，其余 404。原来没实现时这里回
+        501，Claude Code 会把启动探查当成失败。
+        """
+        self.server.touch()
+        path = self._path()
+        if path == "/health":
+            self._head(200)
+            return
+        match = ROUTE_RE.match(path) or BASE_RE.match(path)
+        if not match or self._preset(match)[0] is None:
+            self._head(404)
+            return
+        self._head(200)
 
     def do_GET(self):
         self.server.touch()
         path = self._path()
         if path == "/health":
             self._json(200, {"ok": True, "app": APP_MARK,
+                             "version": __version__,
                              "pid": os.getpid()})
             return
         match = ROUTE_RE.match(path)
@@ -898,15 +949,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if not self._authorized():
             self._error(401, "网关令牌不对")
             return
-        preset, meta = self._preset()
+        preset, meta = self._preset(match)
         if preset is None:
             self._error(404, "这份预设不存在，或者不是 OpenAI 协议")
             return
         if match.group(3) == "/v1/models":
+            # 照 Anthropic 列表的原样给全：Claude Code 启动时会拿这个接口验
+            # 选中的模型在不在，只给 id 少数实现会判成"模型不存在"。
             model = str(meta.get("model"))
-            self._json(200, {"data": [{"id": model, "type": "model",
-                                       "display_name": model}],
-                             "has_more": False})
+            self._json(200, {
+                "data": [{"id": model, "type": "model",
+                          "display_name": model,
+                          "created_at": "2025-01-01T00:00:00Z"}],
+                "has_more": False,
+                "first_id": model,
+                "last_id": model,
+            })
             return
         self._error(404, "不认识的地址：{}".format(path))
 
@@ -920,7 +978,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if not self._authorized():
             self._error(401, "网关令牌不对")
             return
-        preset, meta = self._preset()
+        preset, meta = self._preset(match)
         if preset is None:
             self._error(404, "这份预设不存在，或者不是 OpenAI 协议")
             return

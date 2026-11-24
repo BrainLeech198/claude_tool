@@ -42,6 +42,7 @@ from claude_tool.permissions import (
 )
 from claude_tool.presets import (
     IMPORT_ALREADY,
+    OPENAI_HOSTS,
     IMPORT_NO_ENV,
     IMPORT_NO_FILE,
     bundle_names,
@@ -49,6 +50,7 @@ from claude_tool.presets import (
     export_payload,
     host_of,
     import_bundle,
+    infer_protocol,
     preset_path,
     probe_current_settings,
     read_env,
@@ -166,7 +168,7 @@ class LauncherDialogs:
                   "base_url": env.get("ANTHROPIC_BASE_URL", ""),
                   "token": env.get("ANTHROPIC_AUTH_TOKEN", ""),
                   "model": env.get("ANTHROPIC_MODEL", ""),
-                  "protocol": str(meta.get("protocol") or "anthropic")}
+                  "protocol": infer_protocol(env, meta)}
         protocol_var = tk.StringVar(
             value=LABEL_OF_PROTOCOL.get(values["protocol"],
                                         LABEL_OF_PROTOCOL["anthropic"]))
@@ -585,14 +587,11 @@ class LauncherDialogs:
                     "AI 那条路得拿一个已经配好的模型去打请求。先在「添加模型」里配"
                     "一个，或者改用「拉社区清单」。", parent=dialog)
                 return
-            running[0] = True
-            origin[0] = kind
-            ai_button.set_enabled(False)
-            web_button.set_enabled(False)
-            note.set("正在查…")
+            env = None
             if kind == "ai":
                 # 走 session_env：拿 OpenAI 协议的预设去查时也得经过本地网关，
-                # 否则会拿着上游地址去拼 /v1/messages，必 404。
+                # 否则会拿着上游地址去拼 /v1/messages，必 404。这步失败时下面的
+                # 按钮禁用还没发生，直接返回不会把界面卡在“正在查”。
                 try:
                     env = session_env(
                         preset_path(query_var.get(), self.model_agent),
@@ -600,6 +599,12 @@ class LauncherDialogs:
                 except Exception as e:
                     messagebox.showerror("网关起不来", str(e), parent=dialog)
                     return
+            running[0] = True
+            origin[0] = kind
+            ai_button.set_enabled(False)
+            web_button.set_enabled(False)
+            note.set("正在查…")
+            if kind == "ai":
                 worker = lambda: box.put(("done", query_with_ai(
                     env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_AUTH_TOKEN"),
                     env.get("ANTHROPIC_MODEL"), rows_now)))
@@ -657,6 +662,10 @@ class LauncherDialogs:
                                  "Base URL 要以 http:// 或 https:// 开头。",
                                  parent=dialog)
             return
+        if protocol == "anthropic" and host_of(base_url).casefold() in OPENAI_HOSTS:
+            # OpenAI 官方只给 Responses；用户手填了官方地址却留着 Anthropic，
+            # 存下去 Claude Code 就会去拼 /v1/v1/messages 然后报"模型不存在"。
+            protocol = "openai-responses"
         if re.search(ILLEGAL_FILE_CHARS, name):
             messagebox.showerror("名称非法",
                                  "名称不能包含 < > : \" / \\ | ? *。", parent=dialog)

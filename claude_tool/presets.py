@@ -162,9 +162,47 @@ def read_meta(path):
     return meta if isinstance(meta, dict) else {}
 
 
+# 只给 Responses 协议的官方端点。1.5.0 之前的启动器存不了协议字段，用户把
+# OpenAI 官方地址填进来时留下的就是这种"看着像 Anthropic、其实是 Responses"的
+# 老预设；认出来之后自动改走网关，不然 Claude Code 会去拼 /v1/v1/messages。
+OPENAI_HOSTS = ("api.openai.com",)
+
+
+def infer_protocol(env, meta):
+    """判断一份预设该走哪种协议。显式写了的听文件的，没写的从地址猜。"""
+    protocol = str((meta or {}).get("protocol") or "")
+    if protocol in ("anthropic", "openai-responses"):
+        return protocol
+    base = str((env or {}).get("ANTHROPIC_BASE_URL") or "")
+    if host_of(base).casefold() in OPENAI_HOSTS:
+        return "openai-responses"
+    return "anthropic"
+
+
+def effective_upstream(env, meta):
+    """网关要的上游配置（地址 / key / 模型名）。
+
+    显式的 claude_tool 段优先；没有就用 env 里那份（1.5.0 之前存的老预设）。
+    不是 Responses 协议、或者三样缺一样，返回 None。
+    """
+    if infer_protocol(env, meta) != "openai-responses":
+        return None
+    base_url = str((meta or {}).get("base_url")
+                   or (env or {}).get("ANTHROPIC_BASE_URL") or "").strip()
+    api_key = str((meta or {}).get("api_key")
+                  or (env or {}).get("ANTHROPIC_AUTH_TOKEN")
+                  or (env or {}).get("ANTHROPIC_API_KEY") or "").strip()
+    model = str((meta or {}).get("model")
+                or (env or {}).get("ANTHROPIC_MODEL") or "").strip()
+    if not (base_url and api_key and model):
+        return None
+    return {"protocol": "openai-responses", "base_url": base_url,
+            "api_key": api_key, "model": model}
+
+
 def protocol_of(path):
-    """这份预设走哪种协议。没写就是 Anthropic（老预设全都这样）。"""
-    return str(read_meta(path).get("protocol") or "anthropic")
+    """这份预设走哪种协议。没写协议的老预设按地址认，认不出才是 Anthropic。"""
+    return infer_protocol(read_env(path), read_meta(path))
 
 
 def agent_of(path):
@@ -188,16 +226,15 @@ def session_env(path, agent_id=None):
     """
     env = dict(read_env(path))
     meta = read_meta(path)
-    if meta.get("protocol") != "openai-responses":
+    if infer_protocol(env, meta) != "openai-responses":
         return env
 
-    base_url = str(meta.get("base_url") or "").strip()
-    api_key = str(meta.get("api_key") or "").strip()
-    model = str(meta.get("model") or env.get("ANTHROPIC_MODEL") or "").strip()
-    if not (base_url and api_key and model):
+    upstream = effective_upstream(env, meta)
+    if upstream is None:
         raise gateway.GatewayError(
             "「{}」这份预设的 OpenAI 配置不全（地址 / key / 模型名缺一样），"
             "到「添加模型」里补上再试。".format(os.path.basename(path)))
+    model = upstream["model"]
 
     resolved_agent = agent_id or agent_of(path)
     name = os.path.basename(path)
@@ -208,6 +245,10 @@ def session_env(path, agent_id=None):
     env["ANTHROPIC_BASE_URL"] = gateway.route_base(
         state["port"], resolved_agent, name)
     env["ANTHROPIC_AUTH_TOKEN"] = state["token"]
+    # Claude Code 如果同时看到 ANTHROPIC_API_KEY，可能优先拿它发 x-api-key；
+    # 上游 key 不能跟着请求进网关，统一收成网关令牌。
+    if env.get("ANTHROPIC_API_KEY"):
+        env["ANTHROPIC_API_KEY"] = state["token"]
     env["ANTHROPIC_MODEL"] = model
     for key in ("ANTHROPIC_SMALL_FAST_MODEL",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -227,8 +268,9 @@ def describe_preset(path):
     """卡片副标题：模型名 · 供应商域名，域名读不到就只显示模型名。"""
     env = read_env(path)
     meta = read_meta(path)
-    if meta.get("protocol") == "openai-responses":
-        host = str(meta.get("base_url") or "").split("//")[-1].split("/")[0]
+    if infer_protocol(env, meta) == "openai-responses":
+        host = str(meta.get("base_url")
+                   or env.get("ANTHROPIC_BASE_URL") or "").split("//")[-1].split("/")[0]
         model = str(meta.get("model") or read_model(path))
         return "{}  ·  {} · 经本地网关".format(model, host) if host else model
     host = env.get("ANTHROPIC_BASE_URL", "").split("//")[-1].split("/")[0]
