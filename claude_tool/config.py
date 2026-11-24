@@ -65,6 +65,12 @@ def default_config():
         "embed": False,
         "auto_version_check": False,
         "auto_self_check": True,
+        # 点窗口的 X 是收进系统托盘还是直接退出。默认收进托盘——关掉窗口不等于
+        # 结束会话，正在跑的那些（尤其是内嵌的）接着跑。非 Windows 上没托盘，
+        # 这个值存着也只是给同一份配置跨平台用。
+        "close_to_tray": True,
+        # 第一次收进托盘时弹过那条"还在后台跑"的提示没有。只弹一次。
+        "tray_hint_shown": False,
         # 0.4 起废弃的旧键（当年没有开关，每次启动都查）。老配置里可能还留着，
         # 读的时候不认它；新配置不再写。
         "auto_self_update": False,
@@ -134,6 +140,10 @@ def load_config():
     # 老配置没有这个键，按"开"算——0.4 到 1.0.1 一直是无条件查，升级过来
     # 不该突然变得不查了。
     config["auto_self_check"] = bool(data.get("auto_self_check", True))
+    # 老配置没有这两格：收进托盘按"开"算（这本来就是新版本的默认行为），
+    # 提示气泡按"没弹过"算——升级过来的人第一次关窗也该被告知一声。
+    config["close_to_tray"] = bool(data.get("close_to_tray", True))
+    config["tray_hint_shown"] = bool(data.get("tray_hint_shown", False))
     # 不认识的、老配置里没有的，一律回到默认那套。老配置里的 light / dark
     # 由 theme.canonical 翻成新名字，升级后不会退回默认色。
     config["theme"] = theme.canonical(data.get("theme")) or "paper"

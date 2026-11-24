@@ -75,6 +75,7 @@ from claude_tool.ui.session_center import SessionCenterMixin
 from claude_tool.ui.sessions import SessionsMixin
 from claude_tool.ui.settings import SettingsMixin
 from claude_tool.ui.terminal import TerminalMixin
+from claude_tool.ui.tray import TrayMixin
 from claude_tool.ui.update import UpdateMixin
 from claude_tool.ui.workspaces import WorkspacesMixin
 
@@ -117,7 +118,7 @@ def default_window_size(screen_w, screen_h):
 
 class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
                WorkspacesMixin, SessionsMixin, SessionCenterMixin, TerminalMixin,
-               PluginsMixin, LauncherDialogs, tk.Tk):
+               TrayMixin, PluginsMixin, LauncherDialogs, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(LAUNCHER_TITLE)
@@ -160,6 +161,14 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         self._settings_win = None
         self._settings_pages = {}
         self._settings_page = None
+        # 系统托盘。建不起来（非 Windows、explorer 没起）就是 None，关窗照旧
+        # 直接退。菜单每弹一次现算，_tray_actions 记那一轮里 cmd 对应的东西。
+        self._tray = None
+        self._tray_actions = {}
+        # 收进托盘时跟着一起藏起来的附属窗（设置 / 插件 / 会话中心），叫回来
+        # 时原样放出去。见 ui/tray.py 的 _tray_child_windows。
+        self._tray_hidden = []
+        self._tray_state = "normal"   # 收起来之前是普通还是最大化
         self.model_rows = {}              # 名称 -> 卡片，测试结果要回填到上面
         self._testing = False
         self._results = queue.Queue()
@@ -262,6 +271,10 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 关掉之后手动入口还在（设置「关于」页 / 顶栏）。
         self.auto_self_check_var = tk.BooleanVar(
             value=bool(self.config_data.get("auto_self_check", True)))
+        # 点 X 是收进托盘还是直接退。非 Windows 上没托盘，这个值不生效（见
+        # ui/tray.py），但配置跟着用户走，还是照记。
+        self.close_to_tray_var = tk.BooleanVar(
+            value=bool(self.config_data.get("close_to_tray", True)))
         # 设置窗「关于」页那行字：手动查启动器新版的结果。反馈栏只有主窗底下
         # 那一条，而设置窗是独立的 Toplevel、常常正盖在主窗上面——结果得在眼皮
         # 底下能看见，所以单独存一份给它（update._say_self_check 往这儿写）。
@@ -306,6 +319,8 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 那个绑定管不着（量过）。
         self.bind("<Configure>", self._on_window_move)
         self._restore_geometry()
+        # 托盘放在最后建：图标、提示、菜单都要用到上面这些状态。
+        self._setup_tray()
 
     def _setup_styles(self):
         """ttk 那几样原生控件的皮。
@@ -501,13 +516,29 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         return self._task_running or self._move_running
 
     def _on_close(self):
-        if self._busy() and not messagebox.askyesno(
-                "还有活没干完",
-                "启动器手上的活还没弄完（换模型那条流水线，或者正在搬工作区）。\n\n"
-                "现在关掉的话，可能正好卡在中间那一步：某个会话停在「旧的已经关"
-                "了、新的还没开」，那一轮上下文就断了；搬工作区停在复制了一半，"
-                "新位置留下半份、旧的还在。\n\n真要现在关吗？"):
+        """点窗口的 X：默认收进托盘，设置里关掉了才真退。
+
+        收进托盘不动任何会话——内嵌的那个跟着窗口一起藏起来，claude 还在跑。
+        托盘没建起来（explorer 没起、非 Windows）时也走真退，不能把窗口藏得
+        找不回来。
+        """
+        if self.close_to_tray_var.get() and self.hide_to_tray():
             return
+        self.close_for_real()
+
+    def close_for_real(self):
+        """真退：有活先问一句，内嵌的先道别，然后销毁窗口。"""
+        if self._busy():
+            # 从托盘菜单点「退出」时窗口可能是藏着的，问话框得有个可见的窗接着。
+            if str(self.state()) == "withdrawn":
+                self.show_from_tray()
+            if not messagebox.askyesno(
+                    "还有活没干完",
+                    "启动器手上的活还没弄完（换模型那条流水线，或者正在搬工作区）。\n\n"
+                    "现在关掉的话，可能正好卡在中间那一步：某个会话停在「旧的已经关"
+                    "了、新的还没开」，那一轮上下文就断了；搬工作区停在复制了一半，"
+                    "新位置留下半份、旧的还在。\n\n真要现在关吗？"):
+                return
         if self.embedded is not None:
             # 内嵌的那个认了本窗口当 owner，窗口一销毁它跟着一起没。所以不能只是
             # "放它走"（那等于连窗口带会话一起抽掉），也不能说完就立刻销毁（等于
@@ -522,7 +553,14 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             return
         self._shutdown()
 
-    def _shutdown(self):
+    def _save_geometry(self):
+        """把窗口矩形记进配置。失败就算了，不值得为存位置弹个框。
+
+        withdraw 之后不存：那时候量出来的是外框，而且 hide_to_tray 在收起之
+        前已经存过一份。按外框存会让下次开窗大一圈，开关几轮小屏就顶满了。
+        """
+        if str(self.state()) == "withdrawn":
+            return
         try:
             # window_rect 对最小化窗口给的是"还原后会摆在哪"，不会存下 -32000。
             # 存之前也夹一遍：下次开窗读到的就一定是屏幕内的矩形，万一这份配置被
@@ -549,6 +587,17 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             save_config(self.config_data)
         except Exception:
             pass
+
+    def _shutdown(self):
+        self._save_geometry()
+        # 托盘图标得自己摘：进程没了之后 Windows 虽然会清掉，但鼠标扫过之前那
+        # 个空位还留着，看着像没死干净。
+        if self._tray is not None:
+            try:
+                self._tray.destroy()
+            except Exception:
+                pass
+            self._tray = None
         self.destroy()
 
     # ── 布局 ──

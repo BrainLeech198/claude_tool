@@ -28,6 +28,9 @@ def _hand_off_to_running():
 
     第一次启动可能还在建窗（标题都还没挂上），按标题找不着就等一等，最多两秒；
     还找不到就认了——总比自己再开一扇强。
+
+    窗口收进托盘的时候是 withdraw 的，IsWindowVisible 为假，按标题永远找不着。
+    那种情况走托盘宿主窗口那条线：给它递一条"出来吧"，让已有实例自己 deiconify。
     """
     from claude_tool import host
     from claude_tool.startup import LAUNCHER_TITLE
@@ -40,6 +43,8 @@ def _hand_off_to_running():
                 host.focus_window_at(target, *at)
             else:
                 host.focus_window(target)
+            return
+        if host.wake_hidden_launcher():
             return
         time.sleep(0.1)
 

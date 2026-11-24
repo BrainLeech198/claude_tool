@@ -17,6 +17,9 @@ import sys
 
 EMBED_SUPPORTED = sys.platform == "win32"
 WINDOW_CONTROL = sys.platform == "win32"
+# 系统托盘只在 Windows 上有（实现见 claude_tool/tray.py）。别的平台上关窗照旧
+# 直接退出，设置里那个勾也不摆出来。
+TRAY_SUPPORTED = sys.platform == "win32"
 
 if EMBED_SUPPORTED:
     from claude_tool import winhost as _host
@@ -49,3 +52,15 @@ window_alive = _host.window_alive
 window_position = _host.window_position
 window_rect = _host.window_rect
 work_area = _host.work_area
+
+
+def wake_hidden_launcher():
+    """把藏进托盘的启动器叫回来。第二次双击 exe 时走这条路。
+
+    主窗 withdraw 之后按标题找不到（find_window 只认可见窗口），所以由托盘那
+    边的隐藏宿主窗口接消息。没有托盘、或者它还没建起来，返回 False。
+    """
+    if not TRAY_SUPPORTED:
+        return False
+    from claude_tool import tray
+    return tray.wake_launcher()

@@ -54,6 +54,15 @@ ICON_FILE = (
                       "build", "icon.png")
 )
 
+# 系统托盘图标。托盘那边 Shell_NotifyIcon 只吃 HICON，LoadImage 也只认 .ico，
+# 不认上面那张 png，所以两样都得带。spec 的 datas 里两条一起摊到 _MEIPASS 根下。
+TRAY_ICON_FILE = (
+    os.path.join(sys._MEIPASS, "icon.ico")
+    if getattr(sys, "frozen", False)
+    else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "build", "icon.ico")
+)
+
 PRESET_SUFFIX = ".json"
 ILLEGAL_CHARS = r'[<>:"/\\|?*\s]'
 

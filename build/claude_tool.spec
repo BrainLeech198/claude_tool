@@ -49,6 +49,9 @@ a = Analysis(
     datas=[
         # 窗口图标（见上面那段）＋ 内置插件（见 _BUILTIN_PLUGINS 那段）。
         (os.path.join(SPECPATH, "icon.png"), "."),
+        # 托盘图标：Shell_NotifyIcon 只吃 HICON，LoadImage 也只认 .ico，
+        # 窗口那张 png 喂不进去（见 claude_tool/tray.py、paths.TRAY_ICON_FILE）。
+        (os.path.join(SPECPATH, "icon.ico"), "."),
         *_BUILTIN_PLUGINS,
     ],
     # ui 那两个模块是在 main() 里面才 import 的（为了让 --hook 那条路
@@ -57,6 +60,10 @@ a = Analysis(
     hiddenimports=[
         "claude_tool.ui.launcher",
         "claude_tool.ui.dialogs",
+        # 托盘：host 里那句 import 在函数里面（非 Windows 不该拉它），
+        # 静态分析照着收了也再写死一份，省得打包出来才发现托盘没了。
+        "claude_tool.tray",
+        "claude_tool.ui.tray",
     ],
     hookspath=[],
     hooksconfig={},

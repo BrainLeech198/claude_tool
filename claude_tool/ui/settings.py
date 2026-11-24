@@ -19,7 +19,8 @@ from claude_tool import __version__
 from claude_tool import agents, theme
 from claude_tool import versions
 from claude_tool.agent import agent_path
-from claude_tool.host import EMBED_SUPPORTED, open_url
+from claude_tool.config import save_config
+from claude_tool.host import EMBED_SUPPORTED, TRAY_SUPPORTED, open_url
 from claude_tool.theme import MUTED, OK, PAGE_BG, PANEL_BG, TEXT, WARN, font
 from claude_tool.widgets import PaletteCard, PillButton, Tip, fit_window
 
@@ -334,6 +335,11 @@ class SettingsMixin:
             (self.auto_self_check_var, "自动查启动器新版（联网）",
              self._on_self_check_toggle, base + 2, 0),
         ]
+        if TRAY_SUPPORTED:
+            # 托盘只在 Windows 上有。摆在这一排最后：它是"关窗之后"的行为，
+            # 跟前面几个"开会话时怎么着"不是一类，但都算偏好，归这一页。
+            rows.append((self.close_to_tray_var, "关闭窗口时收进系统托盘",
+                         self._on_close_to_tray_toggle, base + 3, 0))
         for var, text, command, row, col in rows:
             tk.Checkbutton(switches, text=text, variable=var, command=command,
                            bg=PAGE_BG, fg=TEXT, font=font(10),
@@ -352,11 +358,22 @@ class SettingsMixin:
         tk.Label(parent, text=note, bg=PAGE_BG, fg=MUTED, font=font(9),
                  anchor="w", justify="left",
                  wraplength=SETTINGS_W - 200).pack(fill="x", pady=(10, 0))
-        tk.Label(parent,
-                 text="这几个勾记的是偏好，不会动已经在跑的那些会话。",
+        tail = "这几个勾记的是偏好，不会动已经在跑的那些会话。"
+        if TRAY_SUPPORTED:
+            tail += "收进托盘只是把窗口藏起来，会话照跑；真要退出走托盘右键菜单。"
+        tk.Label(parent, text=tail,
                  bg=PAGE_BG, fg=MUTED, font=font(9), anchor="w",
                  justify="left", wraplength=SETTINGS_W - 200,
                  ).pack(fill="x", pady=(6, 0))
+
+    def _on_close_to_tray_toggle(self):
+        self.config_data["close_to_tray"] = self.close_to_tray_var.get()
+        save_config(self.config_data)
+        if self.close_to_tray_var.get():
+            self.feedback_var.set(
+                "开着了：点窗口的 X 会收进托盘，会话照跑；退出走托盘右键菜单。")
+        else:
+            self.feedback_var.set("关掉了：点窗口的 X 会直接退出启动器。")
 
     # ── 关于 ──
 
