@@ -31,6 +31,18 @@ window.MIRROR_BASE = "https://github.com/BrainLeech198/claude_tool/releases/down
 // 也拿官网上这个数当兜底（npm 问不到的时候用）——改它没用，那是打包时写死的。
 window.RELEASES = [
   {
+    "version": "1.5.2",
+    "date": "2026-11-25",
+    "notes": "Windows 更新会先在后台准备，等启动器退出再运行安装器。工作区搬迁会保护共享的会话记录，路径无效时保留输入。切换模型后续接指定会话，预设更换后不再显示旧测试结果。插件设置已接入启动器设置，同时修复了内嵌终端追踪、托盘恢复和安全启动重置窗口的问题。",
+    "claude": "",
+    "windows": {
+      "file": "ClaudeLauncher-1.5.2-Setup.exe",
+      "size": 10706372
+    },
+    "linux": null,
+    "macos": null
+  },
+  {
     "version": "1.5.1",
     "date": "2026-11-24",
     "notes": "这一版收了几处「明明能用却报模型不存在」的毛病：老启动器存下的 OpenAI 官方预设（只有地址、没有协议标记）会按地址认出是 OpenAI Responses，自动改走本地网关；网关的 /v1/models 按 Anthropic 的样子补全了 first_id / last_id / created_at，Claude Code 启动验模型时不再误判；在「加模型」里把地址填成 api.openai.com 也会自动切到 OpenAI Responses，不用再手挑协议。另外网关补上了 HEAD 探活（Claude Code 启动会先 HEAD 一下，之前回 501）；网关状态里也记了版本号——升级启动器后旧网关进程会被停掉重起，不会继续用上一版的翻译逻辑；回话里的用量还会带上缓存命中数。顺手修了「添加模型」里选 AI 查询时，网关起不来会把两个查询按钮卡在禁用状态的问题。原有 Anthropic 预设不受影响。",
