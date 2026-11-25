@@ -1,8 +1,7 @@
 """搬工作区：复制 → 对账 → 旧的丢回收站。
 
-要搬的是两样东西：工作区那个文件夹本身，和 `~/.claude/projects` 下面存它会话
-记录的那个目录。后者不跟着搬的话，新位置在启动器眼里就是个没聊过的新工作区，
-「接着上次聊」接不上。
+要搬的是工作区文件夹，以及各 CLI 存放这个工作区会话记录的目录。记录不跟着搬，
+新位置的「接着上次聊」就接不上。
 
 **先复制、后删旧的，中间还要对一次账。** 顺序是故意的：任何一步失败就停在那
 儿——新复制的那份留着、旧的一个不动，最坏是"多了一份拷贝，你自己删一下"，不会
@@ -18,7 +17,7 @@ check → copy → 存配置 → discard（所以 discard 排最后）。
 import os
 import shutil
 
-from claude_tool.config import project_dir
+from claude_tool import agents, history
 from claude_tool.host import trash_path
 
 
@@ -28,15 +27,19 @@ class MoveError(Exception):
 
 def _inside(path, root):
     """path 是不是在 root 里面（含相等）。大小写和正反斜杠的差异不算差异。"""
-    path = os.path.normcase(os.path.abspath(path))
-    root = os.path.normcase(os.path.abspath(root))
-    return path == root or path.startswith(root + os.sep)
+    path = os.path.normcase(os.path.realpath(path))
+    root = os.path.normcase(os.path.realpath(root))
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _raise_walk_error(error):
+    raise error
 
 
 def _tree_size(root):
     """整棵树里所有普通文件加起来多大。软链接不算（它自己没占地方）。"""
     total = 0
-    for base, _dirs, files in os.walk(root):
+    for base, _dirs, files in os.walk(root, onerror=_raise_walk_error):
         for name in files:
             full = os.path.join(base, name)
             if not os.path.islink(full):
@@ -44,7 +47,7 @@ def _tree_size(root):
     return total
 
 
-def check(source, target, project_from, project_to):
+def check(source, target, project_from=None, project_to=None):
     """搬之前该拒的都在这儿拒掉，拒不了就把话说明白。返回归一化过的新路径。
 
     只查文件系统和配置这一层的事。"有没有会话正开着""它的 hook 是不是正在写
@@ -59,7 +62,7 @@ def check(source, target, project_from, project_to):
     target = os.path.abspath(target)
     if os.path.normcase(os.path.abspath(source)) == os.path.normcase(target):
         raise MoveError("新位置跟现在一模一样，没什么可搬的。")
-    if os.path.exists(target):
+    if os.path.lexists(target):
         raise MoveError("新位置已经存在了：{}（不能盖掉已有的东西）".format(target))
     parent = os.path.dirname(target) or "."
     if not os.path.isdir(parent):
@@ -103,7 +106,7 @@ def _manifest(root):
     一颗、ext4 纳秒），拿它当判据会误报一片。
     """
     out = {}
-    for base, dirs, files in os.walk(root):
+    for base, dirs, files in os.walk(root, onerror=_raise_walk_error):
         for name in dirs + files:
             full = os.path.join(base, name)
             rel = os.path.relpath(full, root)
@@ -152,7 +155,7 @@ def copy_tree(source, target, progress=None):
     os.makedirs(target)
     dirs_done = []
     count = 0
-    for base, dirs, files in os.walk(source):
+    for base, dirs, files in os.walk(source, onerror=_raise_walk_error):
         rel = os.path.relpath(base, source)
         here = target if rel == "." else os.path.join(target, rel)
         for name in dirs:
@@ -194,14 +197,20 @@ def copy_project(source, target, progress=None):
     return True
 
 
-def discard(source, project_from):
-    """把旧的那两份丢进回收站。返回没丢成的那几个路径。
+def copy_project_for_move(source, target, workspace_from, workspace_to, progress=None):
+    count = copy_tree(source, target, progress)
+    history.rewrite_project_cwds(target, workspace_from, workspace_to)
+    return count
+
+
+def discard(source, *projects):
+    """把旧的工作区及成功复制的会话目录丢进回收站。返回没丢成的路径。
 
     到这一步新的那份已经复制好、对过账、配置也改了，所以这里失败【不回滚】——
     丢不成的如实报出来让用户自己处理，绝不改成硬删。
     """
     stuck = []
-    for path in (source, project_from):
+    for path in (source, *projects):
         if not path or not os.path.exists(path):
             continue
         if not trash_path(path):
@@ -210,5 +219,37 @@ def discard(source, project_from):
 
 
 def project_paths(source, target):
-    """新旧位置各自对应哪份会话记录目录。"""
-    return project_dir(source), project_dir(target)
+    """为每档 CLI 找实际存在的旧记录，先拒绝不能安全区分的情况。"""
+    plans = []
+    for agent_id in agents.ids():
+        old = history.project_dirs(agent_id, source, strict=True)
+        if len(old) > 1:
+            raise MoveError("旧位置有多份 {} 会话记录，不自动合并。"
+                            .format(agents.get(agent_id).label))
+        project_from = old[0] if old else None
+        project_to = history.project_path(agent_id, target)
+        existing = history.project_dirs(agent_id, target, strict=True)
+        if existing or os.path.lexists(project_to):
+            conflict = existing[0] if existing else project_to
+            if project_from and _same_dir(conflict, project_from):
+                raise MoveError("新旧位置对应同一个会话目录，请换一个新位置。")
+            raise MoveError("新位置已经有一份会话记录（{}），不自动合并。"
+                            .format(conflict))
+        if not project_from:
+            continue
+        if os.path.islink(project_from) or not os.path.isdir(project_from):
+            raise MoveError("会话记录不是普通目录：{}".format(project_from))
+        if any(_inside(project, workspace) or _inside(workspace, project)
+               for project in (project_from, project_to) for workspace in (source, target)):
+            raise MoveError("工作区和会话记录目录互相包含，不能安全搬迁。")
+        plans.append((project_from, project_to))
+    return plans
+
+
+def shares_project(workspace, plans):
+    if not plans:
+        return False
+    sources = {os.path.normcase(os.path.realpath(source)) for source, _ in plans}
+    return any(os.path.normcase(os.path.realpath(path)) in sources
+               for agent_id in agents.ids()
+               for path in history.project_dirs(agent_id, workspace, strict=True))

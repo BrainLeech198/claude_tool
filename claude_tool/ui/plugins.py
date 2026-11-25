@@ -88,10 +88,12 @@ class PluginsMixin:
         """
         from claude_tool.plugins.host import Host
         self.plugin_registry.discover()
+        if self.plugin_host is not None:
+            self.plugin_host.set_mount_hook(None)
         host = Host(self)
-        host.set_mount_hook(self._render_plugin_mounts)
         self.plugin_host = host
         ok, failed = self.plugin_registry.load_enabled(host)
+        host.set_mount_hook(self._render_plugin_mounts)
         self._render_plugin_mounts()
         if failed:
             names = "、".join(p.id for p in failed)
@@ -113,7 +115,7 @@ class PluginsMixin:
     # ── 画挂载点 ────────────────────────────────────────────────
 
     def _render_plugin_mounts(self):
-        """重建两处界面挂载点。挂载点变了（插件注册了动作）由 host 回调过来。
+        """刷新界面挂载点。挂载点变了由 host 回调过来。
 
         早于 `_build_ui` 被调到就直接返回——那会儿 `toolbar_actions` 还没建。
         """
@@ -121,6 +123,7 @@ class PluginsMixin:
             return
         self._render_plugin_toolbar()
         self._render_plugin_detail()
+        self._settings_sync_plugin_pages()
 
     def _render_plugin_toolbar(self):
         row = getattr(self, "toolbar_actions", None)

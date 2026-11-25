@@ -22,7 +22,7 @@ from claude_tool.agent import agent_path
 from claude_tool.config import save_config
 from claude_tool.host import EMBED_SUPPORTED, TRAY_SUPPORTED, open_url
 from claude_tool.theme import MUTED, OK, PAGE_BG, PANEL_BG, TEXT, WARN, font
-from claude_tool.widgets import PaletteCard, PillButton, Tip, fit_window
+from claude_tool.widgets import PaletteCard, PillButton, ScrollArea, Tip, fit_window
 
 
 # 分页顺序就是这儿定的，_settings_rail 照着画。
@@ -54,6 +54,7 @@ class SettingsMixin:
         else:
             self._settings_win.deiconify()
             self._settings_win.lift()
+        self._settings_sync_plugin_pages()
         self._settings_show_page(page or self._settings_page or PAGES[0])
 
     def _build_settings_window(self):
@@ -78,13 +79,17 @@ class SettingsMixin:
 
         box = tk.Frame(win, bg=PAGE_BG)
         box.pack(fill="both", expand=True)
-        self._settings_rail = tk.Frame(box, bg=PAGE_BG)
-        self._settings_rail.pack(side="left", fill="y", padx=(16, 0), pady=(16, 0))
+        rail = self._settings_rail_area = ScrollArea(box, max_height=SETTINGS_H, auto_size=True)
+        rail.pack(side="left", fill="y", padx=(16, 0), pady=(16, 0))
+        self._settings_rail = rail.inner
+        win.bind("<MouseWheel>", lambda e: rail.scroll(-int(e.delta / 120))
+                 if rail.contains(e.widget) else None)
         self._settings_body = tk.Frame(box, bg=PAGE_BG)
         self._settings_body.pack(side="left", fill="both", expand=True,
                                  padx=(16, 16), pady=(16, 0))
 
         self._settings_pages = {}
+        self._settings_plugin_pages = {}
         self._settings_page = None
         # 来过的页面，最后一项是"上一页"。这是「← 返回」和 Esc 的来路。
         self._settings_history = []
@@ -113,6 +118,38 @@ class SettingsMixin:
             return
         self._settings_show_page(self._settings_history.pop(), back=True)
 
+    def _settings_sync_plugin_pages(self):
+        win = self._settings_win
+        if win is None or not win.winfo_exists():
+            return
+        host = getattr(self, "plugin_host", None)
+        entries = host.settings_pages() if host is not None else ()
+        # 标题只是显示文字：重名的注册各有自己的页面、缓存和返回记录。
+        pages = {id(entry): entry for entry in entries}
+        old = self._settings_plugin_pages
+        if list(pages) == list(old):
+            return
+        self._settings_plugin_pages = pages
+        for key in old.keys() - pages.keys():
+            frame = self._settings_pages.pop(key, None)
+            if frame is not None:
+                frame.destroy()
+
+        history = []
+        for key in self._settings_history:
+            if (key in PAGES or key in pages) and (not history or history[-1] != key):
+                history.append(key)
+        current = self._settings_page
+        if history and history[-1] == current:
+            history.pop()
+        self._settings_history = history
+        if current is not None and current not in PAGES and current not in pages:
+            self._settings_page = history.pop() if history else PAGES[0]
+            self._settings_show_page(self._settings_page, back=True)
+            return
+        self._settings_render_rail()
+        self._settings_render_foot()
+
     def _settings_show_page(self, name, back=False):
         """切到某一页，没建过就现建。
 
@@ -121,7 +158,7 @@ class SettingsMixin:
         back=True 是「返回」走的路，不再往历史里压一条，否则返回一次反而把
         刚离开的那页又记成来路，来回点就出不去了。
         """
-        if name not in PAGES:
+        if name not in PAGES and name not in self._settings_plugin_pages:
             return
         if not back and self._settings_page is not None and self._settings_page != name:
             self._settings_history.append(self._settings_page)
@@ -136,10 +173,37 @@ class SettingsMixin:
         if frame is None:
             frame = tk.Frame(self._settings_body, bg=PAGE_BG)
             self._settings_pages[name] = frame
-            getattr(self, BUILDERS[name])(frame)
+            if name in BUILDERS:
+                getattr(self, BUILDERS[name])(frame)
+            else:
+                frame = self._settings_build_plugin_page(name, frame)
+        if frame is None or self._settings_page != name:
+            return
         frame.pack(fill="both", expand=True)
         self._settings_render_rail()
         self._settings_render_foot()
+
+    def _settings_build_plugin_page(self, key, frame):
+        title, build = self._settings_plugin_pages[key]
+        try:
+            build(frame)
+        except Exception as exc:                  # noqa: BLE001
+            reason = "（{}）".format(type(exc).__name__)
+        else:
+            if frame.winfo_exists():
+                return frame
+            reason = ""
+        if key not in self._settings_plugin_pages or not self._settings_body.winfo_exists():
+            return None
+        # 不保留画到一半的控件，也不让插件异常打断设置窗的导航。
+        if frame.winfo_exists():
+            frame.destroy()
+        frame = tk.Frame(self._settings_body, bg=PAGE_BG)
+        self._settings_pages[key] = frame
+        tk.Label(frame, text="无法打开插件设置「{}」{}。".format(title, reason),
+                 bg=PAGE_BG, fg=WARN, font=font(9), anchor="w", justify="left",
+                 wraplength=SETTINGS_MIN_W - 200).pack(anchor="w")
+        return frame
 
     def _settings_render_foot(self):
         back = getattr(self, "_settings_back", None)
@@ -150,11 +214,22 @@ class SettingsMixin:
         """左边那条分页栏。当前那页用强调色，一眼看出人在哪儿。"""
         for child in self._settings_rail.winfo_children():
             child.destroy()
-        for name in PAGES:
-            PillButton(self._settings_rail, name,
-                       lambda n=name: self._settings_show_page(n),
-                       primary=(name == self._settings_page), bg=PAGE_BG,
-                       ).pack(fill="x", pady=(0, 6))
+        pages = [(name, name) for name in PAGES]
+        labels = set(PAGES)
+        for key, (title, _build) in self._settings_plugin_pages.items():
+            label, index = title or "插件设置", 2
+            while label in labels:
+                label = "{} ({})".format(title or "插件设置", index)
+                index += 1
+            labels.add(label)
+            pages.append((key, label))
+        rail = self._settings_rail_area
+        for key, label in pages:
+            button = PillButton(self._settings_rail, label,
+                                lambda n=key: self._settings_show_page(n),
+                                primary=(key == self._settings_page), bg=PAGE_BG)
+            button.pack(fill="x", pady=(0, 6))
+            button.bind("<FocusIn>", lambda e: rail.see(e.widget), add="+")
 
     # ── 模型 ──
 

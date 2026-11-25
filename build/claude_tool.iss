@@ -11,6 +11,9 @@
 
 #define AppName "Claude 启动器"
 #define AppExe "claude_tool.exe"
+#ifndef AppPayload
+  #define AppPayload "..\dist\claude_tool"
+#endif
 ; 版本号不写在这儿——真源是 claude_tool/__init__.py 里的 __version__（启动器自己
 ; 要拿它跟网上比，比过一次才知道有没有新版）。这一行是 build/write_version.py
 ; 按那个号生成出来的，由 build/打包.bat 在 ISCC 之前跑。单跑 ISCC 会找不到这个
@@ -45,6 +48,9 @@ PrivilegesRequiredOverridesAllowed=commandline dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 AllowNoIcons=yes
+; 旧版把普通关闭当成收进托盘，不交给 Restart Manager 自动关或重启。
+CloseApplications=no
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -53,7 +59,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\dist\claude_tool\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#AppPayload}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
@@ -77,6 +83,36 @@ Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\shell\safe\command";
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function OpenInstalledExe(FileName: String; Access, Share: LongWord;
+  Attributes: THandle; Disposition, Flags: LongWord; Template: THandle): THandle;
+  external 'CreateFileW@kernel32.dll stdcall';
+function CloseInstalledExe(Handle: THandle): Boolean;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ExePath: String;
+  Handle: THandle;
+begin
+  Result := '';
+  if CheckForMutexes('claude_tool_launcher') then
+  begin
+    Result := '请在系统托盘右键点击「退出」，确认 Claude 启动器已退出后重试。'
+      + #13#10 + '点窗口右上角的 X 可能只会收进托盘。';
+    Exit;
+  end;
+  ExePath := ExpandConstant('{app}\{#AppExe}');
+  if not FileExists(ExePath) then
+    Exit;
+  // 请求写访问但不写入。独立网关等不持有界面互斥体，运行时仍会锁住这个 EXE。
+  Handle := OpenInstalledExe(ExePath, $40000000, 0, 0, 3, 0, 0);
+  if Handle = THandle(-1) then
+    Result := '无法覆盖现有启动器：' + ExePath + #13#10
+      + '请退出启动器，结束仍在使用本地网关的会话，并确认该目录可写后重试。'
+  else
+    CloseInstalledExe(Handle);
+end;
+
 // 注意：[Code] 段里 ';' 不是注释（那是 [Setup]/[Icons] 那些段的注释符），
 // Pascal 只认 '//' 和 '{ }'。写成 ';' 会报 "'BEGIN' expected"。
 //

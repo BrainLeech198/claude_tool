@@ -20,11 +20,11 @@ if __package__ in (None, "") and not getattr(sys, "frozen", False):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from claude_tool.handoff import HOOK_FLAG, hook_options, run_hook
-from claude_tool.startup import RESET_WINDOW_ENV, RESET_WINDOW_FLAG
+from claude_tool.startup import RESET_WINDOW_ENV, RESET_WINDOW_FLAG, reset_window_requested
 
 
-def _hand_off_to_running():
-    """把已经在跑的那扇窗口叫到眼前：挪到鼠标所在的那块屏、再提到前台。
+def _hand_off_to_running(reset_window=False):
+    """把已经在跑的那扇窗口叫到眼前：通常挪到鼠标所在的屏，安全启动则重置窗口。
 
     第一次启动可能还在建窗（标题都还没挂上），按标题找不着就等一等，最多两秒；
     还找不到就认了——总比自己再开一扇强。
@@ -34,6 +34,14 @@ def _hand_off_to_running():
     """
     from claude_tool import host
     from claude_tool.startup import LAUNCHER_TITLE
+
+    if reset_window and host.TRAY_SUPPORTED:
+        # 主窗可能已经可见，但标题找窗只能挪位置，重置必须由正在运行的实例完成。
+        for _ in range(20):
+            if host.wake_hidden_launcher(reset_window=True):
+                return
+            time.sleep(0.1)
+        return
 
     at = host.cursor_position()
     for _ in range(20):
@@ -63,7 +71,7 @@ def main():
     # 那两条不进这里——它们本来就不开窗，不该被这个挡掉。
     from claude_tool import host
     if not host.claim_singleton():
-        _hand_off_to_running()
+        _hand_off_to_running(reset_window=reset_window_requested())
         return 0
     from claude_tool.ui.launcher import Launcher
     Launcher().mainloop()

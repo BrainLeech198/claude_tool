@@ -22,6 +22,7 @@ from claude_tool.presets import (
     cached_test_result,
     describe_preset,
     discover_presets,
+    preset_test_identity,
     read_model,
     record_test_result,
     test_preset,
@@ -101,6 +102,7 @@ class ModelsMixin:
                                ("编辑", lambda n=name, p=path: self._open_model_dialog((n, p)))])
             row.pack(fill="x", pady=3)
             self.model_rows[name] = row
+            row.preset_key = (self.model_agent, name, path_key(path))
             # 上次测的结果留着：卡片右侧直接标"可用 0.3s · 3 分钟前"，重开设置窗
             # 不用再挨个重测。失败的会一直标红，直到下次测通为止。
             cached = _cached_warn(path)
@@ -135,40 +137,59 @@ class ModelsMixin:
         # 测的是这一页正在管的那个 agent 的预设。漏了 agent 参数会去扫 claude 那摊，
         # 而 model_rows 里摆的是当前档的——两下对不上，codebuddy 时一个 job 都凑不齐，
         # 点「测试」永远只回一句"没有可测的模型预设"。
-        presets = discover_presets(self.model_agent)
-        jobs = [(name, presets[name]) for name in self.model_rows if name in presets]
+        agent = self.model_agent
+        presets = discover_presets(agent)
+        jobs = []
+        for name, row in self.model_rows.items():
+            path = presets.get(name)
+            if path and row.preset_key == (agent, name, path_key(path)):
+                identity = preset_test_identity(path)
+                if identity is not None:
+                    jobs.append((name, path, identity))
         if not jobs:
             self.feedback_var.set("没有可测的模型预设。")
             return
 
         self._testing = True
-        self._results = queue.Queue()
-        for row in self.model_rows.values():
-            row.set_warn("测试中…", MUTED)
+        results = self._results = queue.Queue()
+        for name, path, identity in jobs:
+            self.model_rows[name].set_warn("测试中…", MUTED)
         self.feedback_var.set("正在测 {} 个模型…".format(len(jobs)))
 
-        def worker(name, path):
-            self._results.put((name, path, test_preset(path)))
+        def worker(name, path, identity):
+            result = test_preset(path) if preset_test_identity(path) == identity else None
+            results.put((agent, name, path, identity, result))
 
-        for name, path in jobs:
-            threading.Thread(target=worker, args=(name, path), daemon=True).start()
+        for job in jobs:
+            threading.Thread(target=worker, args=job, daemon=True).start()
         self.after(100, lambda: self._drain_results(len(jobs)))
 
     def _drain_results(self, remaining):
         """在主线程里收后台线程塞进队列的结果——Tk 控件只能主线程碰。"""
         try:
             while True:
-                name, path, (ok, note) = self._results.get_nowait()
+                agent, name, path, identity, result = self._results.get_nowait()
                 remaining -= 1
-                # 留痕也在这个线程做：多个预设是并发测的，读改写那份表搁线程里会打架。
-                try:
-                    record_test_result(path, ok, note)
-                except Exception:
-                    pass
-                row = self.model_rows.get(name)
+                current = discover_presets(agent).get(name)
+                key = (agent, name, path_key(path))
+                row = self.model_rows.get(name) if agent == self.model_agent else None
+                if row is not None and row.preset_key != key:
+                    row = None
+                valid = (result is not None and current and path_key(current) == key[2]
+                         and preset_test_identity(current) == identity)
+                if valid:
+                    ok, note = result
+                    # 留痕也在主线程做，避免并发读改写同一份表。
+                    try:
+                        valid = record_test_result(current, ok, note, identity=identity)
+                    except OSError:
+                        pass
                 if row is not None:
                     try:
-                        row.set_warn("{} · 刚刚".format(note), OK if ok else WARN)
+                        if valid:
+                            row.set_warn("{} · 刚刚".format(note), OK if ok else WARN)
+                        elif row.warn == "测试中…":
+                            row.set_warn("预设已变更，请重测", MUTED)
                     except tk.TclError:
                         pass
         except queue.Empty:
@@ -186,6 +207,8 @@ class ModelsMixin:
         换模型会覆盖这个 agent 的 settings.json、还要把开着的会话逐个问一遍
         「要不要重开」，误点一下代价不小。已经生效的那个点上去只回一句，不弹框。
         """
+        if self._closing:
+            return
         if name == self.active_name:
             self.feedback_var.set("现在用的就是「{}」。".format(name))
             return
@@ -199,6 +222,8 @@ class ModelsMixin:
         self.switch_model(name, path)
 
     def switch_model(self, name, path):
+        if self._closing:
+            return
         profile = agents.get(self.model_agent)
         try:
             apply_preset(name, self.model_agent)
@@ -230,7 +255,7 @@ class ModelsMixin:
         """正在跑的会话还挂在旧模型上，逐个问要不要接着聊下去。
 
         claude 是启动时读一次 settings.json，已经跑起来的那些不会因为换了预设
-        就跟着变，得重开。重开走 `--continue`，claude 自己把上次那段上下文整个
+        就跟着变，得重开。重开走 `--resume`，claude 自己把指定会话的上下文整个
         接过去——所以**这条路不写交接文档**（早先那版每换一次模型都先烧一轮
         token 写一份，等它写完才重开，慢且没多大用：同一个会话自己的上下文比
         一份总结更全）。想让新会话读一份提炼过的东西，就自己先点「整理交接文档」
@@ -239,6 +264,8 @@ class ModelsMixin:
         问的是"要不要续"这件事本身，所以措辞里得把后果说全：旧窗口会被关掉。
         不然用户以为旧窗口会留着，结果被关掉了。
         """
+        if self._closing:
+            return
         if self._busy():
             self.feedback_var.set("上一轮活还没干完，等它跑完。")
             return
@@ -246,8 +273,10 @@ class ModelsMixin:
         # 开着的窗口一点都不受影响，去问它反而是打扰（而且拿它重开也是白重开）。
         profile = agents.get(self.model_agent)
         sessions = []
+        unknown = 0
         for item in self.running:
-            if agents.get(item.get("agent")).id != profile.id:
+            if (agents.get(item.get("agent")).id != profile.id
+                    or item["proc"].poll() is not None):
                 continue
             # 这本绑了模型预设的，开会话时用的是那份预设（走 --settings），跟这次
             # 改的全局 settings.json 一点关系都没有。既不该问它"还挂在旧模型上吗"
@@ -256,21 +285,33 @@ class ModelsMixin:
             workspace = self._config_workspace(item["path"])
             if workspace is not None and workspace.get("preset"):
                 continue
-            sessions.append(item)
+            if item.get("session_id"):
+                sessions.append(item)
+            else:
+                unknown += 1
+        if unknown:
+            self.feedback_var.set("有 {} 个会话无法确定记录 ID，将保留原窗口。".format(unknown))
         if not sessions:
             return
-        embedded_proc = self.embedded.process if self.embedded is not None else None
 
         picked = []
-        for item in sessions:
-            if messagebox.askyesno(
+        # 确认框会继续跑 Tk 事件；问完之前，更新助手不能趁这时发起退出。
+        self._task_running = True
+        try:
+            for item in sessions:
+                resume = messagebox.askyesno(
                     "要接着聊吗",
-                    "「{}」这个会话还挂在旧模型上。\n\n"
-                    "要关掉它，用新模型接着上次的上下文重新开吗？\n\n"
-                    "接着聊靠 {} 自己的 --continue，不写交接文档。"
-                    .format(item["name"], profile.label)):
-                picked.append({"item": item,
-                               "was_embedded": item["proc"] is embedded_proc})
+                    "「{}」的会话 {} 还挂在旧模型上。\n\n"
+                    "要关掉它，用新模型接着这条会话的上下文重新开吗？\n\n"
+                    "接着聊靠 {} 自己的 --resume，不写交接文档。"
+                    .format(item["name"], item["session_id"][:8], profile.label))
+                if self._closing:
+                    return
+                if resume:
+                    picked.append({"item": item, "process": item["proc"],
+                                   "session_id": item["session_id"]})
+        finally:
+            self._task_running = False
         if not picked:
             self.feedback_var.set("换好了。正在跑的会话保持原样，没动它们。")
             return
@@ -288,6 +329,8 @@ class ModelsMixin:
 
     def _run_next_task(self):
         """流水线跑下一个会话：关旧的 → 用新模型接着重开。"""
+        if self._closing:
+            return
         if self._pending:
             # 上一个内嵌会话还在等控制台窗口冒出来。这会儿再开一个，
             # embed_workspace 会直接打回去、那个工作区就白排队了。
@@ -311,6 +354,8 @@ class ModelsMixin:
         到上限就不再等，把 note 摆到进度条上照常往下走——各步自己都有兜底，卡死
         在这儿比早走一步更糟。
         """
+        if self._closing:
+            return
         done = pred()
         if done or tries >= MIGRATE_WAIT_TRIES:
             if not done:
@@ -321,39 +366,40 @@ class ModelsMixin:
                    lambda: self._wait_until(pred, then, note, tries + 1))
 
     def _close_old_session(self, job):
+        if self._closing:
+            return
         item = job["item"]
-        if job["was_embedded"] and self.embedded is not None:
-            # 句柄得在 close_terminal 把 self.embedded 清掉之前先拿住。它只给个
-            # WM_CLOSE，三秒还没退就硬掐（见 close_terminal），所以这一等有底。
-            process = getattr(self.embedded, "process", None)
+        process = job["process"]
+        if item["proc"] is not process:
+            self._run_next_task()
+            return
+        if process.poll() is not None:
+            self._launch_migrated(job)
+            return
+        if self.embedded is not None and self.embedded.process is process:
             self.close_terminal()
-            if process is None:
-                self._launch_migrated(job)
-                return
-            self._task_step("等旧的那个会话退出去，退了就用新模型重开。")
-            self._wait_until(lambda: process.poll() is not None,
-                             lambda: self._launch_migrated(job),
-                             "旧会话没退利索，先往下走。")
+        elif window_alive(item.get("hwnd")):
+            close_window(item["hwnd"])
+        else:
+            self._run_next_task()
             return
-        hwnd = item.get("hwnd")
-        item["hwnd"] = None
-        if hwnd and window_alive(hwnd):
-            close_window(hwnd)
-            # 窗口是异步退的。等它真没了再开新的，免得两扇撞在同一块地方。
-            self._task_step("等旧窗口关掉，关了就用新模型重开。")
-            self._wait_until(lambda: not window_alive(hwnd),
-                             lambda: self._launch_migrated(job),
-                             "旧窗口没关利索，先往下走。")
-            return
-        self._task_step("旧的关掉了，准备用新模型重开。")
-        self._launch_migrated(job)
+        self._task_step("等旧会话退出，退了就用新模型重开。")
+        self._wait_until(lambda: process.poll() is not None,
+                         lambda: self._launch_migrated(job),
+                         "旧会话没退，跳过这一条。")
 
     def _launch_migrated(self, job):
         session = job["item"]
+        process = job["process"]
+        if session["proc"] is not process or process.poll() is None:
+            self._run_next_task()
+            return
         # 拿**工作区那条**去开，不是会话条目：会话条目只有 name/path/proc/hwnd/agent，
         # 没有 permission，用它开会等于把用户挑的权限等级冲回默认；工作区那条还带
         # 着 preset（这里经过筛选必然是空的，但拿对的那条更稳当）。
         item = self._config_workspace(session["path"]) or session
+        if agents.get(item.get("agent")).id != agents.get(session.get("agent")).id:
+            item = dict(item, agent=session["agent"], preset="")
         self._task_step("用新模型重开「{}」。".format(session["name"]))
         # 目录里真有那份文档才让新会话去读它——硬塞的话，没写过交接的目录里就是
         # 让 claude 去读一个不存在的东西。跟点工作区那个弹框里「先读交接文档」
@@ -361,11 +407,8 @@ class ModelsMixin:
         prompt = None
         if os.path.isfile(os.path.join(item["path"], HANDOFF_FILE)):
             prompt = READ_HANDOFF_PROMPT
-        entry = self.launch_workspace(item, cont=True, prompt=prompt)
-        # 下一轮开新窗口前要先拍一份窗口名单、再比出哪扇是新开的。刚开出去那扇要是
-        # 还没认出来，两扇新窗口会挤进同一次比对里，句柄认串。等它认出来再往下走。
-        # 内嵌那条路不用等：那扇是本窗口里的一栏、不参与比对，而且 _run_next_task
-        # 自己会躲着 _pending。
+        entry = self.launch_workspace(item, prompt=prompt, session_id=job["session_id"])
+        # 下一轮开窗前先等这次认完句柄，避免两扇窗口挤进同一次快照比对。
         if entry is None or entry.get("watched"):
             self._run_next_task()
             return
@@ -379,8 +422,7 @@ class ModelsMixin:
         self._task_queue = []
         self._hide_task_area()
         self.feedback_var.set(
-            "换模型这件活干完了：{} 个会话都用新模型接着上次的上下文重开了。".format(
-                self._task_total))
+            "换模型已处理完毕：共检查 {} 个选中的会话。".format(self._task_total))
 
     def remove_model(self, name, path):
         message = "删除模型预设「{}」？\n\n{}".format(name, path)

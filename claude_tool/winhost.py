@@ -231,7 +231,7 @@ def close_window(target):
 
 def spawn_console(workdir, cont=False, prompt=None, settings=None,
                   permission=None, profile=None, append_system_prompt=None,
-                  resume_id=None, new_session_id=None):
+                  resume_id=None, new_session_id=None, tag=None):
     """开一个老式 conhost 跑 claude。
 
     返回 (进程, 启动前就存在的窗口句柄集合)——窗口是控制台那边异步建的，
@@ -244,7 +244,9 @@ def spawn_console(workdir, cont=False, prompt=None, settings=None,
     """
     profile = profile or agents.get(agents.DEFAULT_AGENT)
     known = {hwnd for hwnd, _ in console_windows()}
-    command = "title {} & ".format(title_tag(profile.id))
+    command = "title {} & ".format(tag or title_tag(profile.id))
+    if tag and profile.id == "claude":
+        command += 'set "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1" & '
     for key, value in sorted(profile.launch_overrides().items()):
         command += 'set "{}={}" & '.format(key, value)
     command += agent_command(profile, cont=cont, prompt=prompt,
@@ -261,12 +263,9 @@ def spawn_console(workdir, cont=False, prompt=None, settings=None,
 
 
 def fresh_console(known, tag=TITLE_TAG):
-    """在 known 之外找新冒出来的控制台窗口；优先认标题打着自己标记的那个。"""
-    new = [item for item in console_windows() if item[0] not in known]
-    if not new:
-        return None
-    tagged = [hwnd for hwnd, title in new if tag in title]
-    return tagged[0] if tagged else new[0][0]
+    """只认本次启动的标记；窗口先出现、标题还没设好时继续等。"""
+    return next((hwnd for hwnd, title in console_windows()
+                 if hwnd not in known and tag in title), None)
 
 
 class EmbeddedConsole:

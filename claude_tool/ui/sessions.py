@@ -118,7 +118,8 @@ class SessionsMixin:
             # 操作按屏幕从左到右念：移过来 置顶 关掉，最后是整理交接文档。
             # side="right" 是先摆的在最右边，所以得倒着 pack。
             ops = []
-            if item.get("hwnd"):
+            if item.get("hwnd") and (self.embedded is None
+                                     or self.embedded.process is not item["proc"]):
                 # 这几样只有独立窗口有——内嵌那个本来就长在本窗口里，挪位置和
                 # 压顶层对它没意义（那一栏自己还有「放到独立窗口」「关掉」）。
                 #
@@ -448,6 +449,11 @@ class SessionsMixin:
         path = item["path"]
         permission = workspace_permission(item)
         profile = agents.get(item.get("agent"))
+        if session_id:
+            running = self.running_session(path, session_id)
+            if running is not None:
+                self.focus_running(running)
+                return None
         # 没装就别硬开：裸名字塞进命令行，用户只会看到一扇闪一下就没的窗口，
         # 报的还是"不是内部或外部命令"。这儿直接把那个档位的安装面板端出来。
         # 「找不到」里还混着 npm 自动升级的空档——那种情况口径是先别重装，但
@@ -497,12 +503,12 @@ class SessionsMixin:
                         "会话配置" if bound_env else "hook 配置", e))
 
         if self.embed_var.get():
-            self.embed_workspace(item, cont, prompt, settings, permission,
-                                 profile=profile,
-                                 append_system_prompt=preamble,
-                                 resume_id=resume_id, new_session_id=new_id)
-            self.after(1500, self.refresh_sessions)
-            return None
+            entry = self.embed_workspace(item, cont, prompt, settings, permission,
+                                         profile=profile, append_system_prompt=preamble,
+                                         resume_id=resume_id, new_session_id=new_id)
+            if entry is not None:
+                self.after(1500, self.refresh_sessions)
+            return entry
         # 拍快照得赶在启动之前：窗口是 claude 那边异步建出来的，等它冒出来再
         # 去数，就分不清哪扇是这次新开的、哪扇是上一轮留下的了。
         known = terminal_windows()

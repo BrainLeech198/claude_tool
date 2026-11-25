@@ -393,13 +393,15 @@ def test_preset(path, timeout=15):
 TEST_LOG_FILE = os.path.join(TOOL_DIR, "model_tests.json")
 
 
-def _preset_fingerprint(path):
-    """预设文件的指纹。读不动给空串（空串跟任何真实指纹都不等，等于不作数）。"""
+def preset_test_identity(path):
+    """标识接受测试的那份文件，区分原地编辑和同路径替换。"""
     try:
         with open(path, "rb") as f:
-            return hashlib.sha1(f.read()).hexdigest()
+            stamp = os.fstat(f.fileno())
+            return (stamp.st_dev, stamp.st_ino, stamp.st_ctime_ns, stamp.st_mtime_ns,
+                    hashlib.sha1(f.read()).hexdigest())
     except OSError:
-        return ""
+        return None
 
 
 def load_test_results():
@@ -418,13 +420,16 @@ def save_test_results(results):
         json.dump(results, f, ensure_ascii=False, indent=2)
 
 
-def record_test_result(path, ok, note):
-    """记下一次测试结果。写在主线程调（多个预设并发测时，避免两处读改写打架）。"""
+def record_test_result(path, ok, note, identity=None):
+    """在主线程记下结果；带请求身份时，不给已更换的文件记旧结果。"""
+    current = preset_test_identity(path)
+    if current is None or (identity is not None and current != identity):
+        return False
     results = load_test_results()
     key = os.path.normcase(os.path.normpath(path))
-    results[key] = {"ok": bool(ok), "note": note, "when": time.time(),
-                    "fp": _preset_fingerprint(path)}
+    results[key] = {"ok": bool(ok), "note": note, "when": time.time(), "fp": current[-1]}
     save_test_results(results)
+    return True
 
 
 def cached_test_result(path):
@@ -439,7 +444,8 @@ def cached_test_result(path):
     when = entry.get("when")
     if not isinstance(when, (int, float)):
         return None
-    if entry.get("fp") != _preset_fingerprint(path):
+    identity = preset_test_identity(path)
+    if identity is None or entry.get("fp") != identity[-1]:
         return None
     return bool(entry.get("ok")), entry.get("note") or "", when
 

@@ -54,13 +54,13 @@ window_rect = _host.window_rect
 work_area = _host.work_area
 
 
-def wake_hidden_launcher():
-    """把藏进托盘的启动器叫回来。第二次双击 exe 时走这条路。
+def wake_hidden_launcher(reset_window=False):
+    """通过托盘宿主叫回藏起来的启动器，或重置正在运行的启动器窗口。
 
     主窗 withdraw 之后按标题找不到（find_window 只认可见窗口），所以由托盘那
-    边的隐藏宿主窗口接消息。没有托盘、或者它还没建起来，返回 False。
+    边的隐藏宿主窗口接消息。没有宿主、还没建起来或消息发不出去，返回 False。
     """
     if not TRAY_SUPPORTED:
         return False
     from claude_tool import tray
-    return tray.wake_launcher()
+    return tray.wake_launcher(reset_window=reset_window)

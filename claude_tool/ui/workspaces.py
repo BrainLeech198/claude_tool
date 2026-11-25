@@ -126,7 +126,7 @@ class WorkspacesMixin:
 
     # ── 搬工作区 ──
 
-    def move_workspace_to(self, item, target):
+    def move_workspace_to(self, item, target, *, report_error=None):
         """把整个工作区目录搬到新位置，会话记录那份跟着搬。
 
         顺序是死的，mover 那边定下了：检查 → 复制 → 对账 → 改配置 → 丢回收站。
@@ -137,38 +137,33 @@ class WorkspacesMixin:
         出来的是半截的东西，对账也可能通不过——而那两个 mover 从文件系统上看不
         出来。
         """
-        if self._busy():
-            self.feedback_var.set("启动器手上有活，等它跑完再搬。")
-            return
-        if self._handoff_proc is not None and self._handoff_proc.poll() is None:
-            # 手动整理交接文档不算 _busy（那条路不占 _task_running），但它也占着
-            # 同一块进度区，写完还会把它收回去——这会儿插一个搬迁进去，进度区会
-            # 被它收走。写的正好是正要搬的这个目录时更得等：文件夹正被写。
-            self.feedback_var.set("正有一份交接文档在写，等它写完再搬。")
-            return
         path = item["path"]
-        if not os.path.isdir(path):
-            messagebox.showerror("目录不存在", "找不到目录：\n{}".format(path))
-            return
-        key = path_key(path)
-        if any(path_key(s["path"]) == key for s in self.running):
-            messagebox.showerror(
-                "那个会话还开着",
-                "「{}」这个工作区的会话正开着。\n\n"
-                "先把它关掉再搬——文件夹正被写的时候复制，复制出来的是半截的"
-                "东西，对账也会对不上。".format(item["name"]))
-            return
-
-        project_from, project_to = mover.project_paths(path, target)
         try:
-            target = mover.check(path, target, project_from, project_to)
-        except mover.MoveError as e:
-            messagebox.showerror("搬不了", str(e))
-            return
+            if self._busy():
+                raise mover.MoveError("启动器手上有活，等它跑完再搬。")
+            if self._handoff_proc is not None and self._handoff_proc.poll() is None:
+                raise mover.MoveError("正有一份交接文档在写，等它写完再搬。")
+            key = path_key(path)
+            if any(path_key(s["path"]) == key for s in self.running):
+                raise mover.MoveError("「{}」的会话还开着，请先关闭再搬。".format(item["name"]))
+            target = mover.check(path, target)
+            projects = mover.project_paths(path, target)
+            for other in self.config_data["workspaces"]:
+                if path_key(other["path"]) == key:
+                    continue
+                if mover.shares_project(other["path"], projects):
+                    raise mover.MoveError("「{}」共用旧会话目录，不能安全搬迁。"
+                                          .format(other["name"]))
+        except (mover.MoveError, OSError) as e:
+            if report_error is None:
+                messagebox.showerror("搬不了", str(e), parent=self)
+            else:
+                report_error(str(e))
+            return False
 
         self._move_running = True
         self._move_job = {"item": item, "source": path, "target": target,
-                          "project_from": project_from, "project_to": project_to}
+                          "projects": projects}
         self.task_head_var.set("正在搬工作区")
         self.task_count_var.set("")
         self.task_name_var.set(item["name"])
@@ -178,23 +173,23 @@ class WorkspacesMixin:
         threading.Thread(target=self._move_worker, args=(self._move_job,),
                          daemon=True).start()
         self.after(100, self._poll_move)
+        return True
 
     def _move_worker(self, job):
         """复制 + 对账跑在后台线程里，进度和结果都走队列回主线程。
 
-        两棵树共用同一个回调，靠 phase 那个格子区分现在在复制哪一份——会话记录
-        通常小得多，不分开说清楚的话，用户会以为进度条退回去了。
+        工作区和会话记录分开报进度，避免用户以为进度倒退了。
         """
         queue_ = self._move_queue
-        phase = ["正在复制整个目录"]
-
-        def note(count):
-            queue_.put(("count", count, phase[0]))
-
+        source, target = job["source"], job["target"]
         try:
-            mover.copy_tree(job["source"], job["target"], progress=note)
-            phase[0] = "正在复制会话记录"
-            mover.copy_project(job["project_from"], job["project_to"], progress=note)
+            mover.copy_tree(source, target, progress=lambda n: queue_.put(
+                ("count", n, "正在复制整个目录")))
+            total = 0
+            for project_from, project_to in job["projects"]:
+                total += mover.copy_project_for_move(
+                    project_from, project_to, source, target,
+                    progress=lambda n: queue_.put(("count", total + n, "正在复制会话记录")))
         except mover.MoveError as e:
             queue_.put(("fail", str(e)))
             return
@@ -256,7 +251,7 @@ class WorkspacesMixin:
         丢不成【不回滚】——这时候新的那份已经在用了，把旧的搬回来才是真乱。
         丢不成的如实报出来让用户自己处理。
         """
-        stuck = mover.discard(job["source"], job["project_from"])
+        stuck = mover.discard(job["source"], *(src for src, _ in job["projects"]))
         self._finish_move(job, None, stuck)
 
     def _finish_move(self, job, error, stuck=()):

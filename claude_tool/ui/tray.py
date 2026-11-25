@@ -30,7 +30,8 @@ class TrayMixin:
                 tooltip=self._tray_tooltip(),
                 on_show=self.show_from_tray,
                 on_menu=self._tray_menu,
-                on_command=self._tray_command)
+                on_command=self._tray_command,
+                on_reset=self._reset_running_window)
         except Exception:
             self._tray = None
 
@@ -202,24 +203,27 @@ class TrayMixin:
 
     def show_from_tray(self):
         """把窗口从托盘（或最小化）叫回来。"""
-        was, self._tray_state = self._tray_state, "normal"
         try:
-            if str(self.state()) == "withdrawn":
+            state = str(self.state())
+            if state in ("withdrawn", "iconic"):
                 self.deiconify()
-            self.state("zoomed" if was == "zoomed" else "normal")
+            if state == "withdrawn":
+                self.state("zoomed" if self._tray_state == "zoomed" else "normal")
+                self._tray_state = "normal"
             self.lift()
             self.focus_force()
         except tk.TclError:
             return
-        # 收进去时一并藏起来的附属窗，原样放回来。
-        windows, self._tray_hidden = getattr(self, "_tray_hidden", []), []
-        for window in windows:
-            try:
-                if window.winfo_exists():
-                    window.deiconify()
-                    window.lift()
-            except tk.TclError:
-                pass
+        if state == "withdrawn":
+            # 收进去时一并藏起来的附属窗，原样放回来。
+            windows, self._tray_hidden = self._tray_hidden, []
+            for window in windows:
+                try:
+                    if window.winfo_exists():
+                        window.deiconify()
+                        window.lift()
+                except tk.TclError:
+                    pass
         if self._tray is not None:
             self._tray.set_tooltip(self._tray_tooltip())
         # 内嵌的控制台是独立窗口、认本窗当 owner：藏起来时它跟着藏，叫回来得

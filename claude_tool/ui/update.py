@@ -30,6 +30,34 @@ from claude_tool.theme import ACCENT, ACCENT_SOFT, HOVER_BG, MUTED, PANEL_BG
 from claude_tool.widgets import PillButton, Tip
 
 
+class _SelfUpdateAction:
+    def __init__(self, release):
+        self.release = release
+        self.downloading = True
+        self.cancelled = False
+        self.handoff = None
+        self.lock = threading.Lock()
+
+    def publish_handoff(self, handoff):
+        with self.lock:
+            if not self.cancelled:
+                self.handoff = handoff
+                return
+        handoff.cancel()
+
+    def take_handoff(self):
+        with self.lock:
+            handoff, self.handoff = self.handoff, None
+        return handoff
+
+    def cancel(self):
+        with self.lock:
+            self.cancelled = True
+            handoff, self.handoff = self.handoff, None
+        if handoff is not None:
+            handoff.cancel()
+
+
 class UpdateMixin:
 
     def _probe_claude_version(self):
@@ -281,20 +309,33 @@ class UpdateMixin:
         threading.Thread(target=work, daemon=True).start()
 
     def _poll_self_update(self):
-        """self_queue 里那三种消息各自理事。取和画都在主线程。"""
-        try:
-            while True:
-                message = self.self_queue.get_nowait()
-                if message[0] == "check":
-                    self._apply_self_check(message[1], message[2])
-                elif message[0] == "progress":
-                    self._show_download_progress(*message[1:])
-                elif message[0] == "done":
-                    self._downloaded(message[1])
-                else:
-                    self._download_failed(message[1], message[2])
-        except queue.Empty:
-            pass
+        """后台结果在主线程消费；被弃置的动作不再更新界面或安装。"""
+        while not self._closing:
+            try:
+                kind, owner, *data = self.self_queue.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "check":
+                self._apply_self_check(owner, *data)
+                continue
+            action = owner
+            if action is not self._self_action:
+                continue
+            if kind in ("done", "failed"):
+                action.downloading = False
+            if action.cancelled:
+                self._cancel_self_update()
+                continue
+            if kind == "progress":
+                self._show_download_progress(*data)
+            elif kind == "done":
+                self._downloaded(action, *data)
+            elif kind == "failed":
+                self._self_action = None
+                self._download_failed(*data)
+            elif kind == "handoff":
+                # 真退可能当场销毁窗口；让本轮 _poll_running 先跑完。
+                self.after(0, self._install_ready, action, *data)
 
     def _say_self_check(self, message, hint=""):
         """「查启动器新版」有结果了，说一句。
@@ -331,6 +372,8 @@ class UpdateMixin:
         跟 claude 那颗「有新版」一路货：都是查出来才建（宽度按文字量，得先知道版本
         号）。查到的记录连着那颗胶囊一起记下来，下载时直接用，不再问一遍官网。
         """
+        if self._self_action is not None and self._self_action.release != release:
+            self._cancel_self_update()
         self._self_release = release
         if self._self_pill is not None:
             self._self_pill.destroy()
@@ -347,35 +390,51 @@ class UpdateMixin:
                 release.latest))
 
     def _hide_self_update(self):
+        self._self_release = None
+        self._cancel_self_update()
         if self._self_pill is None:
             return
         self._self_pill.destroy()
         self._self_pill = None
 
+    def _cancel_self_update(self):
+        action = self._self_action
+        if action is not None:
+            action.cancel()
+            # 下载线程可能还在写 .part；等它完成再放行下一次下载。
+            if not action.downloading:
+                self._self_action = None
+
+    def _on_self_update_destroy(self, event):
+        if event.widget is self:
+            self._closing = True
+            self._cancel_self_update()
+
     def _download_update(self):
-        """胶囊点下去：后台把包装下来。下载中不再理第二下。"""
-        if self._downloading or self._self_release is None:
+        """胶囊点下去：后台下载；下载、确认和交接期间忽略重复点击。"""
+        if self._closing or self._self_action is not None or self._self_release is None:
             return
         release = self._self_release
-        self._downloading = True
+        action = self._self_action = _SelfUpdateAction(release)
         self.feedback_var.set("正在下载 {} …".format(release.latest))
         seen = [-1]        # 上一个报过的百分比，只在这三个数变了才往队列里塞
+        results = self.self_queue
 
         def work():
             def progress(done, total):
                 percent = int(done * 100 / total) if total else -1
                 if percent != seen[0]:
                     seen[0] = percent
-                    self.self_queue.put(("progress", done, total))
+                    results.put(("progress", action, done, total))
             try:
                 path = selfupdate.download(release, progress)
             except LookupError as error:
                 # 这一版压根没给我们这个系统打包，跟"网断了"是两回事
-                self.self_queue.put(("failed", True, str(error)))
+                results.put(("failed", action, True, str(error)))
             except Exception as error:
-                self.self_queue.put(("failed", False, str(error)))
+                results.put(("failed", action, False, str(error)))
             else:
-                self.self_queue.put(("done", path))
+                results.put(("done", action, path))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -388,7 +447,6 @@ class UpdateMixin:
                 done / 1048576.0))
 
     def _download_failed(self, missing, reason):
-        self._downloading = False
         if missing:
             # 这一版还没给我们这个系统打包——不是故障，是我们自己还没打，别写成
             # "下载失败"吓人。官网上有下载页，问一句要不要开过去。
@@ -406,31 +464,66 @@ class UpdateMixin:
                              "启动器最新版的包没下下来：\n\n{}".format(reason))
         self.feedback_var.set("下载没成，看弹窗里那句。")
 
-    def _downloaded(self, path):
-        """包已经在盘上了。Windows 上是安装包——装它就等于替掉正在跑的这个程序，
-        所以得先把启动器关掉；别处那个是 tar.gz，没有安装器，弹个文件夹拉倒。"""
-        self._downloading = False
+    def _downloaded(self, action, path):
+        """包已经在盘上了。Windows 要先问要不要装；别处只打开所在文件夹。"""
         if not selfupdate.INSTALLER:
+            self._self_action = None
             selfupdate.open_artifact(path)
             self.feedback_var.set(
                 "下好了：{}\n已经弹出它所在的文件夹，解开就能用。".format(path))
             return
-        if not messagebox.askyesno(
-                "下好了，现在装吗",
-                "新版安装包下好了：\n{}\n\n"
-                "装它得先把启动器关掉——安装程序要覆写的就是正在跑的这些文件。\n"
-                "（内嵌终端里那个 claude 会跟着一起关；开在独立窗口里的不受影响。）\n\n"
-                "现在关掉启动器并运行安装包吗？选「否」的话文件留在那儿，"
-                "你自己双击也行。".format(path)):
+        install = messagebox.askyesno(
+            "下好了，现在装吗",
+            "新版安装包下好了：\n{}\n\n"
+            "装它得先把启动器关掉——安装程序要覆写的就是正在跑的这些文件。\n"
+            "（内嵌终端里那个 claude 会跟着一起关；开在独立窗口里的不受影响。）\n\n"
+            "现在关掉启动器并运行安装包吗？选「否」的话文件留在那儿，"
+            "你自己双击也行。".format(path))
+        if self._closing or self._self_action is not action:
+            return
+        if not install:
+            self._cancel_self_update()
             self.feedback_var.set("安装包放在 {}，想装的时候双击它。".format(path))
             return
-        try:
-            selfupdate.open_artifact(path)
-        except OSError as error:
-            messagebox.showerror("拉不起来", "安装包没能跑起来：\n{}".format(error))
+        if self._busy():
+            self._defer_install(path)
             return
-        # 让安装程序先站稳再关自己：这边一 destroy，进程就没了。
-        self.after(800, self._on_close)
+        self.feedback_var.set("正在准备安装助手…")
+        results = self.self_queue
+
+        def work():
+            try:
+                handoff = selfupdate.prepare_install(path)
+            except Exception as error:
+                results.put(("handoff", action, path, str(error)))
+            else:
+                action.publish_handoff(handoff)
+                results.put(("handoff", action, path, None))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _defer_install(self, path):
+        self._cancel_self_update()
+        self.feedback_var.set("请等模型切换或工作区搬迁完成后再安装。安装包：{}".format(path))
+
+    def _install_ready(self, action, path, error):
+        if self._closing or self._self_action is not action:
+            return
+        if self._busy():
+            self._defer_install(path)
+            return
+        if error is None:
+            handoff = action.take_handoff()
+            try:
+                handoff.commit()
+            except OSError as exc:
+                error = str(exc)
+        if error is not None:
+            self._cancel_self_update()
+            messagebox.showerror("无法交接安装", "启动器没有退出，安装包已保留：\n{}\n\n{}"
+                                 .format(path, error))
+            return
+        self.close_for_real()
 
     def _update_model_chip(self, text, known):
         """模型名胶囊。text 是要显示的字，known 是说这个名字是不是一个真预设。

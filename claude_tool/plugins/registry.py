@@ -247,6 +247,7 @@ class Registry:
         # 先塞进 sys.modules 再 exec：插件里用 dataclass / 相对 import 时，
         # 解释器要能按名字找到自己。
         sys.modules[mod_name] = module
+        settings_pages = host.settings_pages()
         try:
             spec.loader.exec_module(module)
             entry = getattr(module, plugin.manifest.entry_func, None)
@@ -255,6 +256,7 @@ class Registry:
                     entry_file, plugin.manifest.entry_func))
             entry(host)
         except Exception:
+            host._restore_settings_pages(settings_pages)
             sys.modules.pop(mod_name, None)
             raise
         plugin.module = module

@@ -168,8 +168,7 @@ def save_config(config):
 def project_dir(path, agent_id=agents.DEFAULT_AGENT):
     """工作目录 -> 这个 agent 的会话记录目录（claude 那一档的命名规则）。
 
-    移动工作区时用它算"新旧位置各自那份记录"（见 mover.project_paths），那边只
-    处理 claude 的目录。列会话不走这儿——两档的规则不一样，见 history.project_dirs。
+    按 agent 查找已有目录或计算新位置时，分别用 history.project_dirs / project_path。
 
     Claude Code 的命名规则是把路径里所有非字母数字的字符换成短横：D:\\Desktop
     变成 D--Desktop，D:\\File\\claude\\kk 变成 D--File-claude-kk。猜错了也只是

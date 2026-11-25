@@ -237,9 +237,11 @@ class Host:
         self.bump_mounts()
 
         def unregister():
-            if entry in self._pages:
-                self._pages.remove(entry)
-                self.bump_mounts()
+            for index, registered in enumerate(self._pages):
+                if registered is entry:
+                    del self._pages[index]
+                    self.bump_mounts()
+                    break
 
         return unregister
 
@@ -254,6 +256,13 @@ class Host:
     def settings_pages(self):
         """宿主用：插件加进来的设置页。"""
         return list(self._pages)
+
+    def _restore_settings_pages(self, entries):
+        """加载插件失败时撤掉失败入口注册的设置页。"""
+        if len(self._pages) != len(entries) or any(
+                old is not new for old, new in zip(self._pages, entries)):
+            self._pages[:] = entries
+            self.bump_mounts()
 
     # ── 宿主接进来的两个钩子 ────────────────────────────────────
     def set_mount_hook(self, callback):

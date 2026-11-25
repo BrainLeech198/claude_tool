@@ -58,19 +58,33 @@ def _variants(path):
     return found
 
 
-def project_dirs(agent_id, workspace):
+def project_path(agent_id, workspace):
+    """新建记录时，用 CLI 默认写法算出目录。"""
+    profile = agents.get(agent_id)
+    if profile.family == "codebuddy":
+        slug = compress_path(_lower_drive(os.path.realpath(workspace)))
+    else:
+        slug = _claude_slug(workspace)
+    return os.path.join(profile.projects_dir, slug)
+
+
+def project_dirs(agent_id, workspace, *, strict=False):
     """这个工作区在那一档的会话记录目录，返回实际存在的那些。
 
     按名字比对而不是直接拼路径：盘符大小写、realpath 展开与否都会让拼出来的
     名字对不上，而目录里的名字是既成事实。normcase 在 Windows 上顺带把大小写
-    抹平了。
+    抹平了。搬迁必须区分「没有记录」和「无法读取记录」。
     """
     profile = agents.get(agent_id)
     slugber = compress_path if profile.family == "codebuddy" else _claude_slug
     wanted = {os.path.normcase(slugber(path)) for path in _variants(workspace)}
     try:
         names = os.listdir(profile.projects_dir)
+    except FileNotFoundError:
+        return []
     except OSError:
+        if strict:
+            raise
         return []
     return [os.path.join(profile.projects_dir, name) for name in names
             if os.path.normcase(name) in wanted]
@@ -190,29 +204,60 @@ def title_of(path):
     return _title_and_flags(path)[0]
 
 
-_CWD_RE = re.compile(r'"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"')
+def _cwd_key(path):
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _recorded_cwds(path):
+    return {_cwd_key(row["cwd"]) for row in _rows(_piece(path, False, HEAD_BYTES))
+            if isinstance(row.get("cwd"), str)}
+
+
+def rewrite_project_cwds(folder, source, target):
+    """只改复制品中的顶层 cwd，不碰消息、工具参数和原始记录。"""
+    old = {_cwd_key(path) for path in _variants(source)}
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        if not name.endswith(".jsonl") or not os.path.isfile(path):
+            continue
+        if os.path.islink(path):
+            raise OSError("会话记录是链接：{}".format(path))
+        stat = os.stat(path)
+        temp = path + ".move-tmp"
+        changed = False
+        has_cwd = False
+        with open(path, "rb") as src, open(temp, "xb") as dst:
+            for line in src:
+                try:
+                    row = json.loads(line)
+                except (ValueError, UnicodeError):
+                    dst.write(line)
+                    continue
+                cwd = row.get("cwd") if isinstance(row, dict) else None
+                if isinstance(cwd, str) and cwd:
+                    has_cwd = True
+                    if _cwd_key(cwd) in old:
+                        row["cwd"] = target
+                        line = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+                        changed = True
+                dst.write(line)
+        if has_cwd and not changed:
+            os.remove(temp)
+            raise OSError("会话记录属于另一个工作区：{}".format(name))
+        if changed:
+            os.utime(temp, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            os.replace(temp, path)
+        else:
+            os.remove(temp)
 
 
 def _cwd_matches(path, wanted):
-    """文件里记的 cwd 跟这个工作区对得上吗。
-
-    只用来挡"slug 撞车"：`D:\\a-b` 和 `D:\\a\\b` 会压成同一个目录名。文件头
-    还读不到 cwd（有些版本前几行没有）时就当它是对的。
-    """
+    """文件头没有 cwd 时默认保留；有 cwd 时用它挡住目录名撞车。"""
     try:
-        head = _piece(path, False, HEAD_BYTES)
+        found = _recorded_cwds(path)
     except OSError:
         return False
-    found = []
-    for raw in _CWD_RE.findall(head):
-        try:
-            found.append(json.loads('"' + raw + '"'))
-        except ValueError:
-            continue
-    if not found:
-        return True
-    keys = {os.path.normcase(os.path.normpath(item)) for item in wanted}
-    return any(os.path.normcase(os.path.normpath(item)) in keys for item in found)
+    return not found or bool(found.intersection(map(_cwd_key, wanted)))
 
 
 def list_sessions(agent_id, workspace, limit=None):

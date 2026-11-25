@@ -59,6 +59,7 @@ PM_REMOVE = 0x0001
 TRAY_CLASS = "ClaudeToolTrayHost"
 TRAY_TITLE = "Claude 启动器托盘"
 WAKE_MESSAGE_NAME = "ClaudeToolShowLauncher"
+RESET_MESSAGE_NAME = "ClaudeToolResetLauncherWindow"
 TASKBAR_CREATED_NAME = "TaskbarCreated"
 
 WINDOW_ID = 1
@@ -201,11 +202,13 @@ class TrayIcon:
     就把那项的 cmd 交给 on_command。这些东西都在 Tk 主线程上调用。
     """
 
-    def __init__(self, root, icon_file, tooltip, on_show, on_menu, on_command):
+    def __init__(self, root, icon_file, tooltip, on_show, on_menu, on_command,
+                 on_reset):
         if not SUPPORTED:
             raise RuntimeError("系统托盘只在 Windows 上可用")
         self.root = root
         self.on_show = on_show
+        self.on_reset = on_reset
         self.on_menu = on_menu
         self.on_command = on_command
         self.hwnd = None
@@ -232,6 +235,7 @@ class TrayIcon:
         self._taskbar_created = _user32.RegisterWindowMessageW(
             TASKBAR_CREATED_NAME)
         self._wake_message = _user32.RegisterWindowMessageW(WAKE_MESSAGE_NAME)
+        self._reset_message = _user32.RegisterWindowMessageW(RESET_MESSAGE_NAME)
 
         wc = _WNDCLASSEXW()
         wc.cbSize = ctypes.sizeof(_WNDCLASSEXW)
@@ -334,6 +338,8 @@ class TrayIcon:
             try:
                 if event == "show":
                     self.on_show()
+                elif event == "reset":
+                    self.on_reset()
                 elif event == "menu":
                     self._show_menu()
                 elif event == "readd":
@@ -356,6 +362,9 @@ class TrayIcon:
             if msg == self._wake_message:
                 # 第二次启动的人在找我们：把窗口叫回来。
                 self._events.append("show")
+                return 0
+            if self._reset_message and msg == self._reset_message:
+                self._events.append("reset")
                 return 0
             if msg == self._taskbar_created:
                 # Explorer 重启过，图标被系统丢了，重新挂一个。
@@ -467,18 +476,17 @@ class TrayIcon:
         self._hicon = None
 
 
-def wake_launcher():
-    """找到藏着的那扇启动器，让它把窗口叫回来。
+def wake_launcher(reset_window=False):
+    """通过托盘宿主叫回启动器，或通知它重置主窗的位置和尺寸。
 
-    第二次双击 exe 走的就是这条路：主窗被 withdraw 之后按标题是找不到的
-    （IsWindowVisible 为假），但托盘宿主窗口还在，按类名找得到。返回 False
-    表示没有那个窗口——可能启动器没开，也可能它还没建完，调用方自己决定等不等。
+    不论主窗是否可见，托盘宿主窗口都可以按类名找到。返回 False 表示消息没发出，
+    例如宿主还没建完，调用方自己决定等不等。
     """
     if not SUPPORTED:
         return False
     hwnd = _user32.FindWindowW(TRAY_CLASS, None)
     if not hwnd:
         return False
-    message = _user32.RegisterWindowMessageW(WAKE_MESSAGE_NAME)
-    _user32.PostMessageW(hwnd, message, 0, 0)
-    return True
+    name = RESET_MESSAGE_NAME if reset_window else WAKE_MESSAGE_NAME
+    message = _user32.RegisterWindowMessageW(name)
+    return bool(message and _user32.PostMessageW(hwnd, message, 0, 0))

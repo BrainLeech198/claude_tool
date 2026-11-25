@@ -207,14 +207,12 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         # 那个版本号和那颗「有新版」总得跟着变，不然用户以为白升了。
         self._force_version_check = False
         # 启动器**自己**有没有新版，跟上面那套是分开的两件事（一个问 npm，一个问
-        # 我们自己的官网）。这条队列里跑三种消息（见 _poll_self_update）：
-        #   ("check", 是不是手动点的, versions.launcher() 的结果或 None)
-        #   ("progress", 已下字节, 总字节或 None)
-        #   ("done"/"failed", 落盘的路径 / 出错说明)
+        # 我们自己的官网）。查版本、下载、安装助手就绪都走这条队列回主线程。
         self.self_queue = queue.Queue()
         self._self_pill = None       # 「下载最新版 X」那颗，查出落后才建
         self._self_release = None    # 那颗胶囊对应的清单记录，下载要用
-        self._downloading = False    # 下载进行中：那颗胶囊点第二下不理它
+        self._self_action = None     # 下载、确认和安装交接期间忽略重复点击
+        self._closing = False
         # 启动时探一次当前生效的模型预设通不通，结果走这条队列回主线程（每项是
         # (预设名, 通不通, 说明)）。连不上才在顶栏挂一颗「模型连不上」——**不弹框**，
         # 免得每次开机都被一条网络问题拦一下。
@@ -314,6 +312,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
             self.bind_all("<Control-Key-{}>".format(number),
                           lambda _e, n=number: self._launch_nth_shortcut(n))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.bind("<Destroy>", self._on_self_update_destroy, add="+")
         # 内嵌的那个是贴在终端栏上的独立窗口，本窗口自身的挪动它跟不动——挪窗口
         # 时 Tk 只给顶层窗口发 <Configure>，终端栏那边一个都不发，_on_term_resize
         # 那个绑定管不着（量过）。
@@ -489,6 +488,18 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
                 and saved["y"] + saved["h"] + inset_h <= area[3]):
             self.feedback_var.set("上次的窗口位置放不进当前屏幕，已经摆回可见范围。")
 
+    def _reset_running_window(self):
+        """已有实例收到「安全启动」：叫回窗口，以普通大小摆到主屏中央。"""
+        if self._closing:
+            return
+        if self.state() == "withdrawn":
+            self._tray_state = "normal"
+        self.show_from_tray()
+        if self.state() != "normal":
+            self.state("normal")
+        self._center_on_primary()
+        self.feedback_var.set("已按「安全启动」把窗口摆到主屏中央。")
+
     def _center_on_primary(self):
         """主屏中央，尺寸用默认值（不沿用可能超出屏幕的旧尺寸）。"""
         area = work_area(self, 0, 0)
@@ -522,12 +533,18 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
         托盘没建起来（explorer 没起、非 Windows）时也走真退，不能把窗口藏得
         找不回来。
         """
+        if self._closing:
+            return
+        self._cancel_self_update()
         if self.close_to_tray_var.get() and self.hide_to_tray():
             return
         self.close_for_real()
 
     def close_for_real(self):
         """真退：有活先问一句，内嵌的先道别，然后销毁窗口。"""
+        if self._closing:
+            return
+        self._cancel_self_update()
         if self._busy():
             # 从托盘菜单点「退出」时窗口可能是藏着的，问话框得有个可见的窗接着。
             if str(self.state()) == "withdrawn":
@@ -539,6 +556,7 @@ class Launcher(NavMixin, DetailMixin, SettingsMixin, UpdateMixin, ModelsMixin,
                     "了、新的还没开」，那一轮上下文就断了；搬工作区停在复制了一半，"
                     "新位置留下半份、旧的还在。\n\n真要现在关吗？"):
                 return
+        self._closing = True
         if self.embedded is not None:
             # 内嵌的那个认了本窗口当 owner，窗口一销毁它跟着一起没。所以不能只是
             # "放它走"（那等于连窗口带会话一起抽掉），也不能说完就立刻销毁（等于

@@ -17,9 +17,12 @@
 
 不碰 tkinter。下载跑在后台线程里，进度靠回调扔出去，画的事归界面。
 """
+import base64
+import ctypes
 import os
 import subprocess
 import sys
+import threading
 import urllib.request
 
 from claude_tool.paths import DOWNLOAD_DIR
@@ -188,17 +191,107 @@ def download(release, on_progress=None):
     return fetch(urls(release, cell), target, size, on_progress)
 
 
-def open_artifact(path):
-    """打开下下来的东西。
+# 助手在安装目录之外运行；等待继承的进程句柄，不按可能被复用的 PID 查找。
+_INSTALL_HANDOFF = r'''
+$ErrorActionPreference = 'Stop'
+try {
+    $wait = [System.Threading.AutoResetEvent]::new($false)
+    $wait.SafeWaitHandle = [Microsoft.Win32.SafeHandles.SafeWaitHandle]::new(
+        [IntPtr]([long]$env:CLAUDE_TOOL_UPDATE_HANDLE), $true)
+    try {
+        if ($wait.WaitOne(0)) { throw 'Launcher exited before handoff' }
+        [Console]::Out.WriteLine('ready')
+        [Console]::Out.Flush()
+        if ([Console]::In.ReadLine() -ne 'install') { return }
+        if (-not $wait.WaitOne($env:CLAUDE_TOOL_UPDATE_WAIT -as [int])) {
+            throw 'Timed out waiting for launcher exit'
+        }
+    } finally {
+        $wait.Dispose()
+    }
+    Start-Process -FilePath $env:CLAUDE_TOOL_UPDATE_SETUP -ErrorAction Stop
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+'''
+_HANDOFF_WAIT_MS = 60_000
 
-    Windows：那是安装包，打开就是跑起来。它会来替掉这个正在跑的程序，所以界面
-    那边得先把启动器自己关掉再调这儿（见 launcher._install_update）。
-    别处：产物是个 tar.gz，没有安装器，"打开"就是弹出它所在的那个文件夹。
-    """
+
+class _InstallHandoff:
+    def __init__(self, helper):
+        self._control = helper.stdin
+
+    def commit(self):
+        """发出安装许可；助手还要等启动器进程真正退出。"""
+        with self._control as control:
+            control.write(b"install\n")
+
+    def cancel(self):
+        """不给安装许可，关掉控制管道让助手自行清理；不用等它退出。"""
+        self._control.close()
+
+
+def prepare_install(path):
+    """在后台等安装助手就绪，返回一个还未许可安装的交接。"""
+    import _winapi
+
+    path = os.path.abspath(path)
+    if not os.path.isfile(path):
+        raise FileNotFoundError("找不到安装包：{}".format(path))
+    log_path = os.path.join(os.path.dirname(path), "install-handoff.log")
+    powershell = os.path.join(os.environ["SystemRoot"], "System32", "WindowsPowerShell",
+                              "v1.0", "powershell.exe")
+    script = base64.b64encode(_INSTALL_HANDOFF.encode("utf-16-le")).decode("ascii")
+    current = _winapi.GetCurrentProcess()
+    with open(log_path, "ab", buffering=0) as log:
+        log.write(("\n安装交接：{}\n".format(path)).encode("utf-8"))
+        handle = _winapi.DuplicateHandle(current, current, current, 0x00100000, True, 0)
+        try:
+            startup = subprocess.STARTUPINFO(lpAttributeList={"handle_list": [handle]})
+            env = dict(os.environ, CLAUDE_TOOL_UPDATE_SETUP=path,
+                       CLAUDE_TOOL_UPDATE_HANDLE=str(handle),
+                       CLAUDE_TOOL_UPDATE_WAIT=str(_HANDOFF_WAIT_MS))
+            # 冻结版把 DLL 搜索目录改到了 _internal，系统助手不应继承它。
+            bundle = getattr(sys, "_MEIPASS", None)
+            if bundle:
+                ctypes.windll.kernel32.SetDllDirectoryW(None)
+            try:
+                helper = subprocess.Popen(
+                    [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", script],
+                    cwd=os.path.dirname(path), env=env, startupinfo=startup,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
+                    bufsize=0, creationflags=subprocess.CREATE_NO_WINDOW)
+            finally:
+                if bundle:
+                    ctypes.windll.kernel32.SetDllDirectoryW(ctypes.c_wchar_p(bundle))
+        finally:
+            _winapi.CloseHandle(handle)
+
+    ready = []
+
+    def read_ready():
+        try:
+            with helper.stdout as output:
+                ready.append(output.readline().strip())
+        except OSError:
+            pass
+
+    reader = threading.Thread(target=read_ready, daemon=True)
+    reader.start()
+    reader.join(5)
+    if reader.is_alive() or ready != [b"ready"]:
+        helper.stdin.close()
+        helper.terminate()
+        helper.wait()
+        reader.join()
+        raise OSError("安装助手没有就绪，日志：{}".format(log_path))
+    return _InstallHandoff(helper)
+
+
+def open_artifact(path):
+    """非 Windows 产物是压缩包，打开所在目录交给用户解压。"""
     directory = os.path.dirname(path) or "."
-    if INSTALLER:
-        subprocess.Popen([path], close_fds=True)
-        return path
     from claude_tool.host import open_path
     open_path(directory)
     return directory

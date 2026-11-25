@@ -1885,20 +1885,24 @@ class LauncherDialogs:
                  text="填完整的新路径。末尾那一段想改就改，等于顺手改名。\n"
                       "搬的过程：先把整个文件夹复制过去 → 逐条对账 → 对上了才把"
                       "旧的丢进回收站（不是永久删）。\n"
-                      "这个工作区的会话记录（~/.claude/projects 里那一份）跟着走，"
-                      "换到新位置还接得上。",
+                      "这个工作区在 Claude Code 和 CodeBuddy 各档的会话记录也会跟着搬；"
+                      "遇到同名记录不会覆盖或合并。",
                  bg=PAGE_BG, fg=MUTED, font=font(9), justify="left", anchor="w",
                  wraplength=430).grid(row=2, column=0, columnspan=3, sticky="w",
                                       pady=(10, 0))
 
+        error = tk.StringVar(master=dialog)
+        tk.Label(body, textvariable=error, bg=PAGE_BG, fg=WARN, font=font(9),
+                 justify="left", wraplength=430).grid(row=3, column=0, columnspan=3,
+                                                     sticky="w", pady=(6, 0))
+
         def go():
-            target = os.path.normpath(to_var.get().strip())
-            if not target or target == ".":
-                messagebox.showerror("没填新位置", "请填一个完整的新路径。",
-                                     parent=dialog)
+            target = to_var.get().strip()
+            if not os.path.isabs(target):
+                error.set("请填一个完整的新路径。")
                 return
-            dialog.destroy()
-            self.move_workspace_to(item, target)
+            if self.move_workspace_to(item, target, report_error=error.set):
+                dialog.destroy()
 
         finish_form(dialog, [("开始搬迁", go, True), ("取消", dialog.destroy, False)])
         dialog.bind("<Return>", lambda e: go())

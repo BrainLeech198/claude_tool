@@ -11,7 +11,9 @@ embed_workspace。
 term_holder、panel、_width_before_embed…）都还在它的 __init__ / _build_ui 里。
 """
 from tkinter import messagebox
+from uuid import uuid4
 
+from claude_tool import agents
 from claude_tool.config import save_config
 from claude_tool.handoff import AUTO_CONTINUE_MAX, AUTO_CONTINUE_RESET
 from claude_tool.host import (
@@ -57,44 +59,69 @@ class TerminalMixin:
                         append_system_prompt=None, resume_id=None,
                         new_session_id=None):
         """把 claude 塞进本窗口。已经有一个的话先把它放出去，不打断它。"""
+        if self._closing:
+            return
         if self._pending:
             self.feedback_var.set("上一个还在启动，稍等一下。")
             return
         self.detach_terminal()
+        profile = profile or agents.get(item.get("agent"))
+        tag = "{}-{}".format(title_tag(profile.id), uuid4().hex)
         try:
             process, known = spawn_console(item["path"], cont, prompt, settings,
                                            permission, profile=profile,
                                            append_system_prompt=append_system_prompt,
                                            resume_id=resume_id,
-                                           new_session_id=new_session_id)
+                                           new_session_id=new_session_id, tag=tag)
         except Exception as e:
             messagebox.showerror("启动失败", "启动 claude 失败：\n{}".format(e))
             return
-        self._pending = (process, known, item, settings, 0)
+        entry = self.track_running(item["name"], item["path"], process,
+                                   agent=profile.id, session_id=resume_id or new_session_id)
+        self._pending = (process, known, entry, tag, 0)
         self.feedback_var.set("正在把 claude 装进窗口…")
         self.after(80, self._poll_console)
+        return entry
 
     def _poll_console(self):
         """控制台窗口是异步建的，拿到之前一直轮询，别把界面卡住。"""
-        process, known, item, settings, tries = self._pending
-        hwnd = fresh_console(known, title_tag(item.get("agent")))
+        if not self._pending:
+            return
+        process, known, item, tag, tries = self._pending
+        if self._closing or item["proc"] is not process:
+            # 已经启动、尚未内嵌的进程仍是独立会话，不在退出时临时绑到主窗上。
+            self._pending = None
+            if item["proc"] is process:
+                item["watched"] = True
+            return
+        alive = process.poll() is None
+        hwnd = fresh_console(known, tag) if alive else None
         if hwnd is None:
-            if tries >= 75:
+            if tries >= 75 or not alive:
                 self._pending = None
+                item["watched"] = True
                 self.feedback_var.set("等不到控制台窗口，claude 可能已经退出了。")
                 return
-            self._pending = (process, known, item, settings, tries + 1)
+            self._pending = (process, known, item, tag, tries + 1)
             self.after(80, self._poll_console)
             return
 
-        self._pending = None
         self.term_name_var.set(item["path"])
         self.term_head.pack(fill="x", pady=(0, 6))
         self.term_holder.pack(fill="both", expand=True)
         self._room_for_terminal(True)
         self.update_idletasks()
+        self._pending = None
+        if item["proc"] is not process:
+            if not self._closing:
+                self._hide_terminal()
+            return
+        item["hwnd"] = hwnd
+        item["watched"] = True
+        if self._closing:
+            return
         self.embedded = EmbeddedConsole(process, hwnd, self.term_holder)
-        self.track_running(item["name"], item["path"], process, agent=item.get("agent"))
+        self._render_running()
         self.feedback_var.set(
             "claude 已内嵌在 {}。conhost 没有字体回退，个别符号会是方框。"
             .format(item["path"]))
@@ -148,6 +175,7 @@ class TerminalMixin:
             pass
         self.embedded = None
         self._hide_terminal()
+        self._render_running()
 
     def close_terminal(self):
         """关掉内嵌的这个会话——等同点它标题栏的 X。
@@ -164,6 +192,10 @@ class TerminalMixin:
         except Exception:
             pass
         process = getattr(embedded, "process", None)
+        for item in self.running:
+            if item["proc"] is process:
+                item["hwnd"] = None
+                break
         self._hide_terminal()
         self.feedback_var.set("正在关掉这个会话…")
         if process is not None:
